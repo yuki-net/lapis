@@ -460,6 +460,26 @@ mod tests {
                 .iter()
                 .any(|entry| entry.extension_id == "lapis.terminal" && entry.views.is_some())
         );
+        let declaration = &listing
+            .contributions
+            .iter()
+            .find(|entry| entry.extension_id == "lapis.terminal")
+            .unwrap()
+            .declaration;
+        for name in [
+            "font-family",
+            "font-size",
+            "line-height-percent",
+            "caret-shape",
+            "default-profile",
+        ] {
+            assert!(
+                declaration
+                    .settings
+                    .iter()
+                    .any(|setting| setting.definition.name == name)
+            );
+        }
         // 次回起動までは、既存の接続と実行中セッションをそのまま使える。
         let listed: v1::ListResponse = response(
             v1::LIST,

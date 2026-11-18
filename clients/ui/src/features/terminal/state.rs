@@ -199,6 +199,7 @@ impl TerminalRequests {
 
 pub(crate) struct TerminalFeature {
     worker: crate::client_adapter::ClientWorker<TerminalSessions>,
+    extension_settings: Option<desktop_client::ExtensionContributionSession>,
     pub(super) terminals: Vec<terminal::TerminalSnapshot>,
     /// 各 Terminal の操作権。表示に使う。
     pub(super) owners: HashMap<String, Option<String>>,
@@ -266,6 +267,50 @@ pub(crate) struct TerminalFeature {
 
 impl gpui::EventEmitter<TerminalFeatureEvent> for TerminalFeature {}
 
+fn extension_setting<'a>(
+    values: &'a settings::ResolvedSettings,
+    name: &str,
+) -> Option<&'a settings::SettingValue> {
+    values
+        .extension_setting(&format!("extensions/lapis.terminal/{name}"))
+        .and_then(|setting| setting.value())
+}
+
+fn terminal_font_family(values: &settings::ResolvedSettings) -> Option<String> {
+    extension_setting(values, "font-family")
+        .and_then(settings::SettingValue::as_text)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| values.terminal_font_family())
+}
+
+fn terminal_number(
+    values: &settings::ResolvedSettings,
+    name: &str,
+    fallback: impl FnOnce(&settings::ResolvedSettings) -> Option<u8>,
+) -> Option<u8> {
+    extension_setting(values, name)
+        .and_then(settings::SettingValue::as_integer)
+        .and_then(|value| u8::try_from(value).ok())
+        .filter(|value| *value > 0)
+        .or_else(|| fallback(values))
+}
+
+fn terminal_caret(values: &settings::ResolvedSettings) -> Option<settings::TerminalCaretShape> {
+    extension_setting(values, "caret-shape")
+        .and_then(settings::SettingValue::as_text)
+        .and_then(settings::TerminalCaretShape::from_id)
+        .or_else(|| values.terminal_caret_shape())
+}
+
+fn terminal_profile(values: &settings::ResolvedSettings) -> Option<String> {
+    extension_setting(values, "default-profile")
+        .and_then(settings::SettingValue::as_text)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| values.terminal_default_profile())
+}
+
 impl TerminalFeature {
     /// より新しい版だけを画面へ適用する。古い action / poll の結果で上書きしない。
     /// 端末一覧と操作権を同じ版で投影する。古い版なら両方とも捨てる。
@@ -289,20 +334,23 @@ impl TerminalFeature {
         values: &settings::ResolvedSettings,
         cx: &mut gpui::Context<Self>,
     ) {
-        let family: gpui::SharedString = values
-            .terminal_font_family()
+        let family: gpui::SharedString = terminal_font_family(values)
             .unwrap_or_else(|| super::default_font_family().to_owned())
             .into();
-        let size = values
-            .terminal_font_size()
-            .unwrap_or_else(super::default_font_size) as f32;
-        let line_height_percent = values
-            .terminal_line_height_percent()
-            .unwrap_or_else(super::default_line_height_percent);
-        let caret_shape = values.terminal_caret_shape().unwrap_or_default();
-        let default_profile = values
-            .terminal_default_profile()
-            .map(terminal::TerminalProfileId::new);
+        let size = terminal_number(
+            values,
+            "font-size",
+            settings::ResolvedSettings::terminal_font_size,
+        )
+        .unwrap_or_else(super::default_font_size) as f32;
+        let line_height_percent = terminal_number(
+            values,
+            "line-height-percent",
+            settings::ResolvedSettings::terminal_line_height_percent,
+        )
+        .unwrap_or_else(super::default_line_height_percent);
+        let caret_shape = terminal_caret(values).unwrap_or_default();
+        let default_profile = terminal_profile(values).map(terminal::TerminalProfileId::new);
         if self.font_family == family
             && self.font_size == size
             && self.line_height_percent == line_height_percent
@@ -320,6 +368,16 @@ impl TerminalFeature {
         self.last_size = None;
         self.line_cache.clear();
         cx.notify();
+    }
+
+    pub(crate) fn refresh_extension_settings(&mut self, cx: &mut gpui::Context<Self>) {
+        if let Some(values) = self
+            .extension_settings
+            .as_ref()
+            .and_then(|session| session.resolved())
+        {
+            self.apply_terminal_appearance(&values, cx);
+        }
     }
 
     /// 出力による再描画を frame 単位に集約する。
@@ -411,38 +469,54 @@ impl TerminalFeature {
         root: Option<PathBuf>,
         conversation: ConversationId,
         settings_catalog: std::rc::Rc<std::cell::RefCell<super::TerminalProfileCatalog>>,
+        extension_settings: Option<desktop_client::ExtensionContributionSession>,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let terminals = session.terminals().to_vec();
         let coordinator =
             crate::features::settings_coordinator::SettingsCoordinator::try_shared(cx);
-        let values = coordinator
+        let values = extension_settings
             .as_ref()
-            .map(|coordinator| coordinator.read(cx).values.clone());
+            .and_then(|session| session.resolved())
+            .or_else(|| {
+                coordinator
+                    .as_ref()
+                    .map(|coordinator| coordinator.read(cx).values.clone())
+            });
         let font_family: gpui::SharedString = values
             .as_ref()
-            .and_then(|values| values.terminal_font_family())
+            .and_then(terminal_font_family)
             .unwrap_or_else(|| super::default_font_family().to_owned())
             .into();
         let font_size = values
             .as_ref()
-            .and_then(|values| values.terminal_font_size())
+            .and_then(|values| {
+                terminal_number(
+                    values,
+                    "font-size",
+                    settings::ResolvedSettings::terminal_font_size,
+                )
+            })
             .unwrap_or_else(super::default_font_size) as f32;
         let line_height_percent = values
             .as_ref()
-            .and_then(|values| values.terminal_line_height_percent())
+            .and_then(|values| {
+                terminal_number(
+                    values,
+                    "line-height-percent",
+                    settings::ResolvedSettings::terminal_line_height_percent,
+                )
+            })
             .unwrap_or_else(super::default_line_height_percent);
-        let caret_shape = values
-            .as_ref()
-            .and_then(|values| values.terminal_caret_shape())
-            .unwrap_or_default();
+        let caret_shape = values.as_ref().and_then(terminal_caret).unwrap_or_default();
         let default_profile = values
             .as_ref()
-            .and_then(|values| values.terminal_default_profile())
+            .and_then(terminal_profile)
             .map(terminal::TerminalProfileId::new);
         let sessions = TerminalSessions::new(session, root.clone(), conversation.clone());
         let mut feature = Self {
             worker: crate::client_adapter::ClientWorker::new(sessions),
+            extension_settings,
             terminals,
             owners: HashMap::new(),
             projected: 0,
@@ -487,7 +561,11 @@ impl TerminalFeature {
         };
         if let Some(coordinator) = coordinator {
             cx.observe(&coordinator, |feature, coordinator, cx| {
-                let values = coordinator.read(cx).values.clone();
+                let values = feature
+                    .extension_settings
+                    .as_ref()
+                    .and_then(|session| session.resolved())
+                    .unwrap_or_else(|| coordinator.read(cx).values.clone());
                 feature.apply_terminal_appearance(&values, cx);
             })
             .detach();
@@ -511,6 +589,7 @@ impl TerminalFeature {
             std::rc::Rc::new(std::cell::RefCell::new(
                 super::TerminalProfileCatalog::default(),
             )),
+            None,
             cx,
         )
     }
@@ -1425,6 +1504,128 @@ mod tests {
         TerminalBackend, TerminalDelta, TerminalEvent, TerminalInput, TerminalRow,
         TerminalRowUpdate, TerminalSize,
     };
+
+    #[gpui::test]
+    fn terminal_uses_declared_settings_and_falls_back_to_previous_values(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::AppContext;
+        struct Memory(Mutex<settings::SettingsDocument>);
+        impl settings::SettingsRepository for Memory {
+            fn load(&self) -> Result<settings::SettingsDocument, settings::SettingsError> {
+                Ok(self.0.lock().unwrap().clone())
+            }
+            fn save(
+                &self,
+                value: &settings::SettingsDocument,
+            ) -> Result<(), settings::SettingsError> {
+                *self.0.lock().unwrap() = value.clone();
+                Ok(())
+            }
+        }
+        let mut document = settings::SettingsDocument::empty(settings::SettingsScope::User);
+        document.insert(
+            settings::TERMINAL_FONT_SIZE,
+            settings::SettingValue::integer(14),
+        );
+        let settings =
+            desktop_client::SettingsSession::load(Arc::new(Memory(Mutex::new(document)))).unwrap();
+        let extensions = settings.extension_contributions();
+        let generation = extensions.begin_reload();
+        let declaration: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../../extensions/terminal/component/contributions.json"
+        ))
+        .unwrap();
+        extensions.apply(generation, serde_json::from_value(serde_json::json!({
+            "extensions":[{"id":"lapis.terminal","version":"1.0.0","installed":true,"enabled":true,"active":true}],
+            "contributions":[{"extension_id":"lapis.terminal","declaration":declaration.clone()}]
+        })).unwrap()).unwrap();
+        let other = settings.extension_contributions();
+        let generation = other.begin_reload();
+        other.apply(generation, serde_json::from_value(serde_json::json!({
+            "extensions":[{"id":"lapis.terminal","version":"1.0.0","installed":true,"enabled":true,"active":true}],
+            "contributions":[{"extension_id":"lapis.terminal","declaration":declaration}]
+        })).unwrap()).unwrap();
+        let events = extensions.subscribe();
+        let settings_watch = settings.subscribe();
+        cx.update(|cx| {
+            let backend = Arc::new(Backend::default());
+            let entity = cx.new(|cx| {
+                TerminalFeature::new(
+                    TerminalSession::new(backend),
+                    None,
+                    ConversationId::new("task"),
+                    std::rc::Rc::new(std::cell::RefCell::new(
+                        super::super::TerminalProfileCatalog::default(),
+                    )),
+                    Some(extensions.clone()),
+                    cx,
+                )
+            });
+            assert_eq!(entity.read(cx).font_size, 14.0);
+            extensions
+                .update(
+                    settings::SettingsScope::User,
+                    &[
+                        (
+                            "extensions/lapis.terminal/font-size",
+                            Some(settings::SettingValue::integer(18)),
+                        ),
+                        (
+                            "extensions/lapis.terminal/font-family",
+                            Some(settings::SettingValue::text("Example Mono")),
+                        ),
+                        (
+                            "extensions/lapis.terminal/line-height-percent",
+                            Some(settings::SettingValue::integer(140)),
+                        ),
+                        (
+                            "extensions/lapis.terminal/caret-shape",
+                            Some(settings::SettingValue::text("bar")),
+                        ),
+                        (
+                            "extensions/lapis.terminal/default-profile",
+                            Some(settings::SettingValue::text("cmd")),
+                        ),
+                    ],
+                )
+                .unwrap();
+            assert!(events.try_recv().is_ok());
+            assert!(settings_watch.try_recv().is_ok());
+            assert_eq!(
+                terminal_number(
+                    &other.resolved().unwrap(),
+                    "font-size",
+                    settings::ResolvedSettings::terminal_font_size
+                ),
+                Some(18)
+            );
+            entity.update(cx, |feature, cx| feature.refresh_extension_settings(cx));
+            assert_eq!(entity.read(cx).font_size, 18.0);
+            assert_eq!(entity.read(cx).font_family.as_ref(), "Example Mono");
+            assert_eq!(entity.read(cx).line_height_percent, 140);
+            assert_eq!(
+                entity.read(cx).caret_shape,
+                settings::TerminalCaretShape::Bar
+            );
+            assert_eq!(
+                entity
+                    .read(cx)
+                    .default_profile
+                    .as_ref()
+                    .map(|id| id.as_str()),
+                Some("cmd")
+            );
+            extensions
+                .update(
+                    settings::SettingsScope::User,
+                    &[("extensions/lapis.terminal/font-size", None)],
+                )
+                .unwrap();
+            entity.update(cx, |feature, cx| feature.refresh_extension_settings(cx));
+            assert_eq!(entity.read(cx).font_size, 14.0);
+        });
+    }
 
     fn model_row(columns: u16, text: &str) -> TerminalRow {
         let mut row = TerminalRow::empty(columns);

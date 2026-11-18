@@ -302,6 +302,9 @@ impl DesktopRoot {
                 services.web_access_control.clone(),
             )
         });
+        settings.update(cx, |settings, _| {
+            settings.use_extension_terminal_settings(services.extension_terminal)
+        });
         #[cfg(target_family = "wasm")]
         let extension_contributions = desktop_client::web_host::extension_contributions();
         let locale_contributions = extension_contributions.clone();
@@ -393,6 +396,11 @@ impl DesktopRoot {
                 backend: terminal_backend,
                 context: terminal_context,
                 settings: terminal_settings,
+                extension_settings: if extension_terminal {
+                    locale_contributions.clone()
+                } else {
+                    None
+                },
             },
             ViewId::new(id::VIEW_TERMINAL),
         );
@@ -725,6 +733,7 @@ impl DesktopRoot {
         crate::gpui_compat::focus(window, &editor.focus_handle(cx), cx);
         if let Some(session) = locale_contributions {
             let receiver = session.subscribe();
+            let settings_watch = services.settings.subscribe();
             let mut pending_terminal =
                 extension_terminal && initial.show_terminal && !initial.show_problems;
             cx.spawn(async move |root, cx| {
@@ -735,10 +744,16 @@ impl DesktopRoot {
                     while receiver.try_recv().is_ok() {
                         changed = true;
                     }
+                    while settings_watch.try_recv().is_ok() {
+                        changed = true;
+                    }
                     let alive = root
                         .update(cx, |root, cx| {
                             if changed {
                                 let snapshot = session.snapshot();
+                                for entity in root.terminal.borrow().entities() {
+                                    entity.update(cx, |terminal, cx| terminal.refresh_extension_settings(cx));
+                                }
                                 if extension_terminal {
                                     let available = extension_view_available(snapshot.as_ref(), "lapis.terminal", "lapis.content.terminal-grid.v1");
                                     let hidden = extension_view_hidden(snapshot.as_ref(), "lapis.terminal", "lapis.content.terminal-grid.v1");

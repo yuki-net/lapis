@@ -47,6 +47,9 @@ workspace は `Cargo.toml` の `extensions/*/*` glob で `contract` / `host` / `
 - 試験用の拡張経路では `terminal.v1.profiles` で選択肢を取得し、
   `terminal.v1.start-profile` に profile ID を渡す。起動 command は拡張側で決定し、
   未知の ID を拒否する。Desktop・Web は接続ごとに同じ操作を使用する。
+- 試験経路のフォント、行送り、カーソル、既定 profile は拡張の設定宣言から設定する。
+  拡張側が未設定の場合は既存の Terminal 設定値を参照し、値がなければ描画器の既定値を使う。
+  旧経路の設定とコードは通常経路の移行が完了するまで残る。
 
 ## Client 側の載せ方
 

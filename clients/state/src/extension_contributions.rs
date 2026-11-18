@@ -191,13 +191,15 @@ impl ExtensionContributionSession {
         scope: SettingsScope,
         values: &[(&str, Option<SettingValue>)],
     ) -> Result<(), SettingsError> {
-        let state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap();
         let snapshot = state
             .current
             .as_ref()
             .ok_or_else(|| SettingsError::new("拡張の宣言がありません"))?;
         self.model
-            .update_with_extension_catalog(&snapshot.0.settings, scope, values)
+            .update_with_extension_catalog(&snapshot.0.settings, scope, values)?;
+        Self::publish(&mut state);
+        Ok(())
     }
 
     fn publish(state: &mut State) {

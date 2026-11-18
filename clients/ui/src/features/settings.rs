@@ -46,6 +46,7 @@ pub(crate) struct SettingsFeature {
     _subscription: gpui::Subscription,
     _catalogs: Vec<gpui::Subscription>,
     values: ResolvedSettings,
+    extension_terminal: bool,
     root: Option<PathBuf>,
     locale: Localizer,
     message: String,
@@ -176,6 +177,7 @@ impl SettingsFeature {
             _subscription: subscription,
             _catalogs: catalogs,
             values,
+            extension_terminal: false,
             root: None,
             locale,
             message: String::new(),
@@ -746,12 +748,19 @@ impl SettingsFeature {
     /// 接続ページは供給元の有無ではなく取得結果で決める。供給元が `None` を返す
     /// 起動構成では、空のページをナビへ出さない。
     fn page_available(&self, page: &settings::SettingPage) -> bool {
+        if self.extension_terminal && matches!(page.id, "terminal.font" | "terminal.startup") {
+            return false;
+        }
         match page.content {
             settings::SettingPageContent::Feature => {
                 page.id != settings::catalog::CONNECTION_WEB_PAGE || self.web_access().is_some()
             }
             settings::SettingPageContent::Settings => true,
         }
+    }
+
+    pub(crate) fn use_extension_terminal_settings(&mut self, enabled: bool) {
+        self.extension_terminal = enabled;
     }
 
     fn select_page(&mut self, page: &'static str, cx: &mut Context<Self>) {
@@ -2817,6 +2826,24 @@ mod tests {
                     .visible_pages()
                     .contains(&"extensions.settings")
             )
+        });
+    }
+
+    #[gpui::test]
+    fn extension_terminal_hides_legacy_settings_pages(cx: &mut gpui::TestAppContext) {
+        let feature = cx.update(|cx| {
+            theme::init(&ThemeId::new("lapis.dark"), None, cx);
+            let settings = desktop_client::SettingsSession::load(Arc::new(MemorySettings)).unwrap();
+            SettingsCoordinator::init(settings, cx);
+            cx.new(SettingsFeature::new)
+        });
+        cx.update(|cx| {
+            feature.update(cx, |feature, _| {
+                assert!(feature.visible_pages().contains(&"terminal.font"));
+                feature.use_extension_terminal_settings(true);
+                assert!(!feature.visible_pages().contains(&"terminal.font"));
+                assert!(!feature.visible_pages().contains(&"terminal.startup"));
+            });
         });
     }
 

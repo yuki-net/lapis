@@ -33,6 +33,7 @@ pub(crate) struct TerminalTabSource {
     pub(crate) context: Rc<RefCell<TerminalContext>>,
     /// Host から取得した profile 一覧を設定の供給元へ公開するため。
     pub(crate) settings: Rc<RefCell<TerminalProfileCatalog>>,
+    pub(crate) extension_settings: Option<desktop_client::ExtensionContributionSession>,
 }
 
 /// Terminal Feature がタブ個体と Session を所有する実装。
@@ -141,12 +142,14 @@ impl ViewLifecycle for TerminalLifecycle {
         let context = self.source.context.borrow().clone();
         let settings = self.source.settings.clone();
         let backend = self.source.backend.clone();
+        let extension_settings = self.source.extension_settings.clone();
         let feature = cx.new(|cx| {
             TerminalFeature::new(
                 desktop_client::TerminalSession::new(backend),
                 context.root.clone(),
                 context.conversation.clone(),
                 settings,
+                extension_settings,
                 cx,
             )
         });
@@ -292,6 +295,7 @@ mod tests {
                     conversation: editor_core::ConversationId::new("task-a"),
                 })),
                 settings: Rc::new(RefCell::new(TerminalProfileCatalog::default())),
+                extension_settings: None,
             },
             ViewId::new("example.extension.view"),
         )
