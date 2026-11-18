@@ -196,6 +196,8 @@ jobs:
         run: |
           cargo build --locked -p lapis-terminal-native
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m scripts.extensions.stage extensions "$env:RUNNER_TEMP/lapis-native-input" --target-dir target --debug
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m scripts.extensions.smoke_native_terminal
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked -p extension-runtime --lib native::tests
@@ -209,6 +211,8 @@ jobs:
           cargo test --locked -p local-process pty::tests
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --locked -p extension-runtime --bin lapis-extension-host
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p host signed_native_package_runs_in_extension_host -- --ignored
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --locked --manifest-path examples/pty-extension/Cargo.toml --target wasm32-wasip2 --target-dir target/pty-extension
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

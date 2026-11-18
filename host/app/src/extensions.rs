@@ -872,6 +872,20 @@ mod tests {
     #[cfg(all(windows, target_arch = "x86_64"))]
     #[test]
     fn native_startup_requires_signed_compatible_image_and_respects_disable() {
+        check_native_package(b"fixture native image", false);
+    }
+
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    #[test]
+    #[ignore = "native library と拡張ホストの事前ビルドが必要"]
+    fn signed_native_package_runs_in_extension_host() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let image = std::fs::read(root.join("target/debug/lapis_terminal_native.dll")).unwrap();
+        check_native_package(&image, true);
+    }
+
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    fn check_native_package(image: &[u8], run_worker: bool) {
         use base64::{Engine as _, engine::general_purpose::STANDARD};
         use ed25519_dalek::{Signer as _, SigningKey};
         use sha2::Digest as _;
@@ -917,7 +931,6 @@ mod tests {
             ("dev.example.signed", true),
             ("dev.example.unsigned", false),
         ] {
-            let image = b"fixture native image";
             let requires: Vec<_> = [extension_runtime::LIFECYCLE_CONTRACT, extension_runtime::DISPATCH_CONTRACT, extension_runtime::NATIVE_ABI_CONTRACT]
                 .into_iter().map(|contract| serde_json::json!({"contract":contract,"minimum":"1.0.0","maximum":"1.0.0"})).collect();
             let mut manifest = serde_json::json!({"schema":1,"kind":"extension","id":id,"version":"1.0.0","requires":requires,
@@ -943,6 +956,62 @@ mod tests {
         assert_eq!(native.len(), 1);
         assert_eq!(native[0].id, "dev.example.signed");
         assert!(failures.contains_key("dev.example.unsigned"));
+        if run_worker {
+            use extension_runtime::supervisor::{
+                ExtensionSupervisor, HostCallHandler, SupervisorStatus,
+            };
+            use std::{
+                sync::Arc,
+                time::{Duration, Instant},
+            };
+            struct Handler;
+            impl HostCallHandler for Handler {
+                fn call(
+                    &self,
+                    _: &str,
+                    method: &str,
+                    _: serde_json::Value,
+                ) -> Result<serde_json::Value, String> {
+                    if method != "process.info.v1.get" {
+                        return Err("unknown method".into());
+                    }
+                    Ok(
+                        serde_json::json!({"pty":"conpty","default_shell":{"program":"shell","arguments":[]}}),
+                    )
+                }
+            }
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+            // 上の package はテスト鍵で署名し、loader が署名と image を照合した。
+            let supervisor = unsafe {
+                ExtensionSupervisor::start_with_verified_native(
+                    root.join("target/debug/lapis-extension-host.exe"),
+                    vec![],
+                    native,
+                    Some(Arc::new(Handler)),
+                )
+            };
+            let deadline = Instant::now() + Duration::from_secs(20);
+            loop {
+                match supervisor.status() {
+                    SupervisorStatus::Running { active, failed, .. } => {
+                        assert!(failed.is_empty(), "{failed:?}");
+                        assert_eq!(active, ["dev.example.signed"]);
+                        break;
+                    }
+                    SupervisorStatus::Stopped { reason } => panic!("{reason}"),
+                    SupervisorStatus::Starting => {}
+                }
+                assert!(Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            let info = supervisor
+                .dispatch_host_internal("dev.example.signed", "terminal.v1.info", "{}")
+                .unwrap();
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&info).unwrap()["pty"],
+                "conpty"
+            );
+        }
         extensions.set_enabled("dev.example.signed", false).unwrap();
         assert!(extensions.declares_dispatch("dev.example.signed").unwrap());
         let (_, _, _, _, _, native) = extensions.startup_components();

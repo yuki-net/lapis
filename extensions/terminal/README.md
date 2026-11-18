@@ -5,8 +5,8 @@ Terminal の契約・Host 側状態・PTY 実装を配置する領域です。Cl
 ## 構成
 
 - `component/`: 公開 WIT を通して Host の能力を使う実行アダプター。Desktop・Web に試験用の接続があり、通常経路への移行は未完了。
-- `logic/`: セッション操作の判断。Host 能力を port として受け取り、Wasm や Host の内部実装を参照しない。ネイティブ実行基盤への接続は未完了。
-- `native/`: 公開 native ABI v1 を使って同じロジックを接続する試作。Windows では署名済み native package の読み込みに対応するが、Terminal の同梱物の切り替えは未完了。
+- `logic/`: セッション操作の判断。Host 能力を port として受け取り、Wasm や Host の内部実装を参照しない。
+- `native/`: 公開 native ABI v1 を使って同じロジックを接続する。Windows x86_64 の配布入力では、このライブラリと共通の設定・表示宣言を package に含める。通常の Client 経路への切り替えは未完了。
 - `api/`: component とクライアントが共有するセッション操作の v1 DTO。操作名も `terminal.v1.*` で版を持つ。Host 内部型には依存しない。
 - `contract/`（crate `terminal-contract`、参照名 `terminal`）: Terminal の型・wire DTO・`TerminalBackend` port の正本。
 - `host/`（crate `terminal-state`）: Host 側の正規状態、画面差分、接続 Session。`TerminalRegistry` がこれを持つ。

@@ -16,6 +16,39 @@ from scripts.release.manifest import canonical_bytes
 
 
 class PackageTests(unittest.TestCase):
+    def test_stage_builds_native_adapter_without_changing_other_extensions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source, output, target = root / "extensions", root / "staged", root / "target"
+            component = source / "terminal" / "component"
+            component.mkdir(parents=True)
+            (component / "extension.json").write_text(json.dumps({
+                "id": "example.terminal", "version": "1.0.0",
+                "requires": [{"contract": "lapis.extension", "minimum": "1.0.0", "maximum": "1.0.0"}],
+                "files": ["extension.wasm", "views.json"]
+            }), encoding="utf-8")
+            (component / "Cargo.toml").write_text("", encoding="utf-8")
+            (component / "views.json").write_text("{}", encoding="utf-8")
+            native = source / "terminal" / "native"
+            native.mkdir()
+            (native / "Cargo.toml").write_text("", encoding="utf-8")
+            (source / "terminal" / "native-build.json").write_text('{"manifest":"native/Cargo.toml"}', encoding="utf-8")
+            artifact = target / "debug" / "terminal.dll"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_bytes(b"native")
+            with patch("scripts.extensions.stage.sys.platform", "win32"), \
+                 patch("scripts.extensions.stage.platform.machine", return_value="AMD64"), \
+                 patch("scripts.extensions.stage.subprocess.run") as build:
+                build.return_value.stdout = json.dumps({"reason": "compiler-artifact", "manifest_path": str(native / "Cargo.toml"), "target": {"kind": ["cdylib"]}, "filenames": [str(artifact)]})
+                self.assertEqual(stage(source, output, target, release=False), ["example.terminal"])
+            build.assert_called_once()
+            definition = json.loads((output / "terminal" / "extension.json").read_text(encoding="utf-8"))
+            self.assertIn("native/windows-x86_64.dll", definition["files"])
+            self.assertNotIn("extension.wasm", definition["files"])
+            self.assertIn("lapis.extension.native-abi", [item["contract"] for item in definition["requires"]])
+            self.assertEqual((output / "terminal" / "native/windows-x86_64.dll").read_bytes(), b"native")
+            self.assertEqual((output / "terminal" / "views.json").read_text(), "{}")
+
     def test_stage_discovers_data_and_wasm_components(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
