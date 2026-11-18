@@ -50,6 +50,7 @@ PATH_RULES = [
     (["host/"], {"rust_core", "host", "desktop"}),
     
     # Contracts / Client transport
+    (["contracts/extension-api/native/"], {"rust_core", "host", "desktop"}),
     (["contracts/domain/"], {"rust_core", "host", "desktop", "web"}),
     (["contracts/protocol/"], {"rust_core", "host", "desktop", "web"}),
     (["contracts/transport/wire/"], {"rust_core", "host", "desktop", "web"}),

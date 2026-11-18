@@ -104,11 +104,12 @@ def layer(manifest, root):
     # 拡張の中にあっても層の意味を変えない。
     parts = relative.split("/")
     if len(parts) >= 3 and parts[0] == "extensions":
-        roles = {"contract": "models", "renderer": "models", "logic": "runtime", "host": "runtime", "adapter": "infrastructure"}
+        roles = {"contract": "models", "renderer": "models", "logic": "runtime", "host": "runtime", "adapter": "infrastructure", "native": "infrastructure"}
         if parts[2] in roles:
             return roles[parts[2]]
     for prefix, value in [
         ("extensions/", "models"),
+        ("contracts/extension-api/", "models"),
         ("contracts/domain/", "models"), ("contracts/transport/", "models"),
         ("contracts/protocol/", "protocol"), ("clients/transport/", "client_core"),
         ("host/application/", "application"), ("host/runtime/", "runtime"),

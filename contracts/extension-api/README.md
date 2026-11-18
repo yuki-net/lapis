@@ -1,5 +1,14 @@
 # 拡張公開契約
 
+`native/` は同じ target の拡張ホストとネイティブ拡張が共有する ABI v1 の試作。
+`lapis_extension_v1` の関数表と `abi_version` / `struct_size` を照合し、操作と
+Host 能力の引数・応答は UTF-8 の JSON とする。入力領域は呼び出し中だけ有効で、
+応答領域は確保した側の `release` で解放する。Host の context は不透明な値であり、
+拡張は参照しない。互換性を壊す版は別の entry symbol と型を追加する。
+この ABI の package 読み込み・署名照合・権限管理への接続は未実装。
+ネイティブコードは ABI だけでは OS アクセスを制限できず、既存の Wasm 実行とは
+隔離の性質が異なる。
+
 拡張開発者と拡張ホストが共通に使う WIT の正本。`wit/v1` はライフサイクル、
 `wit/pty-v1` は汎用 PTY セッションの契約である。PTY を使う package は `requires` に
 `lapis.process.pty` 1.0.0 を、`capabilities` に `process.pty` 1.0.0 を宣言する。

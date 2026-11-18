@@ -2747,6 +2747,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "extension-native-api"
+version = "0.1.0"
+
+[[package]]
 name = "extension-runtime"
 version = "0.1.0"
 dependencies = [
@@ -5138,6 +5142,15 @@ dependencies = [
  "tempfile",
  "winresource",
  "zip",
+]
+
+[[package]]
+name = "lapis-terminal-native"
+version = "0.1.0"
+dependencies = [
+ "extension-native-api",
+ "serde_json",
+ "terminal-logic",
 ]
 
 [[package]]
