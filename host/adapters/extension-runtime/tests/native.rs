@@ -71,6 +71,11 @@ fn native_terminal_uses_generic_host_broker_and_lifecycle() {
             .is_err()
     );
     extension.deactivate().unwrap();
+    assert!(
+        extension
+            .dispatch("terminal.v1.list", "{}", &context)
+            .is_err()
+    );
     assert_eq!(
         &*calls.lock().unwrap(),
         &[

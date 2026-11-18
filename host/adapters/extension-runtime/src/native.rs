@@ -99,6 +99,9 @@ impl NativeExtension {
         payload: &str,
         context: &InvocationContext,
     ) -> Result<String, String> {
+        if self.instance.is_null() {
+            return Err("native extension is deactivated".into());
+        }
         if !context.valid()
             || operation.is_empty()
             || operation.len() > 256
