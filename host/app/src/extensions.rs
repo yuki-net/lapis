@@ -1419,9 +1419,10 @@ mod tests {
             .join("target/debug/lapis_terminal_native.dll")
             .canonicalize()
             .unwrap();
+        let native_bytes = std::fs::read(native_path).unwrap();
         // テスト直前にローカルでビルドした信頼済みライブラリを使う。
         let mut native = ExtensionRuntime::new().unwrap();
-        unsafe { native.activate_native_verified("lapis.terminal", &native_path, callback) }
+        unsafe { native.activate_native_verified_bytes("lapis.terminal", &native_bytes, callback) }
             .unwrap();
         let native_start = serde_json::json!({
             "program":"cmd.exe", "arguments":["/D","/C","echo LapisNative & ping -n 30 127.0.0.1 >nul"],

@@ -46,6 +46,15 @@ pub struct NativeExtension {
     instance: *mut c_void,
     _host_state: Box<HostState>,
     _host_api: Box<HostApiV1>,
+    #[cfg(windows)]
+    _image: Option<StagedImage>,
+}
+
+#[cfg(windows)]
+struct StagedImage {
+    _file: std::fs::File,
+    _directory_lock: std::fs::File,
+    _directory: tempfile::TempDir,
 }
 
 impl NativeExtension {
@@ -60,6 +69,70 @@ impl NativeExtension {
         }
         let library =
             unsafe { libloading::Library::new(path) }.map_err(|error| error.to_string())?;
+        unsafe { Self::activate_library(library, broker) }
+    }
+
+    /// 検証済み bytes を書き換え禁止の一時 file に固定してから読み込む。
+    ///
+    /// # Safety
+    /// bytes が信頼できる実行コードであることを呼び出し側が保証する。
+    #[cfg(windows)]
+    pub unsafe fn load_verified_bytes(bytes: &[u8], broker: NativeBroker) -> Result<Self, String> {
+        use std::{
+            io::{Read, Write},
+            os::windows::fs::OpenOptionsExt,
+        };
+        if bytes.is_empty() || bytes.len() > 32 * 1024 * 1024 {
+            return Err("invalid native extension image size".into());
+        }
+        let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+        let directory_lock = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(3)
+            .custom_flags(0x02000000)
+            .open(directory.path())
+            .map_err(|error| error.to_string())?;
+        let path = directory.path().join("extension.dll");
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .share_mode(1)
+            .open(&path)
+            .map_err(|error| error.to_string())?;
+        file.write_all(bytes).map_err(|error| error.to_string())?;
+        file.flush().map_err(|error| error.to_string())?;
+        drop(file);
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&path)
+            .map_err(|error| error.to_string())?;
+        let mut actual = Vec::new();
+        Read::by_ref(&mut file)
+            .take((32 * 1024 * 1024 + 1) as u64)
+            .read_to_end(&mut actual)
+            .map_err(|error| error.to_string())?;
+        if actual != bytes {
+            return Err("staged native extension does not match verified image".into());
+        }
+        // 依存 DLL の探索先は system32 に限定する。
+        let library =
+            unsafe { libloading::os::windows::Library::load_with_flags(&path, 0x00000800) }
+                .map_err(|error| error.to_string())?;
+        let mut extension = unsafe { Self::activate_library(library.into(), broker) }?;
+        extension._image = Some(StagedImage {
+            _file: file,
+            _directory_lock: directory_lock,
+            _directory: directory,
+        });
+        Ok(extension)
+    }
+
+    unsafe fn activate_library(
+        library: libloading::Library,
+        broker: NativeBroker,
+    ) -> Result<Self, String> {
         let entry: libloading::Symbol<EntryV1> = unsafe { library.get(ENTRY_SYMBOL) }
             .map_err(|_| "native extension entry not found".to_owned())?;
         let api = unsafe { entry() };
@@ -114,6 +187,8 @@ impl NativeExtension {
             instance,
             _host_state: host_state,
             _host_api: host_api,
+            #[cfg(windows)]
+            _image: None,
         })
     }
 
@@ -279,6 +354,30 @@ unsafe extern "C" fn host_release(_: *mut c_void, value: OwnedBytes) {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "cargo build --locked -p lapis-terminal-native が必要"]
+    fn staged_image_is_locked_until_extension_is_unloaded() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../target/debug/lapis_terminal_native.dll");
+        let bytes = std::fs::read(path).unwrap();
+        let broker = Arc::new(|_: &str, _: Value, _: Option<&InvocationContext>| Ok(Value::Null));
+        let extension = unsafe { NativeExtension::load_verified_bytes(&bytes, broker) }.unwrap();
+        let directory = extension
+            ._image
+            .as_ref()
+            .unwrap()
+            ._directory
+            .path()
+            .to_owned();
+        let image = directory.join("extension.dll");
+        assert!(std::fs::write(&image, b"modified").is_err());
+        assert!(std::fs::remove_file(&image).is_err());
+        assert!(std::fs::rename(&directory, directory.with_extension("moved")).is_err());
+        drop(extension);
+        assert!(!directory.exists());
+    }
 
     #[test]
     fn other_threads_cannot_borrow_an_active_invocation() {

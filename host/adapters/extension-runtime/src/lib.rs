@@ -242,6 +242,24 @@ impl ExtensionRuntime {
         Ok(())
     }
 
+    /// 検証済み snapshot を native 拡張として登録する（Windows）。
+    ///
+    /// # Safety
+    /// bytes が信頼できる実行コードであることを呼び出し側が保証する。
+    #[cfg(windows)]
+    pub unsafe fn activate_native_verified_bytes(
+        &mut self,
+        id: &str,
+        bytes: &[u8],
+        broker: native::NativeBroker,
+    ) -> Result<(), String> {
+        self.validate_new_id(id)?;
+        let extension = unsafe { native::NativeExtension::load_verified_bytes(bytes, broker) }?;
+        self.loaded
+            .insert(id.to_owned(), LoadedExtension::Native(extension));
+        Ok(())
+    }
+
     fn activate_with_contracts(
         &mut self,
         id: &str,

@@ -169,3 +169,33 @@ fn native_and_wasm_share_the_runtime_lifecycle() {
     );
     assert!(runtime.deactivate("example.wasm").is_err());
 }
+
+#[cfg(windows)]
+#[test]
+#[ignore = "cargo build --locked -p lapis-terminal-native が必要"]
+fn verified_native_bytes_can_be_loaded_without_reopening_package_path() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../target/debug/lapis_terminal_native.dll");
+    let bytes = std::fs::read(path).unwrap();
+    let broker = Arc::new(
+        |method: &str, _: Value, _: Option<&InvocationContext>| match method {
+            "process.info.v1.get" => {
+                Ok(json!({"pty":"conpty","default_shell":{"program":"shell","arguments":[]}}))
+            }
+            _ => Err("unknown Host capability".into()),
+        },
+    );
+    // この fixture はテスト用にローカルでビルドした実行コード。
+    let mut extension = unsafe { NativeExtension::load_verified_bytes(&bytes, broker) }.unwrap();
+    let context = InvocationContext {
+        session: "session".into(),
+        workspace: "workspace".into(),
+    };
+    let value: Value = serde_json::from_str(
+        &extension
+            .dispatch("terminal.v1.info", "{}", &context)
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(value["pty"], "conpty");
+}
