@@ -71,7 +71,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
- "terminal-session-api",
+ "terminal-logic",
  "wit-bindgen",
 ]
 
@@ -201,6 +201,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "terminal-logic"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "terminal-session-api",
 ]
 
 [[package]]

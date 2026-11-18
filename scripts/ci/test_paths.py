@@ -81,6 +81,11 @@ class TestPathRouting(unittest.TestCase):
             jobs_for_paths(["extensions/terminal/contract/src/lib.rs"]),
             {"rust_core", "host", "desktop", "web"},
         )
+        # 独立ロジックは native と component の両経路で使う。
+        self.assertEqual(
+            jobs_for_paths(["extensions/terminal/logic/src/lib.rs"]),
+            {"repository", "rust_core", "host", "desktop", "web"},
+        )
         # Host 状態サービスと PTY 実装は wasm でビルドしないため Web を除外する。
         for path in (
             "extensions/terminal/host/src/lib.rs",
