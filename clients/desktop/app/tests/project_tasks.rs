@@ -7,6 +7,141 @@ use std::{path::PathBuf, sync::Arc};
 
 struct NoDialog;
 
+#[cfg(windows)]
+fn terminal_test_host(test: &str) -> Option<(tempfile::TempDir, BackendHost)> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use ed25519_dalek::SigningKey;
+    use std::{
+        os::windows::process::CommandExt,
+        path::Path,
+        process::Command,
+        time::{Duration, Instant},
+    };
+    const CHILD: &str = "LAPIS_PROJECT_TERMINAL_TEST_CHILD";
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    if std::env::var_os(CHILD).is_none() {
+        let temporary = tempfile::tempdir().unwrap();
+        let executable = temporary.path().join("project-test.exe");
+        std::fs::copy(std::env::current_exe().unwrap(), &executable).unwrap();
+        std::fs::copy(
+            root.join("target/debug/lapis-extension-host.exe"),
+            temporary.path().join("lapis-extension-host.exe"),
+        )
+        .unwrap();
+        assert!(
+            Command::new(executable)
+                .args(["--exact", test, "--nocapture"])
+                .env(CHILD, "1")
+                .status()
+                .unwrap()
+                .success()
+        );
+        return None;
+    }
+    let state = tempfile::tempdir().unwrap();
+    let seed = [11u8; 32];
+    let keys = state.path().join("extensions/trusted-keys.json");
+    std::fs::create_dir_all(keys.parent().unwrap()).unwrap();
+    std::fs::write(
+        keys,
+        serde_json::to_vec(&serde_json::json!({"schema":1,"keys":{
+            "project-test":STANDARD.encode(SigningKey::from_bytes(&seed).verifying_key().to_bytes())
+        }}))
+        .unwrap(),
+    )
+    .unwrap();
+    let source = state.path().join("source");
+    std::fs::create_dir_all(source.join("native")).unwrap();
+    std::fs::copy(
+        root.join("target/debug/lapis_terminal_native.dll"),
+        source.join("native/windows-x86_64.dll"),
+    )
+    .unwrap();
+    let requires: Vec<_> = [
+        "lapis.extension",
+        "lapis.extension.lifecycle",
+        "lapis.extension.dispatch",
+        "lapis.extension.native-abi",
+        "lapis.process.pty",
+        "lapis.process.info",
+    ]
+    .into_iter()
+    .map(|contract| serde_json::json!({"contract":contract,"minimum":"1.0.0","maximum":"1.0.0"}))
+    .collect();
+    let manifest = serde_json::json!({"id":"lapis.terminal","version":"0.2.0","requires":requires,
+        "capabilities":[{"id":"process.pty","version":"1.0.0"}],"files":["native/windows-x86_64.dll"]});
+    std::fs::write(
+        source.join("extension.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    let seed_path = state.path().join("seed");
+    std::fs::write(&seed_path, seed).unwrap();
+    let package = state.path().join("terminal.lapis");
+    assert!(
+        Command::new("python")
+            .current_dir(root)
+            .args(["-m", "scripts.extensions.package"])
+            .arg(source)
+            .arg(&package)
+            .arg("--seed-file")
+            .arg(seed_path)
+            .args(["--key-id", "project-test"])
+            .creation_flags(0x08000000)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let host = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    host.install_extension(&package, true).unwrap();
+    let capability = host.extension_capabilities("lapis.terminal").unwrap();
+    host.set_extension_capability(&client_api::HostExtensionSetCapabilityRequest {
+        id: "lapis.terminal".into(),
+        manifest_digest: capability.manifest_digest,
+        capability: "process.pty".into(),
+        version: "1.0.0".into(),
+        approved: true,
+    })
+    .unwrap();
+    drop(host);
+    let host = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        if host
+            .extensions()
+            .unwrap()
+            .extensions
+            .iter()
+            .any(|item| item.id == "lapis.terminal" && item.active == Some(true))
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "Terminal extension did not start"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    Some((state, host))
+}
+
+#[cfg(not(windows))]
+fn terminal_test_host(_: &str) -> Option<(tempfile::TempDir, BackendHost)> {
+    Some((tempfile::tempdir().unwrap(), BackendHost::start().unwrap()))
+}
+
+#[cfg(windows)]
+fn terminal_test_backend(host: &BackendHost) -> Arc<dyn terminal::TerminalBackend> {
+    Arc::new(lapis::extension_terminal::ExtensionTerminals::new(
+        host.clone().into(),
+    ))
+}
+
+#[cfg(not(windows))]
+fn terminal_test_backend(_: &BackendHost) -> Arc<dyn terminal::TerminalBackend> {
+    Arc::new(local_terminal::LocalTerminalBackend::default())
+}
+
 #[test]
 fn resolving_selected_task_keeps_dirty_editor_and_running_terminal_context() {
     use desktop_client::{ConversationViewState, WorkbenchModeState, WorkbenchViewState};
@@ -19,7 +154,11 @@ fn resolving_selected_task_keeps_dirty_editor_and_running_terminal_context() {
     let primary = primary.canonicalize().unwrap();
     let other = other.canonicalize().unwrap();
     std::fs::write(primary.join("note.ts"), "base").unwrap();
-    let host = BackendHost::start().unwrap();
+    let Some((_extension_state, host)) = terminal_test_host(
+        "resolving_selected_task_keeps_dirty_editor_and_running_terminal_context",
+    ) else {
+        return;
+    };
     let mut editor = EditorSession::new_empty(
         host.workspaces(),
         Arc::new(NoDialog),
@@ -47,7 +186,7 @@ fn resolving_selected_task_keeps_dirty_editor_and_running_terminal_context() {
     let before = editor.snapshot();
     let tabs = editor.tabs();
     let workspace = editor.workspace_id().cloned();
-    let mut terminals = TerminalSession::new(host.terminals());
+    let mut terminals = TerminalSession::new(terminal_test_backend(&host));
     let terminal = terminals.start(&primary, 80, 24).unwrap();
     let expected = host.documents().workspace(&other).unwrap();
     for selected in [&b, &a, &b, &a] {
@@ -608,6 +747,11 @@ fn git(root: &std::path::Path, args: &[&str]) {
 
 #[test]
 fn task_worktree_roundtrip_preserves_drafts_terminals_and_source_identity() {
+    let Some((_extension_state, host)) = terminal_test_host(
+        "task_worktree_roundtrip_preserves_drafts_terminals_and_source_identity",
+    ) else {
+        return;
+    };
     let directory = tempfile::tempdir().unwrap();
     let primary = directory.path().join("primary");
     let sub = directory.path().join("sub");
@@ -643,7 +787,6 @@ fn task_worktree_roundtrip_preserves_drafts_terminals_and_source_identity() {
     let primary = primary.canonicalize().unwrap();
     let sub = sub.canonicalize().unwrap();
     let tree_path = tree_path.canonicalize().unwrap();
-    let host = BackendHost::start().unwrap();
     let mut editor = EditorSession::new_empty(
         host.workspaces(),
         Arc::new(NoDialog),
@@ -673,7 +816,7 @@ fn task_worktree_roundtrip_preserves_drafts_terminals_and_source_identity() {
     editor.open_path(primary.join("note.ts")).unwrap();
     editor.replace_range(0..4, "primary draft").unwrap();
     let primary_document = editor.active_document_id().cloned();
-    let mut terminal = TerminalSession::new(host.terminals());
+    let mut terminal = TerminalSession::new(terminal_test_backend(&host));
     let id = terminal.start(&primary, 80, 24).unwrap();
     tasks
         .capture(&mut editor, Default::default(), None, terminal.terminals())
@@ -832,6 +975,11 @@ fn reopening_project_restores_inactive_task_without_creating_duplicates() {
 
 #[test]
 fn project_tasks_restore_primary_sub_drafts_and_keep_host_terminal_running() {
+    let Some((_extension_state, host)) = terminal_test_host(
+        "project_tasks_restore_primary_sub_drafts_and_keep_host_terminal_running",
+    ) else {
+        return;
+    };
     let directory = tempfile::tempdir().unwrap();
     let primary = directory.path().join("primary");
     let sub = directory.path().join("sub");
@@ -841,7 +989,6 @@ fn project_tasks_restore_primary_sub_drafts_and_keep_host_terminal_running() {
     let sub = sub.canonicalize().unwrap();
     std::fs::write(primary.join("note.ts"), "primary").unwrap();
     std::fs::write(sub.join("note.ts"), "sub").unwrap();
-    let host = BackendHost::start().unwrap();
     let mut editor = EditorSession::new_empty(
         host.workspaces(),
         Arc::new(NoDialog),
@@ -875,7 +1022,7 @@ fn project_tasks_restore_primary_sub_drafts_and_keep_host_terminal_running() {
     editor.open_path(primary.join("note.ts")).unwrap();
     editor.replace_range(0..7, "primary draft").unwrap();
     let primary_document = editor.active_document_id().cloned();
-    let mut terminal = TerminalSession::new(host.terminals());
+    let mut terminal = TerminalSession::new(terminal_test_backend(&host));
     let terminal_id = terminal.start(&primary, 80, 24).unwrap();
     tasks
         .capture(&mut editor, Default::default(), None, terminal.terminals())

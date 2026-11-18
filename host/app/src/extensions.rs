@@ -869,6 +869,124 @@ mod tests {
     use super::*;
     use extensions_entry::{ExtensionEntry, ExtensionState, ExtensionVersion};
 
+    #[test]
+    fn detached_pty_keeps_real_worktree_from_being_removed() {
+        use backend_state::{BackendService, BackendState, EmbeddedClient, WorkspaceRegistration};
+        use client_api::{
+            RequestBody, ResponseBody, SessionId, WorkspaceId, WorkspaceOperation,
+            WorkspaceOperationRequest, WorkspaceOperationResponse,
+        };
+        use process::pty::{PtyAttachmentId, PtyOwnerId, PtyService, PtySize, PtySpawn};
+        use std::{path::Path, process::Command, sync::Arc};
+
+        fn git(root: &Path, args: &[&str]) {
+            assert!(
+                Command::new("git")
+                    .current_dir(root)
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let tree = outside.path().join("worktree");
+        git(root.path(), &["init", "-b", "main"]);
+        git(root.path(), &["config", "user.name", "Lapis Test"]);
+        git(
+            root.path(),
+            &["config", "user.email", "test@example.invalid"],
+        );
+        std::fs::write(root.path().join("file"), "data").unwrap();
+        git(root.path(), &["add", "file"]);
+        git(root.path(), &["commit", "-m", "initial"]);
+        git(
+            root.path(),
+            &["worktree", "add", "-b", "test", tree.to_str().unwrap()],
+        );
+        let workspace = WorkspaceId::try_new("workspace").unwrap();
+        let registration = WorkspaceRegistration::new(
+            workspace.clone(),
+            "workspace",
+            root.path().to_owned(),
+            Arc::new(platform::LocalWorkspaceRepository::new(
+                root.path().to_owned(),
+            )),
+        )
+        .with_git(Arc::new(platform::LocalGitBackend::user_default()));
+        let state = BackendState::new([registration]).unwrap();
+        let guard = state.resource_guard();
+        let pty = Arc::new(local_process::pty::LocalPtyService::default());
+        let observed = pty.clone();
+        guard
+            .add_check(Arc::new(move |path| {
+                observed.active_in(path).map_err(|error| error.to_string())
+            }))
+            .unwrap();
+        let service = BackendService::start(state).unwrap();
+        let client = EmbeddedClient::connect(
+            service,
+            SessionId::try_new("session").unwrap(),
+            workspace.clone(),
+        )
+        .unwrap();
+        let request = |operation| {
+            client
+                .request(RequestBody::WorkspaceExecute(WorkspaceOperationRequest {
+                    workspace_id: workspace.clone(),
+                    operation,
+                }))
+                .unwrap()
+        };
+        let ResponseBody::WorkspaceExecute(WorkspaceOperationResponse::Worktrees(trees)) =
+            request(WorkspaceOperation::Worktrees)
+        else {
+            panic!("worktrees unavailable")
+        };
+        assert_eq!(trees.len(), 1);
+        let id = trees.into_iter().next().unwrap().worktree_id;
+        let owner = PtyOwnerId("extension.test".into());
+        let attachment = PtyAttachmentId("connection".into());
+        let (program, args) = if cfg!(windows) {
+            ("cmd.exe", vec!["/D", "/C", "ping -n 30 127.0.0.1 >nul"])
+        } else {
+            ("sh", vec!["-c", "sleep 30"])
+        };
+        let canonical = tree.canonicalize().unwrap();
+        let session = guard
+            .with_path(&canonical, || {
+                pty.spawn(
+                    &owner,
+                    PtySpawn {
+                        program: program.into(),
+                        args: args.into_iter().map(str::to_owned).collect(),
+                        env: Default::default(),
+                        cwd: canonical.to_string_lossy().into_owned(),
+                        size: PtySize {
+                            columns: 80,
+                            rows: 24,
+                        },
+                    },
+                )
+                .map_err(|error| error.to_string())
+            })
+            .unwrap();
+        pty.attach(&owner, &session, attachment.clone()).unwrap();
+        pty.detach(&owner, &session, &attachment).unwrap();
+        let discard = || WorkspaceOperation::DiscardWorktree {
+            worktree_id: id.clone(),
+        };
+        assert!(matches!(request(discard()), ResponseBody::Error(_)));
+        assert!(tree.exists());
+        pty.close_owner(&owner).unwrap();
+        assert!(matches!(
+            request(discard()),
+            ResponseBody::WorkspaceExecute(_)
+        ));
+        assert!(!tree.exists());
+    }
+
     #[cfg(all(windows, target_arch = "x86_64"))]
     #[test]
     fn native_startup_requires_signed_compatible_image_and_respects_disable() {

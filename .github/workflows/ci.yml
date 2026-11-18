@@ -214,6 +214,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked -p host signed_native_package_runs_in_extension_host -- --ignored
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p host --test quic native_terminal_survives_quic_disconnect_and_can_be_claimed -- --ignored
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --locked --manifest-path examples/pty-extension/Cargo.toml --target wasm32-wasip2 --target-dir target/pty-extension
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked -p host approved_wasm_uses_host_pty_and_shutdown_reclaims_it -- --ignored
@@ -288,7 +290,14 @@ jobs:
         run: python scripts/check.py desktop format
 
       - name: Test Desktop
-        run: python scripts/check.py desktop test
+        shell: pwsh
+        run: |
+          cargo build --locked -p extension-runtime --bin lapis-extension-host
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --locked -p lapis-terminal-native
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/check.py desktop test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Lint Desktop
         run: python scripts/check.py desktop lint

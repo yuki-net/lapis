@@ -58,12 +58,11 @@ pub fn supported_capabilities() -> client_api::CapabilitySet {
     .expect("bounded capabilities")
 }
 
-use ::terminal::{TerminalBackend, TerminalProfiles};
+use ::terminal::TerminalBackend;
 use backend_state::{
     BackendService, BackendServiceError, BackendState, EmbeddedClient, WorkspaceRegistration,
 };
 use client_api::{SessionId, WorkspaceId};
-use local_terminal::LocalTerminalBackend;
 use platform::{LocalGitBackend, LocalTaskBackend, LocalWorkspaceRepository};
 use std::{
     collections::HashMap,
@@ -85,8 +84,6 @@ struct HostInner {
     next_session: AtomicU64,
     state_directory: Option<PathBuf>,
     store: Option<Mutex<platform::WorkspaceStore>>,
-    /// Host が起動を許可する Terminal profile。
-    terminal_profiles: TerminalProfiles,
     /// 導入済み拡張の目録。state directory が無い Host は持たない。
     extensions: Arc<crate::extensions::HostExtensions>,
     /// 拡張の有効状態と実行中のプロセスは Host 起動時に固定する。
@@ -112,34 +109,6 @@ impl HostInner {
             .register(root)
             .map_err(|_| BackendServiceError::Unavailable)?;
         WorkspaceId::try_new(record.id).map_err(|_| BackendServiceError::Unavailable)
-    }
-}
-
-/// Host の Terminal profile 設定を読む。無い場合は OS 既定を使う。
-fn load_terminal_profiles(directory: Option<&Path>) -> TerminalProfiles {
-    let Some(directory) = directory else {
-        return local_terminal::default_profiles();
-    };
-    let path = directory.join("terminal-profiles.json");
-    let Ok(bytes) = std::fs::read(&path) else {
-        return local_terminal::default_profiles();
-    };
-    match serde_json::from_slice::<TerminalProfiles>(&bytes) {
-        Ok(profiles) if !profiles.profiles.is_empty() => profiles,
-        Ok(_) => {
-            eprintln!(
-                "Terminal profile設定が空のため、Terminalを起動できません: {}",
-                path.display()
-            );
-            TerminalProfiles::default()
-        }
-        Err(error) => {
-            eprintln!(
-                "Terminal profile設定を読めないため、Terminalを起動できません: {}: {error}",
-                path.display()
-            );
-            TerminalProfiles::default()
-        }
     }
 }
 
@@ -207,7 +176,6 @@ impl BackendHost {
             }
             None => None,
         };
-        let terminal_profiles = load_terminal_profiles(state_directory.as_deref());
         let extensions = Arc::new(if development {
             crate::extensions::HostExtensions::load_with_development(
                 state_directory.as_deref(),
@@ -298,7 +266,6 @@ impl BackendHost {
                 next_session: AtomicU64::new(1),
                 state_directory,
                 store,
-                terminal_profiles,
                 extensions,
                 extension_host,
                 #[cfg(windows)]
@@ -427,9 +394,6 @@ impl BackendHost {
             root.clone(),
             Arc::new(LocalWorkspaceRepository::new(root.clone())),
         )
-        .with_terminal(Arc::new(LocalTerminalBackend::with_profiles(
-            self.inner.terminal_profiles.clone(),
-        )))
         .with_git(Arc::new(LocalGitBackend::user_default()))
         .with_tasks(Arc::new(LocalTaskBackend::user_default().with_processes(
             self.inner.processes.clone(),
@@ -621,29 +585,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn terminal_profiles_fall_back_only_when_the_setting_is_absent() {
+    fn workspace_has_no_builtin_terminal_backend() {
         let directory = tempfile::tempdir().unwrap();
-        assert!(
-            !load_terminal_profiles(Some(directory.path()))
-                .profiles
-                .is_empty()
-        );
-
-        let path = directory.path().join("terminal-profiles.json");
-        std::fs::write(
-            &path,
-            r#"{"profiles":[{"id":"custom","name":"Custom","program":"/bin/custom"}],"default":"custom"}"#,
-        )
-        .unwrap();
-        let profiles = load_terminal_profiles(Some(directory.path()));
-        assert_eq!(profiles.profiles.len(), 1);
-        assert_eq!(profiles.profiles[0].id.as_str(), "custom");
-
-        std::fs::write(&path, "not json").unwrap();
-        assert!(
-            load_terminal_profiles(Some(directory.path()))
-                .profiles
-                .is_empty()
-        );
+        let host = BackendHost::start().unwrap();
+        host.register_workspace(directory.path()).unwrap();
+        assert!(host.terminals().start(directory.path(), 80, 24).is_err());
     }
 }

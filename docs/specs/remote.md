@@ -58,7 +58,7 @@ Desktopは招待ファイルから証明書と一回限りのtokenを取り込�
 - 接続が失われても、実行Host上のTerminalやAgentが終了したとは推測しません。
 - 再接続では権限と実行状態を再確認し、古いClient cacheを最新のsnapshotに整合させます。
 - Documentの変更・保存はrevision等を使って競合を検出し、古い内容で黙って上書きしません。未送信の編集とHostの変更が競合した場合は、Hostの本文でローカル編集を置き換えず、外部変更として記録して復旧できる状態を保ちます。
-- Terminalの画面・mode・端末問い合わせへの応答はHostのTerminal Engineが所有します。ClientはSnapshot / Deltaのrevisionを検証し、欠落時には最新Snapshotへ再同期します。raw VT/ANSIやbyte offsetをClientへ公開しません。
+- Terminal 拡張は Host の汎用 PTY から出力 byte 列を受け取り、Client は出力の offset と欠落を確認して画面モデルへ反映します。端末問い合わせへの応答も Client の描画器が扱います。
 - Messageサイズ、request数、session数、timeoutなど、必要な資源上限を設けます。
 
 ## 最低限の確認項目

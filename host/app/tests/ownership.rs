@@ -1,7 +1,6 @@
 use client_api::{
     DocumentEditRequest, DocumentOpenRequest, DocumentTextEdit, DocumentTransaction, EventBody,
-    RequestBody, ResponseBody, SnapshotReason, SnapshotRequest, TerminalStatus,
-    TerminalTerminateRequest, WorkspaceRelativePath,
+    RequestBody, ResponseBody, WorkspaceRelativePath,
 };
 use host::BackendHost;
 
@@ -517,41 +516,11 @@ fn embedded_clients_share_document_revisions_and_reconnect_state() {
 }
 
 #[test]
-fn dropping_desktop_terminal_attachment_does_not_terminate_host_process() {
+fn legacy_terminal_requests_are_unavailable_without_an_extension() {
     let root = tempfile::tempdir().unwrap();
     let host = BackendHost::start().unwrap();
     host.register_workspace(root.path()).unwrap();
-    let child = root.path().join("nested");
-    std::fs::create_dir(&child).unwrap();
     let terminals = host.terminals();
-    let terminal_id = terminals.start(&child, 80, 24).unwrap();
-    let remote = host.connect(root.path()).unwrap();
-    let snapshot = || {
-        let ResponseBody::SnapshotResync(response) = remote
-            .request(RequestBody::SnapshotResync(SnapshotRequest {
-                workspace_id: remote.workspace_id().clone(),
-                reason: SnapshotReason::Reconnect,
-            }))
-            .unwrap()
-        else {
-            panic!("snapshot failed")
-        };
-        response.snapshot
-    };
-    assert_eq!(
-        snapshot().terminals[0].terminal_id.as_str(),
-        terminal_id.as_str()
-    );
-    drop(terminals);
-    let retained = snapshot();
-    assert_eq!(retained.terminals[0].status, TerminalStatus::Running);
-    assert!(matches!(
-        remote
-            .request(RequestBody::TerminalTerminate(TerminalTerminateRequest {
-                terminal_id: retained.terminals[0].terminal_id.clone(),
-            }))
-            .unwrap(),
-        ResponseBody::TerminalTerminate(_)
-    ));
-    assert_eq!(snapshot().terminals[0].status, TerminalStatus::Terminated);
+    assert!(terminals.start(root.path(), 80, 24).is_err());
+    assert!(terminals.list(root.path()).unwrap().is_empty());
 }

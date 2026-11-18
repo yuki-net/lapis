@@ -1,6 +1,5 @@
 mod connection;
 mod extension_poll;
-mod extension_terminal;
 mod install;
 mod update_fetch;
 mod updater;
@@ -197,8 +196,9 @@ fn main() {
     } else {
         LspSession::new(Arc::new(lsp_backend))
     };
-    let terminal_backend: Arc<dyn terminal::TerminalBackend> =
-        Arc::new(extension_terminal::ExtensionTerminals::new(host.clone()));
+    let terminal_backend: Arc<dyn terminal::TerminalBackend> = Arc::new(
+        lapis::extension_terminal::ExtensionTerminals::new(host.clone()),
+    );
     let mut terminal_session = TerminalSession::new(terminal_backend);
     let search_session = if use_loopback {
         WorkspaceSearchSession::new(Arc::new(LoopbackBackend::new(

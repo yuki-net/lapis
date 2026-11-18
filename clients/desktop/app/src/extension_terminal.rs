@@ -18,7 +18,7 @@ use terminal::{
     TerminalProfiles, TerminalSnapshot,
 };
 
-pub(crate) struct ExtensionTerminals {
+pub struct ExtensionTerminals {
     host: BackendClient,
     workspaces: Mutex<HashMap<WorkspaceId, Arc<NativeBackend>>>,
     sessions: Mutex<HashMap<String, Arc<NativeBackend>>>,
@@ -29,7 +29,7 @@ pub(crate) struct ExtensionTerminals {
 }
 
 impl ExtensionTerminals {
-    pub(crate) fn new(host: BackendClient) -> Self {
+    pub fn new(host: BackendClient) -> Self {
         let count = Arc::new(AtomicUsize::new(0));
         let pending = Arc::new(AtomicBool::new(false));
         let lifetime = Arc::new(());

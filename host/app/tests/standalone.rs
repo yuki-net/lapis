@@ -192,23 +192,19 @@ fn independent_host_keeps_running_after_client_disconnect_and_rejects_certificat
             .await,
             ResponseBody::WorkspaceConnect(_)
         ));
-        let ResponseBody::TerminalStart(started) = request(
+        let ResponseBody::DocumentCreate(created) = request(
             &mut client,
-            "start",
-            RequestBody::TerminalStart(TerminalStartRequest {
+            "create",
+            RequestBody::DocumentCreate(DocumentCreateRequest {
                 workspace_id: workspace.clone(),
-                cwd: None,
-                command: None,
-                profile: None,
-                size: TerminalSize {
-                    columns: 80,
-                    rows: 24,
-                },
+                path: WorkspaceRelativePath::parse("retained.txt").unwrap(),
+                encoding: DocumentEncoding::Utf8,
+                content: "retained across reconnect".into(),
             }),
         )
         .await
         else {
-            panic!("PTY start failed")
+            panic!("document creation failed")
         };
         drop(client);
         let mut reconnected = QuicClient::connect(
@@ -263,24 +259,13 @@ fn independent_host_keeps_running_after_client_disconnect_and_rejects_certificat
         assert!(
             response
                 .snapshot
-                .terminals
+                .documents
                 .iter()
                 .any(
-                    |terminal| terminal.terminal_id == started.terminal.terminal_id
-                        && terminal.status == TerminalStatus::Running
+                    |document| document.document_id == created.document.document_id
+                        && document.content == "retained across reconnect"
                 )
         );
-        assert!(matches!(
-            request(
-                &mut reconnected,
-                "terminate",
-                RequestBody::TerminalTerminate(TerminalTerminateRequest {
-                    terminal_id: started.terminal.terminal_id
-                })
-            )
-            .await,
-            ResponseBody::TerminalTerminate(_)
-        ));
     });
     assert!(process.0.try_wait().unwrap().is_none());
     writeln!(input, "quit").unwrap();

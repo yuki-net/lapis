@@ -32,10 +32,16 @@ sysinfo.workspace = true
 wire = { path = "../../../contracts/transport/wire" }
 
 [dev-dependencies]
+base64 = "0.22"
+ed25519-dalek = "3"
+serde_json.workspace = true
 editor-core = { path = "../../../contracts/domain/editor-core" }
 workbench = { path = "../../../contracts/domain/workbench" }
 workspace = { path = "../../../contracts/domain/workspace" }
 tempfile.workspace = true
+
+[target.'cfg(not(windows))'.dev-dependencies]
+local-terminal = { path = "../../../extensions/terminal/adapter" }
 
 [build-dependencies]
 winresource.workspace = true

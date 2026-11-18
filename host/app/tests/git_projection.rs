@@ -21,7 +21,7 @@ fn git(root: &Path, arguments: &[&str]) {
 }
 
 #[test]
-fn worktree_removal_preserves_detached_dirty_documents_and_running_terminals() {
+fn worktree_removal_preserves_detached_dirty_documents() {
     let root = tempfile::tempdir().unwrap();
     let sibling = tempfile::tempdir().unwrap();
     let tree = sibling.path().join("topic");
@@ -79,36 +79,8 @@ fn worktree_removal_preserves_detached_dirty_documents_and_running_terminals() {
         .unwrap();
     documents.close(&restored.id).unwrap();
     drop(documents);
-    let terminals = host.terminals();
-    let terminal = terminals.start(&tree, 80, 24).unwrap();
-    drop(terminals);
-    assert!(git.discard_worktree(&workspace, &id).is_err());
-    assert!(tree.exists());
-    let reconnect = host.connect(&tree).unwrap();
-    let response = reconnect
-        .request(RequestBody::SnapshotResync(client_api::SnapshotRequest {
-            workspace_id: reconnect.workspace_id().clone(),
-            reason: client_api::SnapshotReason::Reconnect,
-        }))
-        .unwrap();
-    let ResponseBody::SnapshotResync(snapshot) = response else {
-        panic!("snapshot required")
-    };
-    assert_eq!(snapshot.snapshot.terminals.len(), 1);
-    assert_eq!(
-        snapshot.snapshot.terminals[0].terminal_id.as_str(),
-        terminal.as_str()
-    );
-    assert!(matches!(
-        reconnect
-            .request(RequestBody::TerminalTerminate(
-                client_api::TerminalTerminateRequest {
-                    terminal_id: snapshot.snapshot.terminals[0].terminal_id.clone(),
-                }
-            ))
-            .unwrap(),
-        ResponseBody::TerminalTerminate(_)
-    ));
+    git.discard_worktree(&workspace, &id).unwrap();
+    assert!(!tree.exists());
 }
 
 #[test]
