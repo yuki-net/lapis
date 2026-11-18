@@ -1081,7 +1081,7 @@ mod tests {
             .capabilities("dev.example.pty")
             .unwrap()
             .manifest_digest;
-        let broker = crate::extension_pty::PtyBroker::new(extensions);
+        let broker = Arc::new(crate::extension_pty::PtyBroker::new(extensions));
         let spawn = serde_json::json!({"program":"cmd.exe", "args":["/D", "/C", "ping -n 60 127.0.0.1 >nul"],
             "env":{}, "cwd": state.path().to_string_lossy(), "size":{"columns":80,"rows":24}});
         assert!(
@@ -1116,9 +1116,58 @@ mod tests {
                 serde_json::json!({"id":id}),
             )
             .unwrap();
+        // ??????????????? read ???????????
+        let mut offset = 0;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let output = broker
+                .call(
+                    "dev.example.pty",
+                    "pty.v1.read",
+                    serde_json::json!({
+                        "id": id, "offset": offset, "max_bytes": 4096, "timeout_ms": 150
+                    }),
+                )
+                .unwrap();
+            offset = output["next"].as_u64().unwrap();
+            if output["bytes"].as_array().unwrap().is_empty() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "PTY output did not settle"
+            );
+        }
+        let (sent, received) = std::sync::mpsc::channel();
+        let waiting = Arc::clone(&broker);
+        let waiting_id = id.clone();
+        let reader = std::thread::spawn(move || {
+            let result = waiting.call(
+                "dev.example.pty",
+                "pty.v1.read",
+                serde_json::json!({
+                    "id": waiting_id, "offset": offset, "max_bytes": 4096, "timeout_ms": 1000
+                }),
+            );
+            sent.send(result).unwrap();
+        });
+        assert!(
+            matches!(
+                received.recv_timeout(std::time::Duration::from_millis(100)),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ),
+            "read did not wait"
+        );
         broker
             .set_approval("dev.example.pty", false, &digest)
             .unwrap();
+        assert!(
+            received
+                .recv_timeout(std::time::Duration::from_secs(3))
+                .unwrap()
+                .is_err()
+        );
+        reader.join().unwrap();
         assert!(
             broker
                 .call(
