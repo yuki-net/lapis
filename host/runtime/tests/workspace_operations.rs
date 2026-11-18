@@ -249,6 +249,25 @@ fn worktree_removal_rejects_active_clients_and_reserves_the_directory_during_git
     ));
     assert!(fixture.git.calls.lock().unwrap().is_empty());
     drop(child);
+    let busy = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let observed = Arc::clone(&busy);
+    fixture
+        .resources
+        .add_check(Arc::new(move |_| {
+            Ok(observed.load(std::sync::atomic::Ordering::Acquire))
+        }))
+        .unwrap();
+    assert!(matches!(
+        execute(
+            &parent,
+            Operation::DiscardWorktree {
+                worktree_id: tree.worktree_id.clone()
+            }
+        ),
+        ResponseBody::Error(_)
+    ));
+    assert!(fixture.git.calls.lock().unwrap().is_empty());
+    busy.store(false, std::sync::atomic::Ordering::Release);
     let (entered, started) = mpsc::channel();
     let (release, resume) = mpsc::channel();
     *fixture.git.blocked_discard.lock().unwrap() = Some((entered, resume));
@@ -261,6 +280,7 @@ fn worktree_removal_rejects_active_clients_and_reserves_the_directory_during_git
         )
     });
     started.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(fixture.resources.with_path(&path, || Ok(())).is_err());
     let blocked = EmbeddedClient::connect(
         fixture.service.clone(),
         SessionId::try_new("new-client").unwrap(),
@@ -273,7 +293,7 @@ fn worktree_removal_rejects_active_clients_and_reserves_the_directory_during_git
             .register_workspace(WorkspaceRegistration::new(
                 WorkspaceId::try_new("new-alias").unwrap(),
                 "alias",
-                path,
+                path.clone(),
                 Arc::new(EmptyFiles)
             ))
             .is_err()
@@ -288,6 +308,7 @@ fn worktree_removal_rejects_active_clients_and_reserves_the_directory_during_git
         deleting.join().unwrap(),
         ResponseBody::WorkspaceExecute(_)
     ));
+    assert!(fixture.resources.with_path(&path, || Ok(())).is_ok());
     // FakeGitはdirectoryを残す。予約が完了後に解放されることも確認する。
     assert!(
         EmbeddedClient::connect(
@@ -302,6 +323,7 @@ struct Fixture {
     root: tempfile::TempDir,
     other: tempfile::TempDir,
     service: BackendService,
+    resources: Arc<backend_state::ResourceGuard>,
     git: Arc<FakeGit>,
     tasks: Arc<FakeTasks>,
 }
@@ -321,11 +343,14 @@ impl Fixture {
             .with_git(git.clone())
             .with_tasks(tasks.clone())
         });
-        let service = BackendService::start(BackendState::new(registrations).unwrap()).unwrap();
+        let state = BackendState::new(registrations).unwrap();
+        let resources = state.resource_guard();
+        let service = BackendService::start(state).unwrap();
         Self {
             root,
             other,
             service,
+            resources,
             git,
             tasks,
         }

@@ -18,6 +18,7 @@ pub(crate) struct PtyBroker {
     extensions: Arc<HostExtensions>,
     sessions: local_process::pty::LocalPtyService,
     gate: Mutex<()>,
+    resources: Arc<backend_state::ResourceGuard>,
     workspaces: Arc<Mutex<HashMap<PathBuf, WorkspaceId>>>,
 }
 
@@ -27,16 +28,37 @@ impl PtyBroker {
         Self::with_workspaces(extensions, Arc::new(Mutex::new(HashMap::new())))
     }
 
+    #[cfg(test)]
     pub(crate) fn with_workspaces(
         extensions: Arc<HostExtensions>,
         workspaces: Arc<Mutex<HashMap<PathBuf, WorkspaceId>>>,
+    ) -> Self {
+        Self::with_guard(
+            extensions,
+            workspaces,
+            Arc::new(backend_state::ResourceGuard::default()),
+        )
+    }
+
+    pub(crate) fn with_guard(
+        extensions: Arc<HostExtensions>,
+        workspaces: Arc<Mutex<HashMap<PathBuf, WorkspaceId>>>,
+        resources: Arc<backend_state::ResourceGuard>,
     ) -> Self {
         Self {
             extensions,
             sessions: local_process::pty::LocalPtyService::default(),
             gate: Mutex::new(()),
+            resources,
             workspaces,
         }
+    }
+
+    pub(crate) fn active_in(&self, root: &Path) -> Result<bool, String> {
+        let _guard = self.gate.lock().map_err(|error| error.to_string())?;
+        self.sessions
+            .active_in(root)
+            .map_err(|error| error.to_string())
     }
 
     pub(crate) fn set_approval(
@@ -134,11 +156,13 @@ impl HostCallHandler for PtyBroker {
             .to_str()
             .ok_or("working directory is not UTF-8")?
             .to_owned();
-        self.call(
-            extension,
-            method,
-            serde_json::to_value(command).map_err(|error| error.to_string())?,
-        )
+        self.resources.with_path(&resolved, || {
+            self.call(
+                extension,
+                method,
+                serde_json::to_value(command).map_err(|error| error.to_string())?,
+            )
+        })
     }
 
     fn call(&self, extension: &str, method: &str, payload: Value) -> Result<Value, String> {

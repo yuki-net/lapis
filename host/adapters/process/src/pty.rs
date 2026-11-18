@@ -3,6 +3,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     io::{Read, Write},
+    path::{Path, PathBuf},
     sync::{
         Arc, Condvar, Mutex, MutexGuard,
         atomic::{AtomicUsize, Ordering},
@@ -37,6 +38,7 @@ pub struct LocalPtyService {
 
 struct Session {
     owner: PtyOwnerId,
+    cwd: PathBuf,
     process: Mutex<Process>,
     output: Arc<(Mutex<Output>, Condvar)>,
     input: mpsc::SyncSender<Vec<u8>>,
@@ -109,6 +111,25 @@ fn error(error: impl std::fmt::Display) -> PtyError {
 }
 
 impl LocalPtyService {
+    /// 稼働中の PTY が指定されたディレクトリ以下を使用しているかを返す。
+    pub fn active_in(&self, root: &Path) -> Result<bool, PtyError> {
+        let sessions = self.sessions.lock().map_err(error)?;
+        for session in sessions
+            .values()
+            .filter(|session| session.cwd.starts_with(root))
+        {
+            if session
+                .process
+                .lock()
+                .map_err(error)?
+                .refresh_exit()?
+                .is_none()
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
     /// 所有者が保持するセッション数。終了済みでも回収されるまでは含む。
     pub fn session_count(&self, owner: &PtyOwnerId) -> Result<usize, PtyError> {
         let sessions = self.sessions.lock().map_err(error)?;
@@ -120,22 +141,16 @@ impl LocalPtyService {
 
     /// 拡張の停止時に、その拡張が所有する PTY をまとめて回収する。
     pub fn close_owner(&self, owner: &PtyOwnerId) -> Result<(), PtyError> {
-        let removed = {
-            let mut sessions = self.sessions.lock().map_err(error)?;
-            let ids: Vec<_> = sessions
-                .iter()
-                .filter(|(_, session)| &session.owner == owner)
-                .map(|(id, _)| id.clone())
-                .collect();
-            let removed: Vec<_> = ids
-                .into_iter()
-                .filter_map(|id| sessions.remove(&id))
-                .collect();
-            self.count.fetch_sub(removed.len(), Ordering::AcqRel);
-            removed
-        };
+        let mut sessions = self.sessions.lock().map_err(error)?;
+        let ids: Vec<_> = sessions
+            .iter()
+            .filter(|(_, session)| &session.owner == owner)
+            .map(|(id, _)| id.clone())
+            .collect();
         let mut first_error = None;
-        for session in &removed {
+        let mut removed = 0;
+        for id in ids {
+            let session = sessions.get(&id).expect("session collected under lock");
             // 待機中の read が参照を持っていてもプロセスを停止する。
             let result = (|| -> Result<(), PtyError> {
                 session.attachments.lock().map_err(error)?.clear();
@@ -149,13 +164,26 @@ impl LocalPtyService {
                         return Err(error(problem));
                     }
                 }
+                if process.exit.is_none() {
+                    let status = process.child.wait().map_err(error)?;
+                    process.exit = Some(PtyExit {
+                        code: i32::try_from(status.exit_code()).ok(),
+                    });
+                    drop(process.master.take());
+                }
                 Ok(())
             })();
-            if let Err(problem) = result {
-                first_error.get_or_insert(problem);
+            match result {
+                Ok(()) => {
+                    sessions.remove(&id);
+                    removed += 1;
+                }
+                Err(problem) => {
+                    first_error.get_or_insert(problem);
+                }
             }
         }
-        drop(removed);
+        self.count.fetch_sub(removed, Ordering::AcqRel);
         first_error.map_or(Ok(()), Err)
     }
 
@@ -314,6 +342,7 @@ impl PtyService for LocalPtyService {
             .map_err(error)?;
         let session = Arc::new(Session {
             owner: owner.clone(),
+            cwd: PathBuf::from(&command.cwd),
             process: Mutex::new(process),
             output,
             input,
@@ -710,6 +739,33 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "child did not exit");
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+    }
+
+    #[test]
+    fn active_directory_tracks_a_running_process_until_it_exits() {
+        let workspace = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let child = workspace.path().join("worktree");
+        std::fs::create_dir(&child).unwrap();
+        let mut spawn = command();
+        spawn.cwd = child.to_string_lossy().into_owned();
+        let service = LocalPtyService::default();
+        let owner = PtyOwnerId("extension.a".into());
+        let attachment = PtyAttachmentId("client".into());
+        let id = service.spawn(&owner, spawn).unwrap();
+        service.attach(&owner, &id, attachment.clone()).unwrap();
+        wait_for(&service, &owner, &id, &attachment, 0, b"pty-ready");
+        assert!(service.active_in(workspace.path()).unwrap());
+        assert!(service.active_in(&child).unwrap());
+        assert!(!service.active_in(other.path()).unwrap());
+        service.kill(&owner, &id, &attachment).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while service.active_in(workspace.path()).unwrap() {
+            assert!(std::time::Instant::now() < deadline, "child did not exit");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(service.session_count(&owner).unwrap(), 1);
+        service.close_owner(&owner).unwrap();
     }
 
     #[test]

@@ -240,10 +240,24 @@ impl BackendHost {
         }
         let workspaces = Arc::new(Mutex::new(HashMap::new()));
         #[cfg(windows)]
-        let extension_pty = Arc::new(crate::extension_pty::PtyBroker::with_workspaces(
+        let extension_pty = Arc::new(crate::extension_pty::PtyBroker::with_guard(
             Arc::clone(&extensions),
             Arc::clone(&workspaces),
+            state.resource_guard(),
         ));
+        #[cfg(windows)]
+        {
+            let broker = Arc::downgrade(&extension_pty);
+            state
+                .resource_guard()
+                .add_check(Arc::new(move |root| {
+                    broker
+                        .upgrade()
+                        .ok_or_else(|| "PTY service unavailable".to_owned())?
+                        .active_in(root)
+                }))
+                .map_err(|_| BackendServiceError::Unavailable)?;
+        }
         let extension_host = if components.is_empty() {
             None
         } else {

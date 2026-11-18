@@ -128,6 +128,7 @@ impl WorkspaceRegistration {
 
 pub struct BackendState {
     removing_worktrees: HashSet<PathBuf>,
+    resources: Arc<crate::ResourceGuard>,
     active_operations: HashMap<WorkspaceId, usize>,
     workspaces: HashMap<WorkspaceId, WorkspaceState>,
     connected_sessions: HashMap<SessionId, WorkspaceId>,
@@ -247,12 +248,20 @@ impl BackendState {
                 return Err(BackendStateError::Operation("Worktreeが使用中です。文書の未保存変更を保存・退避し、Terminalを終了して作業環境を切り替えてください".into()));
             }
         }
+        self.resources
+            .reserve(&root)
+            .map_err(BackendStateError::Operation)?;
         self.removing_worktrees.insert(root);
         Ok(())
     }
 
     pub(crate) fn release_worktree_removal(&mut self, root: &std::path::Path) {
         self.removing_worktrees.remove(root);
+        self.resources.release(root);
+    }
+
+    pub fn resource_guard(&self) -> Arc<crate::ResourceGuard> {
+        Arc::clone(&self.resources)
     }
 
     fn require_available_workspace(&self, id: &WorkspaceId) -> Result<(), BackendStateError> {
@@ -467,6 +476,7 @@ impl BackendState {
         }
         Ok(Self {
             removing_worktrees: HashSet::new(),
+            resources: Arc::new(crate::ResourceGuard::default()),
             active_operations: HashMap::new(),
             workspaces,
             connected_sessions: HashMap::new(),
