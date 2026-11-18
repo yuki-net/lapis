@@ -89,12 +89,21 @@ impl TerminalHost for WitHost {
 }
 
 struct Terminal;
+thread_local! {
+    static INSTANCE: std::cell::RefCell<Option<terminal_logic::TerminalLogic>> = const { std::cell::RefCell::new(None) };
+}
 impl Guest for Terminal {
     fn activate() {
-        terminal_logic::activate(Box::new(WitHost));
+        INSTANCE.with(|instance| {
+            *instance.borrow_mut() = Some(terminal_logic::TerminalLogic::new(Box::new(WitHost)));
+        });
     }
     fn deactivate() {
-        terminal_logic::deactivate();
+        INSTANCE.with(|instance| {
+            if let Some(mut logic) = instance.borrow_mut().take() {
+                logic.deactivate();
+            }
+        });
     }
     fn dispatch(
         operation: String,
@@ -102,7 +111,13 @@ impl Guest for Terminal {
         session: String,
         workspace: String,
     ) -> Result<String, String> {
-        terminal_logic::dispatch(&operation, &payload, &session, &workspace)
+        INSTANCE.with(|instance| {
+            instance
+                .borrow_mut()
+                .as_mut()
+                .ok_or("terminal is not active")?
+                .dispatch(&operation, &payload, &session, &workspace)
+        })
     }
 }
 export!(Terminal);
