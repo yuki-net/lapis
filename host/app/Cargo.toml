@@ -48,6 +48,7 @@ windows-sys = { version = "0.61", features = ["Win32_Security_Cryptography", "Wi
 libc = "0.2"
 
 [dev-dependencies]
+extension-runtime = { path = "../adapters/extension-runtime", features = ["worker"] }
 base64 = "0.22"
 ed25519-dalek = "3"
 futures-util.workspace = true

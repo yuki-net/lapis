@@ -190,7 +190,7 @@ jobs:
       - name: Test Host
         run: python scripts/check.py host test
 
-      - name: Test approved Wasm PTY
+      - name: Test approved extension PTY
         shell: pwsh
         run: |
           cargo build --locked -p lapis-terminal-native
