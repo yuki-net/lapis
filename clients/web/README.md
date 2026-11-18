@@ -91,7 +91,7 @@ Windows では拡張 Terminal の起動・再接続も、分離した Host / Bri
 
 ```powershell
 cargo build -p host -p web-bridge -p extension-runtime --bins
-cargo build --manifest-path extensions/terminal/component/Cargo.toml --target wasm32-wasip2 --target-dir target/terminal-component
+cargo build -p lapis-terminal-native
 cargo build -p web-terminal-smoke --target wasm32-unknown-unknown --profile web
 python clients/web/wasm/tests/extension_terminal_smoke.py
 ```

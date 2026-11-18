@@ -1,18 +1,21 @@
 """隔離した Host と Bridge で Web の拡張 Terminal を検証する。"""
 
 import json
+import base64
 import os
 from pathlib import Path
 import queue
 import re
 import select
-import shutil
 import socket
 import subprocess
 import tempfile
 import threading
+import sys
 
 ROOT = Path(__file__).resolve().parents[4]
+sys.path.insert(0, str(ROOT))
+from scripts.release import ed25519
 FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 SUFFIX = ".exe" if os.name == "nt" else ""
 
@@ -61,7 +64,7 @@ def start_host(root, state, certificate):
     args = [
         str(ROOT / f"target/debug/lapis-host{SUFFIX}"), "--workspace", str(root),
         "--certificate", str(certificate), "--listen", "127.0.0.1:0",
-        "--state-directory", str(state), "--development-extensions",
+        "--state-directory", str(state),
     ]
     if certificate.exists():
         args.append("--replace-certificate")
@@ -90,18 +93,27 @@ def stop_host(process):
 
 
 def main():
+    if os.name != "nt":
+        raise RuntimeError("native Terminal smoke test requires Windows")
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         workspace, state = directory / "workspace", directory / "state"
-        source, bindings = directory / "package", directory / "bindings"
+        source, bindings = directory / "staged", directory / "bindings"
         workspace.mkdir()
-        source.mkdir()
-        shutil.copyfile(ROOT / "extensions/terminal/component/extension.json", source / "extension.json")
-        shutil.copyfile(ROOT / "extensions/terminal/component/contributions.json", source / "contributions.json")
-        shutil.copyfile(ROOT / "extensions/terminal/component/views.json", source / "views.json")
-        shutil.copyfile(ROOT / "target/terminal-component/wasm32-wasip2/debug/lapis_terminal_component.wasm", source / "extension.wasm")
+        # テスト専用の鍵を隔離された Host にだけ登録する。
+        seed = bytes(range(32))
+        seed_path = directory / "test-seed"
+        seed_path.write_bytes(seed)
+        trusted = state / "extensions" / "trusted-keys.json"
+        trusted.parent.mkdir(parents=True)
+        trusted.write_text(json.dumps({"schema": 1, "keys": {
+            "web-smoke": base64.b64encode(ed25519.public_key(seed)).decode("ascii")
+        }}), encoding="utf-8")
+        subprocess.run(["python", "-m", "scripts.extensions.stage", "extensions", str(source),
+                        "--target-dir", "target", "--debug"], cwd=ROOT, check=True, creationflags=FLAGS)
         package, certificate = directory / "terminal.lapis", directory / "host.der"
-        subprocess.run(["python", "-m", "scripts.extensions.package", str(source), str(package), "--development"],
+        subprocess.run(["python", "-m", "scripts.extensions.package", str(source / "terminal"), str(package),
+                        "--seed-file", str(seed_path), "--key-id", "web-smoke"],
                        cwd=ROOT, check=True, creationflags=FLAGS)
         subprocess.run(["wasm-bindgen", "--target", "nodejs", "--out-dir", str(bindings),
                         str(ROOT / "target/wasm32-unknown-unknown/web/web_terminal_smoke.wasm")], check=True, creationflags=FLAGS)
