@@ -2,7 +2,12 @@
 //!
 //! package の検証と配置は呼び出し側が担当する。未検証のファイルには使用しない。
 
-use std::{ffi::c_void, path::Path, sync::Arc};
+use std::{
+    ffi::c_void,
+    path::Path,
+    sync::{Arc, Mutex},
+    thread::{self, ThreadId},
+};
 
 use extension_native_api::{
     ABI_VERSION, ByteView, ENTRY_SYMBOL, EntryV1, ExtensionApiV1, HostApiV1, MAX_MESSAGE_BYTES,
@@ -13,10 +18,25 @@ use serde_json::Value;
 use crate::InvocationContext;
 
 /// 認証された拡張に対する Host 能力の仲介。許可判定は呼び出し側が行う。
-pub type NativeBroker = Arc<dyn Fn(&str, Value) -> Result<Value, String> + Send + Sync>;
+pub type NativeBroker =
+    Arc<dyn Fn(&str, Value, Option<&InvocationContext>) -> Result<Value, String> + Send + Sync>;
 
 struct HostState {
     broker: NativeBroker,
+    thread: ThreadId,
+    invocation: Mutex<Option<InvocationContext>>,
+}
+
+struct InvocationGuard<'a>(&'a HostState);
+
+impl Drop for InvocationGuard<'_> {
+    fn drop(&mut self) {
+        *self
+            .0
+            .invocation
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = None;
+    }
 }
 
 /// ライブラリとインスタンスは同じ thread で保持し、操作を直列化する。
@@ -59,7 +79,11 @@ impl NativeExtension {
         {
             return Err("incomplete native extension ABI".into());
         }
-        let mut host_state = Box::new(HostState { broker });
+        let mut host_state = Box::new(HostState {
+            broker,
+            thread: thread::current().id(),
+            invocation: Mutex::new(None),
+        });
         let host_api = Box::new(HostApiV1 {
             abi_version: ABI_VERSION,
             struct_size: std::mem::size_of::<HostApiV1>() as u32,
@@ -109,6 +133,12 @@ impl NativeExtension {
         {
             return Err("invalid dispatch request".into());
         }
+        *self
+            ._host_state
+            .invocation
+            .lock()
+            .map_err(|_| "native invocation state unavailable")? = Some(context.clone());
+        let _invocation = InvocationGuard(&self._host_state);
         let table = unsafe { &*self.api };
         let mut output = OwnedBytes::EMPTY;
         let status = unsafe {
@@ -193,6 +223,9 @@ unsafe extern "C" fn host_call(
     }
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let state = unsafe { &*context.cast::<HostState>() };
+        if state.thread != thread::current().id() {
+            return Err("native Host calls must use the calling thread".to_owned());
+        }
         let method =
             String::from_utf8(unsafe { view(method)? }).map_err(|_| "invalid method UTF-8")?;
         if method.is_empty() || method.len() > 256 {
@@ -200,7 +233,12 @@ unsafe extern "C" fn host_call(
         }
         let payload = serde_json::from_slice(&unsafe { view(payload)? })
             .map_err(|_| "invalid Host request JSON")?;
-        let response = (state.broker)(&method, payload)?;
+        let invocation = state
+            .invocation
+            .lock()
+            .map_err(|_| "native invocation state unavailable")?
+            .clone();
+        let response = (state.broker)(&method, payload, invocation.as_ref())?;
         serde_json::to_vec(&response).map_err(|error| error.to_string())
     }));
     let (status, bytes) = match result {
@@ -234,5 +272,45 @@ unsafe extern "C" fn host_call(
 unsafe extern "C" fn host_release(_: *mut c_void, value: OwnedBytes) {
     if !value.ptr.is_null() && value.len != 0 {
         drop(unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(value.ptr, value.len)) });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn other_threads_cannot_borrow_an_active_invocation() {
+        let called = Arc::new(AtomicBool::new(false));
+        let observed = called.clone();
+        let state = HostState {
+            broker: Arc::new(move |_, _, _| {
+                observed.store(true, Ordering::SeqCst);
+                Ok(Value::Null)
+            }),
+            thread: thread::current().id(),
+            invocation: Mutex::new(Some(InvocationContext {
+                session: "session".into(),
+                workspace: "workspace".into(),
+            })),
+        };
+        let pointer = (&state as *const HostState) as usize;
+        thread::scope(|scope| {
+            scope.spawn(move || {
+                let mut output = OwnedBytes::EMPTY;
+                let status = unsafe {
+                    host_call(
+                        pointer as *mut c_void,
+                        ByteView::from_bytes(b"pty.v1.spawn"),
+                        ByteView::from_bytes(b"{}"),
+                        &mut output,
+                    )
+                };
+                assert_eq!(status, STATUS_ERROR);
+                unsafe { host_release(std::ptr::null_mut(), output) };
+            });
+        });
+        assert!(!called.load(Ordering::SeqCst));
     }
 }

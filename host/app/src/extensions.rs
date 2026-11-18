@@ -1411,10 +1411,11 @@ mod tests {
             workspace: "host".into(),
         };
         let native_broker = broker.clone();
-        let native_context = context.clone();
-        let callback = Arc::new(move |method: &str, payload| {
-            native_broker.call_in_context("lapis.terminal", method, payload, Some(&native_context))
-        });
+        let callback = Arc::new(
+            move |method: &str, payload, context: Option<&InvocationContext>| {
+                native_broker.call_in_context("lapis.terminal", method, payload, context)
+            },
+        );
         let native_path = root
             .join("target/debug/lapis_terminal_native.dll")
             .canonicalize()
@@ -1433,6 +1434,16 @@ mod tests {
         broker
             .set_approval("lapis.terminal", true, &digest)
             .unwrap();
+        let unknown_workspace = InvocationContext {
+            session: "native-test-other".into(),
+            workspace: "unknown".into(),
+        };
+        assert!(
+            native
+                .dispatch("terminal.v1.start", &native_start, &unknown_workspace)
+                .is_err()
+        );
+        assert_eq!(broker.session_count("lapis.terminal"), 0);
         let opened: serde_json::Value = serde_json::from_str(
             &native
                 .dispatch("terminal.v1.start", &native_start, &context)

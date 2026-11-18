@@ -49,6 +49,7 @@ impl OwnedBytes {
 
 /// Host の能力呼び出し。context は不透明なハンドルで、拡張が参照してはならない。
 /// Host API と context は拡張を deactivate するまで有効とする。
+/// call は activate・dispatch・deactivate を呼んだ同じスレッドで同期的に行う。
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct HostApiV1 {

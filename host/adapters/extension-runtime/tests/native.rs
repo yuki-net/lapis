@@ -20,23 +20,33 @@ fn native_terminal_uses_generic_host_broker_and_lifecycle() {
     let path = root.join("target/debug").join(name).canonicalize().unwrap();
     let calls = Arc::new(Mutex::new(Vec::new()));
     let observed = calls.clone();
-    let broker = Arc::new(move |method: &str, payload: Value| {
-        observed.lock().unwrap().push(method.to_owned());
-        match method {
-            "process.info.v1.get" => {
-                Ok(json!({"pty":"conpty","default_shell":{"program":"shell","arguments":[]}}))
+    let contexts = Arc::new(Mutex::new(Vec::new()));
+    let observed_contexts = contexts.clone();
+    let broker = Arc::new(
+        move |method: &str, payload: Value, context: Option<&InvocationContext>| {
+            observed.lock().unwrap().push(method.to_owned());
+            observed_contexts
+                .lock()
+                .unwrap()
+                .push(context.map(|context| (context.session.clone(), context.workspace.clone())));
+            match method {
+                "process.info.v1.get" => {
+                    Ok(json!({"pty":"conpty","default_shell":{"program":"shell","arguments":[]}}))
+                }
+                "pty.v1.spawn" => {
+                    assert_eq!(payload["cwd"], ".");
+                    Ok(json!("pty-1"))
+                }
+                "pty.v1.attach" | "pty.v1.detach" | "pty.v1.kill" | "pty.v1.forget" => {
+                    Ok(Value::Null)
+                }
+                "pty.v1.read" => Ok(
+                    json!({"bytes":[111,107],"next":2,"lost_before":null,"exited":null,"read_error":null,"write_error":null}),
+                ),
+                _ => Err("unknown Host capability".into()),
             }
-            "pty.v1.spawn" => {
-                assert_eq!(payload["cwd"], ".");
-                Ok(json!("pty-1"))
-            }
-            "pty.v1.attach" | "pty.v1.detach" | "pty.v1.kill" | "pty.v1.forget" => Ok(Value::Null),
-            "pty.v1.read" => Ok(
-                json!({"bytes":[111,107],"next":2,"lost_before":null,"exited":null,"read_error":null,"write_error":null}),
-            ),
-            _ => Err("unknown Host capability".into()),
-        }
-    });
+        },
+    );
     // この fixture はテスト直前にローカルでビルドしたファイルだけを読み込む。
     let mut extension = unsafe { NativeExtension::load_verified(&path, broker) }.unwrap();
     let context = InvocationContext {
@@ -70,6 +80,9 @@ fn native_terminal_uses_generic_host_broker_and_lifecycle() {
             .dispatch("terminal.v1.read", &read, &other)
             .is_err()
     );
+    extension
+        .dispatch("terminal.v1.info", "{}", &other)
+        .unwrap();
     extension.deactivate().unwrap();
     assert!(
         extension
@@ -83,8 +96,17 @@ fn native_terminal_uses_generic_host_broker_and_lifecycle() {
             "pty.v1.spawn",
             "pty.v1.attach",
             "pty.v1.read",
+            "process.info.v1.get",
             "pty.v1.kill",
             "pty.v1.detach"
         ]
     );
+    let contexts = contexts.lock().unwrap();
+    assert!(
+        contexts[..4]
+            .iter()
+            .all(|item| item.as_ref() == Some(&("session".into(), "workspace".into())))
+    );
+    assert_eq!(contexts[4], Some(("session".into(), "other".into())));
+    assert_eq!(&contexts[5..], &[None, None]);
 }
