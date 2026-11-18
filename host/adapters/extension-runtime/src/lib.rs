@@ -72,6 +72,8 @@ pub const PROCESS_INFO_CONTRACT: &str = "lapis.process.info";
 pub const PROCESS_INFO_VERSION: &str = "1.0.0";
 pub const DISPATCH_CONTRACT: &str = "lapis.extension.dispatch";
 pub const DISPATCH_VERSION: &str = "1.0.0";
+pub const NATIVE_ABI_CONTRACT: &str = "lapis.extension.native-abi";
+pub const NATIVE_ABI_VERSION: &str = "1.0.0";
 pub const MAX_DISPATCH_BYTES: usize = 64 * 1024;
 /// Host のみが送信するライフサイクル通知の名前空間。
 pub const SYSTEM_OPERATION_PREFIX: &str = "lapis.system.";

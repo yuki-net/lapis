@@ -57,6 +57,7 @@ type StartupExtensions = (
     Vec<String>,
     Vec<String>,
     std::collections::BTreeMap<String, String>,
+    Vec<ComponentImage>,
 );
 
 #[cfg(windows)]
@@ -153,20 +154,50 @@ impl HostExtensions {
             Ok(loader) => loader,
             Err(error) => {
                 failures.insert("host".to_owned(), error);
-                return (Vec::new(), Vec::new(), Vec::new(), Vec::new(), failures);
+                return (
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    failures,
+                    Vec::new(),
+                );
             }
         };
         let mut catalog = match &self.catalog {
-            Catalog::Absent => return (Vec::new(), Vec::new(), Vec::new(), Vec::new(), failures),
+            Catalog::Absent => {
+                return (
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    failures,
+                    Vec::new(),
+                );
+            }
             Catalog::Unreadable(error) => {
                 failures.insert("host".to_owned(), error.clone());
-                return (Vec::new(), Vec::new(), Vec::new(), Vec::new(), failures);
+                return (
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    failures,
+                    Vec::new(),
+                );
             }
             Catalog::Ready(catalog) => match catalog.lock() {
                 Ok(catalog) => catalog,
                 Err(_) => {
                     failures.insert("host".to_owned(), "拡張の目録を取得できません".to_owned());
-                    return (Vec::new(), Vec::new(), Vec::new(), Vec::new(), failures);
+                    return (
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                        failures,
+                        Vec::new(),
+                    );
                 }
             },
         };
@@ -176,6 +207,7 @@ impl HostExtensions {
             .map(|entry| entry.id.clone())
             .collect();
         let mut components = Vec::new();
+        let mut native_components = Vec::new();
         let mut contributions = Vec::new();
         let mut data_active = Vec::new();
         let mut runtime_ids = Vec::new();
@@ -284,7 +316,61 @@ impl HostExtensions {
                             }
                         }
                     };
-                    if requires_runtime {
+                    let requires_native = package.manifest.requires.iter().any(|requirement| {
+                        requirement.contract.as_str() == extension_runtime::NATIVE_ABI_CONTRACT
+                    });
+                    if requires_native && !requires_runtime {
+                        failures.insert(
+                            id.as_str().to_owned(),
+                            "native 拡張にライフサイクル契約がありません".into(),
+                        );
+                        continue;
+                    }
+                    if requires_native
+                        && !package.manifest.requires.iter().any(|requirement| {
+                            requirement.contract.as_str() == extension_runtime::DISPATCH_CONTRACT
+                        })
+                    {
+                        failures.insert(
+                            id.as_str().to_owned(),
+                            "native 拡張に dispatch 契約がありません".into(),
+                        );
+                        continue;
+                    }
+                    if requires_native {
+                        if !package.signature_verified() {
+                            failures.insert(
+                                id.as_str().to_owned(),
+                                "native 拡張には信頼済み鍵の署名が必要です".into(),
+                            );
+                            continue;
+                        }
+                        let path = if cfg!(all(windows, target_arch = "x86_64")) {
+                            "native/windows-x86_64.dll"
+                        } else {
+                            ""
+                        };
+                        let Some(bytes) = package.files.remove(path) else {
+                            failures.insert(
+                                id.as_str().to_owned(),
+                                "この Host 用の native image がありません".into(),
+                            );
+                            continue;
+                        };
+                        if bytes.is_empty() || bytes.len() > 8 * 1024 * 1024 {
+                            failures.insert(
+                                id.as_str().to_owned(),
+                                "native image のサイズが不正です".into(),
+                            );
+                            continue;
+                        }
+                        runtime_ids.push(id.as_str().to_owned());
+                        native_components.push(ComponentImage {
+                            id: id.as_str().to_owned(),
+                            bytes,
+                            require_dispatch: true,
+                        });
+                    } else if requires_runtime {
                         match package.files.remove("extension.wasm") {
                             Some(bytes) => {
                                 runtime_ids.push(id.as_str().to_owned());
@@ -336,6 +422,7 @@ impl HostExtensions {
             data_active,
             runtime_ids,
             failures,
+            native_components,
         )
     }
     /// 目録を開く。Host の起動は妨げない。
@@ -370,6 +457,11 @@ impl HostExtensions {
         let supports_dispatch = worker.as_ref().is_some_and(|(_, capabilities)| {
             capabilities.dispatch_version.as_deref() == Some(extension_runtime::DISPATCH_VERSION)
         });
+        let supports_native = cfg!(all(windows, target_arch = "x86_64"))
+            && worker.as_ref().is_some_and(|(_, capabilities)| {
+                capabilities.native_version.as_deref()
+                    == Some(extension_runtime::NATIVE_ABI_VERSION)
+            });
         #[cfg(windows)]
         let supports_pty = worker.as_ref().is_some_and(|(_, capabilities)| {
             capabilities.pty_version.as_deref() == Some(extension_runtime::PTY_VERSION)
@@ -395,6 +487,14 @@ impl HostExtensions {
                 .expect("valid contract version"),
         );
         if worker_executable.is_some() {
+            if supports_native {
+                contracts.add_version(
+                    ContractId::try_new(extension_runtime::NATIVE_ABI_CONTRACT)
+                        .expect("valid contract id"),
+                    semver::Version::parse(extension_runtime::NATIVE_ABI_VERSION)
+                        .expect("valid contract version"),
+                );
+            }
             contracts.add_version(
                 ContractId::try_new(extension_runtime::LIFECYCLE_CONTRACT)
                     .expect("valid contract id"),
@@ -769,6 +869,87 @@ mod tests {
     use super::*;
     use extensions_entry::{ExtensionEntry, ExtensionState, ExtensionVersion};
 
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    #[test]
+    fn native_startup_requires_signed_compatible_image_and_respects_disable() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        use ed25519_dalek::{Signer as _, SigningKey};
+        use sha2::Digest as _;
+        use std::io::Write as _;
+
+        fn canonical(value: &serde_json::Value) -> serde_json::Value {
+            match value {
+                serde_json::Value::Object(object) => {
+                    let mut keys: Vec<_> = object.keys().collect();
+                    keys.sort();
+                    let mut sorted = serde_json::Map::new();
+                    for key in keys {
+                        sorted.insert(key.clone(), canonical(&object[key]));
+                    }
+                    serde_json::Value::Object(sorted)
+                }
+                serde_json::Value::Array(values) => {
+                    serde_json::Value::Array(values.iter().map(canonical).collect())
+                }
+                value => value.clone(),
+            }
+        }
+
+        let state = tempfile::tempdir().unwrap();
+        let key = SigningKey::from_bytes(&[11; 32]);
+        let registry = serde_json::json!({"schema":1,"keys":{"test":STANDARD.encode(key.verifying_key().to_bytes())}});
+        let keys = TrustedKeys::parse(&serde_json::to_vec(&registry).unwrap()).unwrap();
+        let mut contracts = HostContracts::current();
+        for name in [
+            extension_runtime::LIFECYCLE_CONTRACT,
+            extension_runtime::DISPATCH_CONTRACT,
+            extension_runtime::NATIVE_ABI_CONTRACT,
+        ] {
+            contracts.add_version(
+                ContractId::try_new(name).unwrap(),
+                semver::Version::new(1, 0, 0),
+            );
+        }
+        let mut extensions = HostExtensions::load_with_development(Some(state.path()), true);
+        extensions.loader =
+            Loader::Ready(ExtensionLoader::new(keys, contracts).allow_unsigned_local_development());
+        for (id, signed) in [
+            ("dev.example.signed", true),
+            ("dev.example.unsigned", false),
+        ] {
+            let image = b"fixture native image";
+            let requires: Vec<_> = [extension_runtime::LIFECYCLE_CONTRACT, extension_runtime::DISPATCH_CONTRACT, extension_runtime::NATIVE_ABI_CONTRACT]
+                .into_iter().map(|contract| serde_json::json!({"contract":contract,"minimum":"1.0.0","maximum":"1.0.0"})).collect();
+            let mut manifest = serde_json::json!({"schema":1,"kind":"extension","id":id,"version":"1.0.0","requires":requires,
+                "files":[{"path":"native/windows-x86_64.dll","sha256":format!("{:x}", sha2::Sha256::digest(image))}]});
+            if signed {
+                manifest["key_id"] = "test".into();
+                let signature = key.sign(&serde_json::to_vec(&canonical(&manifest)).unwrap());
+                manifest["signature"] = STANDARD.encode(signature.to_bytes()).into();
+            }
+            let path = state.path().join(format!("{id}.lapis"));
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("manifest.json", options).unwrap();
+            zip.write_all(&serde_json::to_vec(&manifest).unwrap())
+                .unwrap();
+            zip.start_file("native/windows-x86_64.dll", options)
+                .unwrap();
+            zip.write_all(image).unwrap();
+            zip.finish().unwrap();
+            extensions.install(&path, true).unwrap();
+        }
+        let (_, _, _, _, failures, native) = extensions.startup_components();
+        assert_eq!(native.len(), 1);
+        assert_eq!(native[0].id, "dev.example.signed");
+        assert!(failures.contains_key("dev.example.unsigned"));
+        extensions.set_enabled("dev.example.signed", false).unwrap();
+        assert!(extensions.declares_dispatch("dev.example.signed").unwrap());
+        let (_, _, _, _, _, native) = extensions.startup_components();
+        assert!(native.is_empty());
+        assert!(extensions.declares_dispatch("dev.example.signed").is_err());
+    }
+
     #[test]
     fn dispatch_contract_is_checked_against_the_startup_package() {
         use sha2::Digest as _;
@@ -818,7 +999,7 @@ mod tests {
             zip.finish().unwrap();
             extensions.install(&path, true).unwrap();
         }
-        let (components, _, _, _, failures) = extensions.startup_components();
+        let (components, _, _, _, failures, _) = extensions.startup_components();
         assert!(failures.is_empty(), "{failures:?}");
         assert_eq!(components.len(), 2);
         assert_eq!(
@@ -993,7 +1174,7 @@ mod tests {
         assert!(command.status().unwrap().success());
         let host = HostExtensions::load(Some(state.path()));
         host.install_bundled(bundled.path()).unwrap();
-        let (_, contributions, _, _, failures) = host.startup_components();
+        let (_, contributions, _, _, failures, _) = host.startup_components();
         assert!(failures.is_empty(), "{failures:?}");
         assert!(contributions.iter().any(|item| {
             item.payload.extension_id == "lapis.language.ja"
@@ -1254,7 +1435,7 @@ mod tests {
                 .allow_unsigned_local_development(),
         );
         extensions.install(&archive, true).unwrap();
-        let (components, _, _, _, failures) = extensions.startup_components();
+        let (components, _, _, _, failures, _) = extensions.startup_components();
         assert!(failures.is_empty(), "{failures:?}");
         let digest = extensions
             .capabilities("dev.example.pty")
@@ -1391,7 +1572,7 @@ mod tests {
                 .allow_unsigned_local_development(),
         );
         extensions.install(&archive, true).unwrap();
-        let (components, _, _, _, failures) = extensions.startup_components();
+        let (components, _, _, _, failures, _) = extensions.startup_components();
         assert!(failures.is_empty(), "{failures:?}");
         let digest = extensions
             .capabilities("lapis.terminal")

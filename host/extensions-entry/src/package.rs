@@ -111,9 +111,14 @@ pub struct VerifiedPackage {
     manifest_digest: String,
     verified_id: ExtensionPackageId,
     verified_capabilities: Vec<PackageCapability>,
+    signature_verified: bool,
 }
 
 impl VerifiedPackage {
+    /// 署名省略の開発用 package と、信頼済み鍵で署名検証した package を区別する。
+    pub fn signature_verified(&self) -> bool {
+        self.signature_verified
+    }
     /// 署名とファイルを検証した manifest の digest。承認を正確な package に結び付ける。
     pub fn manifest_digest(&self) -> &str {
         &self.manifest_digest
@@ -356,12 +361,18 @@ impl ExtensionLoader {
             files.insert(file.path.clone(), bytes);
         }
         verify_files(&manifest, &files)?;
+        // parse_manifest は key_id が存在すれば必ず署名を検証する。
+        let signature_verified = serde_json::from_slice::<Value>(&raw)
+            .map_err(|error| PackageError::Malformed(error.to_string()))?
+            .get("key_id")
+            .is_some();
         Ok(VerifiedPackage {
             verified_id: manifest.id.clone(),
             verified_capabilities: manifest.capabilities.clone(),
             manifest,
             files,
             manifest_digest: format!("{:x}", Sha256::digest(&raw)),
+            signature_verified,
         })
     }
 

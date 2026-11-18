@@ -234,6 +234,7 @@ impl BackendHost {
             extension_data_active,
             extension_runtime_ids,
             mut extension_startup_errors,
+            native_components,
         ) = extensions.startup_components();
         if let Some(error) = bundled_failure {
             extension_startup_errors.insert("bundled".to_owned(), error);
@@ -258,18 +259,21 @@ impl BackendHost {
                 }))
                 .map_err(|_| BackendServiceError::Unavailable)?;
         }
-        let extension_host = if components.is_empty() {
+        let extension_host = if components.is_empty() && native_components.is_empty() {
             None
         } else {
             match extensions.worker_executable() {
                 Some(path) => {
                     #[cfg(windows)]
-                    let supervisor =
-                        extension_runtime::supervisor::ExtensionSupervisor::start_with_handler(
+                    // startup_components は native image の署名・契約と対象 OS を検証済み。
+                    let supervisor = unsafe {
+                        extension_runtime::supervisor::ExtensionSupervisor::start_with_verified_native(
                             path.to_path_buf(),
                             components,
+                            native_components,
                             Some(extension_pty.clone()),
-                        );
+                        )
+                    };
                     #[cfg(not(windows))]
                     let supervisor = extension_runtime::supervisor::ExtensionSupervisor::start(
                         path.to_path_buf(),
