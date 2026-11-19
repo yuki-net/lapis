@@ -99,12 +99,12 @@ impl Shell {
 
     /// 機能からの要求を Layout に適用する。
     fn apply_view_requests(&mut self, cx: &mut Context<Self>) {
-        for (_, request) in self.feature_registry.take_view_requests() {
+        for (view, request) in self.feature_registry.take_view_requests() {
             match request {
                 ViewRequest::BindResource { instance, resource } => {
                     self.rebind_tab_resource(&instance, resource);
                 }
-                ViewRequest::OpenTab(view) => {
+                ViewRequest::OpenTab => {
                     self.open_new_tab_for_view(view, cx);
                 }
             }

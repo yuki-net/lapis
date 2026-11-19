@@ -23,7 +23,7 @@ pub(crate) enum ViewRequest {
         resource: Option<String>,
     },
     /// 同じ View のタブを1つ増やす。
-    OpenTab(ViewId),
+    OpenTab,
 }
 
 /// 宣言された View の個体を所有する機能が実装する内部契約。

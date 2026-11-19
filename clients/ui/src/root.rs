@@ -389,8 +389,8 @@ impl DesktopRoot {
             root: terminal_root.clone(),
             conversation: terminal_context,
         }));
-        let terminal = features::terminal::terminal_lifecycle(
-            crate::features::terminal::TerminalTabSource {
+        let terminal =
+            features::terminal::terminal_lifecycle(crate::features::terminal::TerminalTabSource {
                 backend: terminal_backend,
                 context: terminal_context,
                 settings: terminal_settings,
@@ -399,9 +399,7 @@ impl DesktopRoot {
                 } else {
                     None
                 },
-            },
-            ViewId::new(id::VIEW_TERMINAL),
-        );
+            });
         shell.update(cx, |shell, cx| {
             shell.branch_picker = Some(branch_picker);
             shell.set_locale(initial_locale.clone(), cx);
