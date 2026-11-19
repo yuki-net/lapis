@@ -291,10 +291,10 @@ impl Shell {
     pub(crate) fn with_lifecycle<R>(
         &self,
         view: &ViewId,
-        f: impl FnOnce(&mut dyn crate::extension_ui::ViewLifecycle) -> R,
+        f: impl FnOnce(&dyn crate::extension_ui::ViewLifecycle) -> R,
     ) -> Option<R> {
         let lifecycle = self.feature_registry.lifecycle(view)?;
-        Some(f(&mut *lifecycle.borrow_mut()))
+        Some(f(&*lifecycle.borrow()))
     }
 
     /// タブの Resource を個体へ再適用する。復元したタブと実体を一致させる。

@@ -1863,17 +1863,18 @@ impl DesktopRoot {
     pub(crate) fn persisted_view(&self, cx: &gpui::App) -> PersistedView {
         let mut layout = self.shell.read(cx).view_state();
         self.workbench.persisted_view(&mut layout);
+        let terminals = self
+            .terminal
+            .borrow()
+            .entities()
+            .iter()
+            .flat_map(|tab| tab.read(cx).summaries())
+            .collect();
         PersistedView {
             document: self.editor.read(cx).view_state(),
             layout,
             execution: self.execution_for_persistence(cx),
-            terminals: self
-                .terminal
-                .borrow()
-                .entities()
-                .iter()
-                .flat_map(|tab| tab.read(cx).summaries())
-                .collect(),
+            terminals,
             terminal_owner: self.terminal_owner_for_persistence(cx),
             input: self
                 .editor

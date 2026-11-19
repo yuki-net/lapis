@@ -261,6 +261,29 @@ mod tests {
     }
 
     #[gpui::test]
+    fn persistence_can_read_owner_while_feature_is_read(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx)
+        });
+        let lifecycle = Rc::new(RefCell::new(RecordingLifecycle::default()));
+        let shell = cx.new(|cx| {
+            let document = cx.new(|_| Empty);
+            let mut shell = Shell::new(document.into(), HashMap::new(), cx);
+            shell.configure_view_lifecycles(lifecycle.clone(), ViewId::new(id::VIEW_TERMINAL), cx);
+            shell
+        });
+        cx.update(|cx| {
+            let _feature_read = lifecycle.borrow();
+            assert_eq!(
+                shell
+                    .read(cx)
+                    .view_resource_owner(&ViewId::new(id::VIEW_TERMINAL), cx),
+                None
+            );
+        });
+    }
+
+    #[gpui::test]
     fn extension_view_title_tracks_the_selected_language(cx: &mut gpui::TestAppContext) {
         struct Memory;
         impl settings::SettingsRepository for Memory {
