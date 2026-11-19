@@ -10,6 +10,7 @@ import zipfile
 from scripts.extensions.package import package
 from scripts.extensions.check import check
 from scripts.extensions.bundle import bundle
+from scripts.extensions.dev_bundle import prepare
 from scripts.extensions.stage import stage
 from scripts.release import ed25519
 from scripts.release.manifest import canonical_bytes
@@ -238,6 +239,28 @@ class PackageTests(unittest.TestCase):
         self.assertEqual((output / "0000.lapis").read_bytes(), (second / "0000.lapis").read_bytes())
         with self.assertRaises(ValueError):
             bundle(extensions, output, key_id="publisher", seed=seed)
+
+    def test_development_bundle_trust_is_scoped_to_each_session(self):
+        extensions = self.root / "extensions"
+        source = extensions / "example"
+        source.mkdir(parents=True)
+        (source / "extension.json").write_text(json.dumps(self.metadata), encoding="utf-8")
+        (source / "extension.wasm").write_bytes(b"component")
+        first, second = self.root / "first", self.root / "second"
+        prepare(extensions, first, self.root / "target")
+        prepare(extensions, second, self.root / "target")
+        registries = []
+        for session in (first, second):
+            registry = json.loads((session / "hosts/extensions/trusted-keys.json").read_text(encoding="utf-8"))
+            public = base64.b64decode(registry["keys"]["lapis-dev-session"])
+            registries.append(public)
+            with zipfile.ZipFile(session / "bin/bundled-extensions/0000.lapis") as archive:
+                manifest = json.loads(archive.read("manifest.json"))
+            signature = base64.b64decode(manifest.pop("signature"))
+            self.assertTrue(ed25519.verify(public, canonical_bytes(manifest), signature))
+        self.assertNotEqual(*registries)
+        with self.assertRaises(ValueError):
+            prepare(extensions, first, self.root / "target")
 
 
 if __name__ == "__main__":
