@@ -180,17 +180,6 @@ impl FeatureRegistry {
         self.lifecycles.get(view)
     }
 
-    /// 外部 Resource を参照するタブを宣言した View。タブの復元に使う。
-    pub(crate) fn external_resource_view(&self) -> Option<ViewId> {
-        self.descriptors
-            .values()
-            .flat_map(|feature| &feature.contributions)
-            .find(|contribution| {
-                contribution.tab_reference == extension_ui_contract::TabReference::ExternalResource
-            })
-            .and_then(|contribution| contribution.view.clone())
-    }
-
     /// 機能が現在持っている個体。Layout から消えた個体の解放に使う。
     pub(crate) fn view_instances(&self, view: &ViewId) -> Vec<ViewInstanceId> {
         self.instances

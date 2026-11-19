@@ -35,24 +35,39 @@ impl ExtensionContributionSnapshot {
         &self.0.contributions
     }
     /// 現在稼働中の拡張から表示宣言を得る。enabled は次回起動用。
+    /// 現在稼働中の拡張が宣言した View を、提供元と共に列挙する。
+    /// enabled は次回起動時の設定なので、現在の表示可否には active を使う。
+    pub fn active_views(
+        &self,
+    ) -> impl Iterator<Item = (&str, &extension_ui_contract::ContributedView)> + '_ {
+        self.contributions()
+            .iter()
+            .filter_map(move |entry| {
+                self.extensions()
+                    .iter()
+                    .any(|extension| {
+                        extension.id == entry.extension_id && extension.active == Some(true)
+                    })
+                    .then_some(entry)
+            })
+            .flat_map(|entry| {
+                entry.views.iter().flat_map(move |views| {
+                    views
+                        .views
+                        .iter()
+                        .map(move |view| (entry.extension_id.as_str(), view))
+                })
+            })
+    }
+
     pub fn active_view(
         &self,
         owner: &str,
         content_type: &str,
     ) -> Option<&extension_ui_contract::ContributedView> {
-        if !self
-            .extensions()
-            .iter()
-            .any(|entry| entry.id == owner && entry.active == Some(true))
-        {
-            return None;
-        }
-        self.contributions()
-            .iter()
-            .filter(|entry| entry.extension_id == owner)
-            .filter_map(|entry| entry.views.as_ref())
-            .flat_map(|views| &views.views)
-            .find(|view| view.content_type == content_type)
+        self.active_views()
+            .find(|(extension, view)| *extension == owner && view.content_type == content_type)
+            .map(|(_, view)| view)
     }
 
     pub fn has_active_view(&self, owner: &str, content_type: &str) -> bool {
@@ -440,6 +455,37 @@ mod tests {
         response.contributions[0].views.as_mut().unwrap().views[0].content_type =
             "other.grid".into();
         assert!(!check(&response));
+    }
+
+    #[test]
+    fn active_views_include_all_running_owners_and_keep_declared_identity() {
+        let response: HostExtensionsListResponse = serde_json::from_value(json!({
+            "extensions": [
+                {"id":"example.one", "version":"1.0.0", "installed":true, "enabled":false, "active":true},
+                {"id":"example.two", "version":"1.0.0", "installed":true, "enabled":true, "active":true},
+                {"id":"example.disabled", "version":"1.0.0", "installed":true, "enabled":true, "active":false}
+            ],
+            "contributions": [
+                {"extension_id":"example.one", "declaration":{"schema":1,"translations":[{"target":"example.one","locale":"en-US","messages":{"title":"One"}}]},
+                 "views":{"schema":1,"views":[{"id":"example.one.view","content_type":"example.grid.v1","title":"title","default_zone":"left"}]}},
+                {"extension_id":"example.two", "declaration":{"schema":1,"translations":[{"target":"example.two","locale":"en-US","messages":{"title":"Two"}}]},
+                 "views":{"schema":1,"views":[{"id":"example.two.view","content_type":"example.grid.v1","title":"title","default_zone":"bottom"}]}},
+                {"extension_id":"example.disabled", "declaration":{"schema":1,"translations":[{"target":"example.disabled","locale":"en-US","messages":{"title":"Disabled"}}]},
+                 "views":{"schema":1,"views":[{"id":"example.disabled.view","content_type":"example.grid.v1","title":"title","default_zone":"right"}]}}
+            ]
+        })).unwrap();
+        let snapshot = build_snapshot(response.extensions, response.contributions).unwrap();
+        let views: Vec<_> = snapshot
+            .active_views()
+            .map(|(owner, view)| (owner, view.id.as_str()))
+            .collect();
+        assert_eq!(
+            views,
+            [
+                ("example.one", "example.one.view"),
+                ("example.two", "example.two.view")
+            ]
+        );
     }
 
     fn session() -> (SettingsSession, Arc<Memory>) {

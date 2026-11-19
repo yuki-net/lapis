@@ -63,13 +63,25 @@ fn deserialize_panel_tab(value: &TabRef, registry: &FeatureRegistry) -> Option<P
     match value {
         TabRef::Document { id } => Some(PanelTab::Document(id.clone())),
         TabRef::Resource { view, id } => {
-            // View 未指定の旧 Terminal タブは、外部 Resource を宣言した View へ戻す。
+            // View 未指定の旧形式は Terminal として保存されていた。
             let view = view.as_deref().map(ViewId::new).or_else(|| {
-                registry
-                    .external_resource_view()
-                    .filter(|_| value.legacy_terminal_id().is_some())
+                let terminal = ViewId::new(crate::features::id::VIEW_TERMINAL);
+                (value.legacy_terminal_id().is_some()
+                    && registry.declaration(&terminal).is_some_and(|declaration| {
+                        declaration.tab_reference
+                            == extension_ui_contract::TabReference::ExternalResource
+                    }))
+                .then_some(terminal)
             })?;
-            let instance = ViewInstanceId::new(format!("{TERMINAL_INSTANCE_PREFIX}{id}"));
+            let instance = if view.as_str() == crate::features::id::VIEW_TERMINAL {
+                ViewInstanceId::new(format!("{TERMINAL_INSTANCE_PREFIX}{id}"))
+            } else {
+                ViewInstanceId::new(format!(
+                    "resource:{}:{}:{id}",
+                    view.as_str().len(),
+                    view.as_str()
+                ))
+            };
             Some(PanelTab::external(view, instance, Some(id.clone())))
         }
         TabRef::View { id } => {
@@ -94,6 +106,45 @@ mod tests {
     use super::*;
     use crate::shell::PanelId;
     use desktop_client::ZoneLayoutViewState;
+
+    #[test]
+    fn external_resources_restore_per_view_and_legacy_terminal_keeps_its_owner() {
+        use extension_ui_contract::{FeatureDescriptor, UiContribution, UiSlot};
+
+        let mut registry = crate::features::bundled_registry();
+        registry
+            .register(
+                FeatureDescriptor::core("aaa.example").contributes(
+                    UiContribution::view(
+                        "aaa.example.view",
+                        UiSlot::BottomDock,
+                        "Example",
+                        "example",
+                        0,
+                    )
+                    .references_external_resource(),
+                ),
+            )
+            .unwrap();
+        let resource = |view: Option<&str>| TabRef::Resource {
+            view: view.map(str::to_owned),
+            id: "same-id".to_owned(),
+        };
+        let legacy = deserialize_panel_tab(&resource(None), &registry).unwrap();
+        let terminal = deserialize_panel_tab(
+            &resource(Some(crate::features::id::VIEW_TERMINAL)),
+            &registry,
+        )
+        .unwrap();
+        let other = deserialize_panel_tab(&resource(Some("aaa.example.view")), &registry).unwrap();
+        assert_eq!(legacy, terminal);
+        assert_eq!(
+            legacy.view_id().unwrap().as_str(),
+            crate::features::id::VIEW_TERMINAL
+        );
+        assert_ne!(other.instance_id(), terminal.instance_id());
+        assert_eq!(other.view_id().unwrap().as_str(), "aaa.example.view");
+    }
 
     #[test]
     fn broken_layout_keeps_dirty_documents_in_the_default_zone() {
