@@ -41,7 +41,7 @@ mod tests {
     use super::*;
     use crate::{
         DocumentEditRequest, DocumentId, DocumentTextEdit, DocumentTransaction, EventBody,
-        TerminalId, WorkspaceId, WorkspaceListRequest,
+        WorkspaceId, WorkspaceListRequest,
     };
 
     #[test]
@@ -124,30 +124,9 @@ mod tests {
     }
 
     #[test]
-    fn terminal_delta_event_keeps_resource_and_revision() {
-        let event = EventEnvelope {
-            event_sequence: EventSequence::new(21),
-            body: EventBody::TerminalDelta {
-                terminal_id: TerminalId::try_new("terminal-1").unwrap(),
-                delta: crate::TerminalDelta {
-                    revision: 4,
-                    size: crate::TerminalSize::new(80, 24),
-                    changed_rows: Vec::new(),
-                    cursor: crate::TerminalCursor::default(),
-                    modes: crate::TerminalModes::default(),
-                    scrollback: None,
-                },
-            },
-        };
-
-        let restored =
-            serde_json::from_str::<EventEnvelope>(&serde_json::to_string(&event).unwrap()).unwrap();
-
-        assert_eq!(restored, event);
-        let EventBody::TerminalDelta { delta, .. } = restored.body else {
-            panic!("expected terminal delta event");
-        };
-        assert_eq!(delta.revision, 4);
+    fn legacy_terminal_events_are_rejected() {
+        let json = r#"{"event_sequence":21,"type":"terminal.delta","payload":{}}"#;
+        assert!(serde_json::from_str::<EventEnvelope>(json).is_err());
     }
 
     #[test]
