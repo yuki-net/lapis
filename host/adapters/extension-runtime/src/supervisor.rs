@@ -21,7 +21,7 @@ use crate::{
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
 const RESPONSE_LIMIT: u64 = 512 * 1024;
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const POLL: Duration = Duration::from_millis(100);
 const TERMINATION_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_PENDING_DISCONNECTS: usize = 1024;

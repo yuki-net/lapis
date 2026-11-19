@@ -360,8 +360,14 @@ fn resolving_selected_task_keeps_dirty_editor_and_running_terminal_context() {
         std::fs::read_to_string(primary.join("note.ts")).unwrap(),
         "base"
     );
-    terminals.terminate(&terminal).unwrap();
-    terminals.terminate(&terminal_b).unwrap();
+    // CI の失敗経路でも両方の子プロセスを回収し、後続テストへ停止を持ち越さない。
+    let cleanup = [
+        terminals.terminate(&terminal),
+        terminals.terminate(&terminal_b),
+    ];
+    if let Some(error) = cleanup.into_iter().find_map(Result::err) {
+        panic!("terminal cleanup failed: {error}");
+    }
 }
 
 #[test]

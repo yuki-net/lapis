@@ -225,6 +225,10 @@ impl Process {
         if self.refresh_exit()?.is_some() {
             return Ok(());
         }
+        // Windows の ConPTY は master が残っている間、reader を EOF にしない。
+        // 子プロセスを止める前に閉じ、reader が process mutex を再取得する前に
+        // try_wait できるよう lock 順を断ち切る。
+        drop(self.master.take());
         #[cfg(windows)]
         if let Some(pid) = self.child.process_id() {
             use std::os::windows::process::CommandExt;
