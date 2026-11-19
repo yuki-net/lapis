@@ -537,6 +537,18 @@ impl Shell {
             })
             .unwrap_or_else(|| self.locale.resolve(&contribution.title))
     }
+
+    pub(crate) fn command_search_provider(
+        &self,
+        keymap: &crate::keymap::KeymapRegistry,
+    ) -> crate::features::command_search::CommandSearchProvider {
+        crate::features::command_search::CommandSearchProvider::from_registry(
+            &self.feature_registry,
+            &self.locale,
+            keymap,
+            |contribution| self.contribution_title(contribution),
+        )
+    }
     pub(crate) fn set_locale_packs(
         &mut self,
         packs: &[localization::LocalePack],

@@ -4,9 +4,7 @@ use crate::{
     commands::UiCommand,
     features::{
         self,
-        command_search::{
-            CommandSearchProvider, DoubleShiftDetector, QuickSearch, QuickSearchEvent,
-        },
+        command_search::{DoubleShiftDetector, QuickSearch, QuickSearchEvent},
         conversation::{ConversationEvent, ConversationFeature},
         editor::{Editor, EditorEvent},
         files::FilesFeature,
@@ -2223,14 +2221,8 @@ impl DesktopRoot {
             UiCommand::QuickSearch => {
                 self.double_shift.reset();
                 let locale = self.group.read(cx).locale.clone();
-                let mut localizer = crate::localization::Localizer::bundled();
-                let _ = localizer.replace_external(&self.locale_packs);
-                localizer.set_active(&locale);
-                let provider = CommandSearchProvider::from_registry(
-                    &features::bundled_registry(),
-                    &localizer,
-                    crate::keymap::KeymapRegistry::active(cx),
-                );
+                let keymap = crate::keymap::KeymapRegistry::active(cx).clone();
+                let provider = self.shell.read(cx).command_search_provider(&keymap);
                 if !self.universal_search_open {
                     self.universal_previous_focus = window.focused(cx);
                 }
