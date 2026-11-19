@@ -341,6 +341,34 @@ impl Shell {
             return;
         }
         let PanelTab::Document(document_id) = tab else {
+            if self.tool_close_requires_confirmation(&tab, cx) {
+                let answer = window.prompt(
+                    gpui::PromptLevel::Warning,
+                    &self.t("tab.close-resource.title"),
+                    Some(&self.t("tab.close-resource.message")),
+                    &[
+                        gpui::PromptButton::new(self.t("tab.close-resource.confirm")),
+                        gpui::PromptButton::cancel(self.t("tab.close-resource.cancel")),
+                    ],
+                    cx,
+                );
+                cx.spawn(async move |this, cx| {
+                    if matches!(answer.await, Ok(0)) {
+                        let _ = this.update(cx, |this, cx| {
+                            if this.tab_mutations_blocked || this.shell.layout.tab_is_pinned(&tab) {
+                                return;
+                            }
+                            if let Some(panel_id) = this.shell.layout.panel_for_tab(&tab) {
+                                this.close_tool_tab(&panel_id, &tab, cx);
+                                this.refresh_feature_activation(cx);
+                                cx.notify();
+                            }
+                        });
+                    }
+                })
+                .detach();
+                return;
+            }
             if let Some(panel_id) = self.shell.layout.panel_for_tab(&tab) {
                 self.close_tool_tab(&panel_id, &tab, cx);
             }

@@ -200,6 +200,12 @@ impl ViewLifecycle for TerminalLifecycle {
         self.release(instance);
     }
 
+    fn requires_close_confirmation(&self, instance: &ViewInstanceId, cx: &App) -> bool {
+        self.instances
+            .get(instance)
+            .is_some_and(|view| view.read(cx).requires_close_confirmation())
+    }
+
     fn take_requests(&mut self) -> Vec<ViewRequest> {
         std::mem::take(&mut *self.requests.borrow_mut())
     }

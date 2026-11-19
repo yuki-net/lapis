@@ -57,6 +57,11 @@ pub(crate) trait ViewLifecycle {
     /// タブを閉じた。この個体が所有する Resource を終了する。
     fn deactivate(&mut self, _instance: &ViewInstanceId, _cx: &mut App) {}
 
+    /// 明示的に閉じると、実行中または状態未確定の Resource が失われるか。
+    fn requires_close_confirmation(&self, _instance: &ViewInstanceId, _cx: &App) -> bool {
+        false
+    }
+
     /// 外部の変更通知を受けた。表示中の個体へ再取得を促す。
     fn changed(&mut self, _cx: &mut App) {}
 

@@ -231,6 +231,7 @@ mod tests {
         bound: Vec<(ViewInstanceId, Option<String>, bool)>,
         released: Vec<ViewInstanceId>,
         closed: Vec<ViewInstanceId>,
+        requires_confirmation: bool,
     }
 
     impl ViewLifecycle for RecordingLifecycle {
@@ -258,6 +259,90 @@ mod tests {
         fn release(&mut self, instance: &ViewInstanceId) {
             self.released.push(instance.clone());
         }
+
+        fn requires_close_confirmation(&self, _: &ViewInstanceId, _: &App) -> bool {
+            self.requires_confirmation
+        }
+    }
+
+    #[gpui::test]
+    fn closing_running_resource_can_be_cancelled(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx)
+        });
+        let lifecycle = Rc::new(RefCell::new(RecordingLifecycle {
+            requires_confirmation: true,
+            ..Default::default()
+        }));
+        let window = cx.add_window(|_, cx| {
+            let document = cx.new(|_| Empty);
+            let mut shell = Shell::new(document.into(), HashMap::new(), cx);
+            shell.configure_view_lifecycles(lifecycle.clone(), ViewId::new(id::VIEW_TERMINAL), cx);
+            shell
+        });
+        let (panel, tab, cancel, confirm) = window
+            .update(cx, |shell, window, cx| {
+                shell.open_view_in_zone(ZonePosition::Bottom, ViewId::new(id::VIEW_TERMINAL), cx);
+                let (tab, panel) = shell
+                    .shell
+                    .layout
+                    .placements()
+                    .into_iter()
+                    .find(|(tab, _)| {
+                        tab.view_id()
+                            .is_some_and(|view| view.as_str() == id::VIEW_TERMINAL)
+                    })
+                    .unwrap();
+                let labels = (
+                    shell.t("tab.close-resource.cancel"),
+                    shell.t("tab.close-resource.confirm"),
+                );
+                shell.close_tab_in_panel(
+                    panel.clone(),
+                    ZonePosition::Bottom,
+                    tab.clone(),
+                    window,
+                    cx,
+                );
+                (panel, tab, labels.0, labels.1)
+            })
+            .unwrap();
+        cx.simulate_prompt_answer(&cancel);
+        cx.run_until_parked();
+        assert!(
+            window
+                .read_with(cx, |shell, _| shell
+                    .shell
+                    .layout
+                    .panel_for_tab(&tab)
+                    .is_some())
+                .unwrap()
+        );
+        assert!(lifecycle.borrow().closed.is_empty());
+
+        window
+            .update(cx, |shell, window, cx| {
+                shell.close_tab_in_panel(
+                    panel.clone(),
+                    ZonePosition::Bottom,
+                    tab.clone(),
+                    window,
+                    cx,
+                );
+            })
+            .unwrap();
+        cx.simulate_prompt_answer(&confirm);
+        cx.run_until_parked();
+        assert!(
+            window
+                .read_with(cx, |shell, _| shell
+                    .shell
+                    .layout
+                    .panel_for_tab(&tab)
+                    .is_none())
+                .unwrap()
+        );
+        assert_eq!(lifecycle.borrow().closed, vec![tab.instance_id()]);
     }
 
     #[gpui::test]

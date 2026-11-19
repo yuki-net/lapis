@@ -322,6 +322,16 @@ impl Shell {
         self.with_lifecycle(view, |lifecycle| lifecycle.resource_owner(cx))
             .flatten()
     }
+
+    pub(crate) fn tool_close_requires_confirmation(&self, tab: &PanelTab, cx: &gpui::App) -> bool {
+        tab.view_id()
+            .and_then(|view| {
+                self.with_lifecycle(view, |lifecycle| {
+                    lifecycle.requires_close_confirmation(&tab.instance_id(), cx)
+                })
+            })
+            .unwrap_or(false)
+    }
     fn refresh_feature_activation(&mut self, cx: &mut Context<Self>) {
         self.synchronize_view_instances(cx);
         self.shell

@@ -20,6 +20,7 @@ struct CloseRequest {
     host: HostId,
     documents: Option<Vec<DocumentId>>,
     close_tools: Vec<PanelTab>,
+    confirm_tools: Option<[String; 4]>,
     placements: HashMap<DocumentId, HostId>,
     windows: Vec<HostId>,
     remote: bool,
@@ -85,6 +86,7 @@ impl DesktopRoot {
             host,
             documents,
             close_tools: Vec::new(),
+            confirm_tools: None,
             placements: group
                 .layout
                 .tabs
@@ -152,6 +154,17 @@ impl DesktopRoot {
                 owned && !shell.shell.layout.tab_is_pinned(tab)
             })
             .collect::<Vec<_>>();
+        let confirm_tools = tabs
+            .iter()
+            .any(|tab| shell.tool_close_requires_confirmation(tab, cx))
+            .then(|| {
+                [
+                    shell.t("tab.close-resource.title"),
+                    shell.t("tab.close-resource.message"),
+                    shell.t("tab.close-resource.confirm"),
+                    shell.t("tab.close-resource.cancel"),
+                ]
+            });
         let documents: Vec<_> = tabs
             .iter()
             .filter_map(|tab| match tab {
@@ -169,6 +182,7 @@ impl DesktopRoot {
         match self.close_request(host, Some(documents), cx) {
             Ok(mut request) => {
                 request.close_tools = tools;
+                request.confirm_tools = confirm_tools;
                 self.start_close(vec![request], window, cx);
             }
             Err(error) => self.set_status(error, cx),
@@ -264,6 +278,15 @@ impl DesktopRoot {
                 let mut save_paths = HashMap::new();
                 // 全グループの判断が揃うまで保存・破棄・closeを実行しない。
                 for mut request in requests {
+                    if let Some([title, message, confirm, cancel]) = request.confirm_tools.take() {
+                        let receiver = handle.update(cx, |_, window, cx| {
+                            window.prompt(gpui::PromptLevel::Warning, &title, Some(&message),
+                                &[gpui::PromptButton::new(confirm), gpui::PromptButton::cancel(cancel)], cx)
+                        }).map_err(|e| e.to_string())?;
+                        if !matches!(receiver.await, Ok(0)) {
+                            return Err("終了をキャンセルしました".into());
+                        }
+                    }
                     let snapshot = wait_client(request.snapshot.take().unwrap()).await?;
                     this.update(cx, |_, cx| request.group.update(cx, |group, cx| group.publish_reconciled(snapshot.clone(), cx)))
                         .map_err(|e| e.to_string())?;

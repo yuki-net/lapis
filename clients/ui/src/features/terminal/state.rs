@@ -240,6 +240,8 @@ pub(crate) struct TerminalFeature {
     auto_start: AutoStart,
     /// タブ表示後に自動起動を要求されたか。
     pending_auto_start: bool,
+    /// 非表示コンテキストに実行中の Session が残る可能性。
+    inactive_may_be_running: bool,
     /// ターミナルタブが画面に出ているか。表示の切り替えだけでは終了しない。
     tab_visible: bool,
     /// Host の profile 一覧を読み終えたか。読み終えるまで既定 profile は決めない。
@@ -544,6 +546,7 @@ impl TerminalFeature {
             default_profile,
             auto_start: AutoStart::Idle,
             pending_auto_start: false,
+            inactive_may_be_running: false,
             tab_visible: false,
             profiles_loaded: false,
             profiles_retry: false,
@@ -645,6 +648,7 @@ impl TerminalFeature {
         {
             return;
         }
+        self.inactive_may_be_running |= self.requires_close_confirmation();
         let next = conversation.clone();
         let next_root = root.clone();
         self.requests.invalidate();
@@ -779,6 +783,7 @@ impl TerminalFeature {
         // 閉じた直後に開き直しても、次の表示で自動起動できるようにする。
         self.auto_start = AutoStart::Idle;
         self.pending_auto_start = false;
+        self.inactive_may_be_running = false;
         self.tab_visible = false;
         self.requests.invalidate();
         if self.root.is_none() {
@@ -826,6 +831,20 @@ impl TerminalFeature {
             self.reset_after_close();
             cx.notify();
         }
+    }
+
+    pub(crate) fn requires_close_confirmation(&self) -> bool {
+        self.inactive_may_be_running
+            || self.requests.pending_actions > 0
+            || self.requests.context_unavailable
+            || (self.pending_auto_start && self.root.is_some())
+            || (self.bound_resource.is_some() && self.terminals.is_empty())
+            || self.terminals.iter().any(|terminal| {
+                matches!(
+                    terminal.status,
+                    terminal::TerminalStatus::Running | terminal::TerminalStatus::Disconnected
+                )
+            })
     }
 
     /// 設定で選ばれた既定 profile。Host が公開していない ID は Host 既定へ倒す。
@@ -1378,6 +1397,49 @@ impl TerminalFeature {
 
 #[cfg(test)]
 mod tests {
+    #[gpui::test]
+    fn close_confirmation_covers_running_and_inactive_sessions(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext;
+        cx.update(|cx| {
+            let (_, backend) = feature();
+            let entity = cx.new(|cx| {
+                TerminalFeature::test_new(
+                    TerminalSession::new(backend),
+                    Some("workspace".into()),
+                    ConversationId::new("task-a"),
+                    cx,
+                )
+            });
+            entity.update(cx, |feature, cx| {
+                feature.requests = TerminalRequests::default();
+                assert!(!feature.requires_close_confirmation());
+                feature.pending_auto_start = true;
+                assert!(feature.requires_close_confirmation());
+                feature.pending_auto_start = false;
+                feature.bound_resource = Some(terminal::TerminalId::new("reconnecting"));
+                assert!(feature.requires_close_confirmation());
+                feature.bound_resource = None;
+                feature.terminals.push(terminal::TerminalSnapshot::empty(
+                    terminal::TerminalId::new("terminal-a"),
+                    "workspace".into(),
+                    TerminalStatus::Exited,
+                    TerminalSize::new(80, 24),
+                ));
+                assert!(!feature.requires_close_confirmation());
+                feature.terminals[0].status = TerminalStatus::Running;
+                assert!(feature.requires_close_confirmation());
+                feature.set_context(
+                    Some("workspace".into()),
+                    ConversationId::new("task-b"),
+                    vec![],
+                    cx,
+                );
+                assert!(feature.terminals.is_empty());
+                assert!(feature.requires_close_confirmation());
+            });
+        });
+    }
+
     #[gpui::test]
     fn persistence_summary_ignores_output_and_tracks_restore_metadata(
         cx: &mut gpui::TestAppContext,
