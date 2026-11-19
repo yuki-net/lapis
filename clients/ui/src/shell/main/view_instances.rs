@@ -434,6 +434,37 @@ mod tests {
     }
 
     #[gpui::test]
+    fn unbound_restored_resource_requires_confirmation_until_status_is_known(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx);
+            let lifecycle = Rc::new(RefCell::new(RecordingLifecycle::default()));
+            let document = cx.new(|_| Empty);
+            let shell = cx.new(|cx| {
+                let mut shell = Shell::new(document.into(), HashMap::new(), cx);
+                let view = ViewId::new(id::VIEW_TERMINAL);
+                shell.set_view_available(view.clone(), false, cx);
+                shell.configure_view_lifecycles(lifecycle, view, cx);
+                shell
+            });
+            shell.update(cx, |shell, cx| {
+                let view = ViewId::new(id::VIEW_TERMINAL);
+                let tab = PanelTab::external(view.clone(), "restored:one", Some("resource".into()));
+                shell
+                    .shell
+                    .layout
+                    .open_tab(ZonePosition::Bottom, tab.clone())
+                    .unwrap();
+                assert!(shell.tool_close_requires_confirmation(&tab, cx));
+                assert!(shell.running_work_requires_confirmation(cx));
+                shell.set_view_available(view, true, cx);
+                assert!(!shell.tool_close_requires_confirmation(&tab, cx));
+            });
+        });
+    }
+
+    #[gpui::test]
     fn window_close_detects_running_work_even_when_tab_is_pinned(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx);

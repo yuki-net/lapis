@@ -324,6 +324,18 @@ impl Shell {
     }
 
     pub(crate) fn tool_close_requires_confirmation(&self, tab: &PanelTab, cx: &gpui::App) -> bool {
+        // 復元や再接続が終わる前は Resource の稼働状態を判定できない。
+        if tab.resource().is_some()
+            && (self
+                .feature_registry
+                .instance_view(&tab.instance_id())
+                .is_none()
+                || tab
+                    .view_id()
+                    .is_none_or(|view| self.feature_registry.lifecycle(view).is_none()))
+        {
+            return true;
+        }
         tab.view_id()
             .and_then(|view| {
                 self.with_lifecycle(view, |lifecycle| {
