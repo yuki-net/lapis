@@ -23,6 +23,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 const RESPONSE_LIMIT: u64 = 512 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL: Duration = Duration::from_millis(100);
+const TERMINATION_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_PENDING_DISCONNECTS: usize = 1024;
 
 #[derive(Default)]
@@ -689,8 +690,29 @@ impl Worker {
     }
 
     fn terminate(&mut self) {
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            use std::process::{Command, Stdio};
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            let _ = Command::new("taskkill")
+                .args(["/F", "/T", "/PID", &self.child.id().to_string()])
+                .creation_flags(CREATE_NO_WINDOW)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
         let _ = self.child.kill();
-        let _ = self.child.wait();
+        let deadline = Instant::now() + TERMINATION_TIMEOUT;
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(_)) | Err(_) => break,
+                Ok(None) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Ok(None) => break,
+            }
+        }
     }
 }
 

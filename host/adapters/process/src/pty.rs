@@ -156,21 +156,7 @@ impl LocalPtyService {
                 session.attachments.lock().map_err(error)?.clear();
                 session.output.1.notify_all();
                 let mut process = session.process.lock().map_err(error)?;
-                if process.refresh_exit()?.is_none()
-                    && let Err(problem) = process.child.kill()
-                {
-                    process.refresh_exit()?;
-                    if process.exit.is_none() {
-                        return Err(error(problem));
-                    }
-                }
-                if process.exit.is_none() {
-                    let status = process.child.wait().map_err(error)?;
-                    process.exit = Some(PtyExit {
-                        code: i32::try_from(status.exit_code()).ok(),
-                    });
-                    drop(process.master.take());
-                }
+                process.terminate_tree()?;
                 Ok(())
             })();
             match result {
@@ -216,7 +202,6 @@ impl Drop for Process {
     fn drop(&mut self) {
         if self.exit.is_none() {
             let _ = self.child.kill();
-            let _ = self.child.wait();
         }
     }
 }
@@ -234,6 +219,43 @@ impl Process {
             }
         }
         Ok(self.exit)
+    }
+
+    fn terminate_tree(&mut self) -> Result<(), PtyError> {
+        if self.refresh_exit()?.is_some() {
+            return Ok(());
+        }
+        #[cfg(windows)]
+        if let Some(pid) = self.child.process_id() {
+            use std::os::windows::process::CommandExt;
+            use std::process::{Command, Stdio};
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            let _ = Command::new("taskkill")
+                .args(["/F", "/T", "/PID", &pid.to_string()])
+                .creation_flags(CREATE_NO_WINDOW)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+        if let Err(problem) = self.child.kill()
+            && self.refresh_exit()?.is_none()
+        {
+            return Err(error(problem));
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if let Some(exit) = self.refresh_exit()? {
+                self.exit = Some(exit);
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(PtyError(
+                    "PTY process did not exit after termination".into(),
+                ));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        Ok(())
     }
 }
 
@@ -518,15 +540,7 @@ impl PtyService for LocalPtyService {
         let session = self.session(owner, id)?;
         let _attachment = session.require_attachment(attachment)?;
         let mut process = session.process.lock().map_err(error)?;
-        if process.refresh_exit()?.is_none()
-            && let Err(problem) = process.child.kill()
-        {
-            process.refresh_exit()?;
-            if process.exit.is_none() {
-                return Err(error(problem));
-            }
-        }
-        Ok(())
+        process.terminate_tree()
     }
 
     fn forget(&self, owner: &PtyOwnerId, id: &PtySessionId) -> Result<(), PtyError> {

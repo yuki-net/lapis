@@ -272,6 +272,27 @@ fn missing_executable_is_reported_after_retry() {
 }
 
 #[test]
+fn dropping_a_running_supervisor_is_bounded() {
+    let supervisor = ExtensionSupervisor::start(
+        PathBuf::from(env!("CARGO_BIN_EXE_lapis-extension-host")),
+        vec![ComponentImage {
+            id: "test.worker".into(),
+            bytes: component(),
+            require_dispatch: false,
+        }],
+    );
+    wait_for(&supervisor, |status| {
+        matches!(status, SupervisorStatus::Running { .. })
+    });
+    let started = Instant::now();
+    drop(supervisor);
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "supervisor shutdown exceeded its bounded cleanup window"
+    );
+}
+
+#[test]
 fn crashed_worker_is_restarted_once_with_the_original_snapshot() {
     let supervisor = ExtensionSupervisor::start(
         PathBuf::from(env!("CARGO_BIN_EXE_lapis-extension-host")),
