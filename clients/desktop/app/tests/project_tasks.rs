@@ -142,6 +142,103 @@ fn terminal_test_backend(_: &BackendHost) -> Arc<dyn terminal::TerminalBackend> 
     Arc::new(local_terminal::LocalTerminalBackend::default())
 }
 
+#[cfg(windows)]
+#[test]
+fn disabling_terminal_extension_takes_effect_after_host_restart() {
+    let Some((state, host)) =
+        terminal_test_host("disabling_terminal_extension_takes_effect_after_host_restart")
+    else {
+        return;
+    };
+    let workspace_root = tempfile::tempdir().unwrap();
+    let root = workspace_root.path().canonicalize().unwrap();
+    let workspace = host.register_workspace(&root).unwrap();
+    let mut terminals = TerminalSession::new(terminal_test_backend(&host));
+    let id = terminals.start(&root, 80, 24).unwrap();
+
+    host.set_extension_enabled("lapis.terminal", false).unwrap();
+    let running = host
+        .extensions()
+        .unwrap()
+        .extensions
+        .into_iter()
+        .find(|item| item.id == "lapis.terminal")
+        .unwrap();
+    assert!(!running.enabled);
+    assert_eq!(running.active, Some(true));
+    terminals.input(&id, "echo STILL_RUNNING\r\n").unwrap();
+
+    drop(terminals);
+    drop(host);
+    let restarted = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    let disabled = restarted
+        .extensions()
+        .unwrap()
+        .extensions
+        .into_iter()
+        .find(|item| item.id == "lapis.terminal")
+        .unwrap();
+    assert!(!disabled.enabled);
+    assert_eq!(disabled.active, Some(false));
+    let request = client_api::HostExtensionDispatchRequest {
+        id: "lapis.terminal".into(),
+        operation: "terminal.v1.list".into(),
+        payload: "{}".into(),
+    };
+    assert!(
+        restarted
+            .dispatch_extension(
+                &request,
+                &client_api::SessionId::try_new("test-session").unwrap(),
+                &workspace,
+            )
+            .is_err()
+    );
+    restarted
+        .set_extension_enabled("lapis.terminal", true)
+        .unwrap();
+    assert!(
+        restarted
+            .dispatch_extension(
+                &request,
+                &client_api::SessionId::try_new("test-session").unwrap(),
+                &workspace,
+            )
+            .is_err()
+    );
+    drop(restarted);
+
+    let reenabled = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        let restored = reenabled
+            .extensions()
+            .unwrap()
+            .extensions
+            .into_iter()
+            .find(|item| item.id == "lapis.terminal")
+            .unwrap();
+        assert!(restored.enabled);
+        if restored.active == Some(true) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Terminal extension did not restart"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let response = reenabled
+        .dispatch_extension(
+            &request,
+            &client_api::SessionId::try_new("test-session").unwrap(),
+            &workspace,
+        )
+        .unwrap();
+    let list: serde_json::Value = serde_json::from_str(&response.result).unwrap();
+    assert!(list["sessions"].as_array().unwrap().is_empty());
+}
+
 #[test]
 fn resolving_selected_task_keeps_dirty_editor_and_running_terminal_context() {
     use desktop_client::{ConversationViewState, WorkbenchModeState, WorkbenchViewState};
