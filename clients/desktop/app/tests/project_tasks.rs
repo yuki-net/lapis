@@ -3,9 +3,14 @@ use desktop_client::{
 };
 use host::BackendHost;
 use persistence::{LocalConversationRepository, LocalWorkspaceStateRepository};
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 struct NoDialog;
+
+static TERMINAL_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 #[cfg(windows)]
 fn terminal_test_host(test: &str) -> Option<(tempfile::TempDir, BackendHost)> {
@@ -18,6 +23,9 @@ fn terminal_test_host(test: &str) -> Option<(tempfile::TempDir, BackendHost)> {
         time::{Duration, Instant},
     };
     const CHILD: &str = "LAPIS_PROJECT_TERMINAL_TEST_CHILD";
+    let _test_lock = TERMINAL_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     if std::env::var_os(CHILD).is_none() {
         let temporary = tempfile::tempdir().unwrap();

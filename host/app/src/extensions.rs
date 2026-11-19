@@ -881,6 +881,9 @@ impl HostExtensions {
 mod tests {
     use super::*;
     use extensions_entry::{ExtensionEntry, ExtensionState, ExtensionVersion};
+    use std::sync::Mutex;
+
+    static PTY_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn detached_pty_keeps_real_worktree_from_being_removed() {
@@ -892,6 +895,9 @@ mod tests {
         use process::pty::{PtyAttachmentId, PtyOwnerId, PtyService, PtySize, PtySpawn};
         use std::{path::Path, process::Command, sync::Arc};
 
+        let _test_lock = PTY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         fn git(root: &Path, args: &[&str]) {
             assert!(
                 Command::new("git")
@@ -1010,6 +1016,9 @@ mod tests {
     #[test]
     #[ignore = "native library と拡張ホストの事前ビルドが必要"]
     fn signed_native_package_runs_in_extension_host() {
+        let _test_lock = PTY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let image = std::fs::read(root.join("target/debug/lapis_terminal_native.dll")).unwrap();
         check_native_package(&image, true);
@@ -1399,6 +1408,9 @@ mod tests {
         use extension_runtime::supervisor::HostCallHandler;
         use std::sync::Arc;
 
+        let _test_lock = PTY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let state = tempfile::tempdir().unwrap();
         let source = tempfile::tempdir().unwrap();
         std::fs::write(source.path().join("extension.wasm"), b"component").unwrap();
@@ -1589,6 +1601,9 @@ mod tests {
             time::{Duration, Instant},
         };
 
+        let _test_lock = PTY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let component = std::fs::read(
             root.join("target/pty-extension/wasm32-wasip2/debug/example_pty_extension.wasm"),
@@ -1714,6 +1729,9 @@ mod tests {
             time::{Duration, Instant},
         };
 
+        let _test_lock = PTY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let state = tempfile::tempdir().unwrap();
         let source = tempfile::tempdir().unwrap();
