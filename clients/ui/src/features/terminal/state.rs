@@ -2793,6 +2793,10 @@ mod tests {
                 )
             });
             // 設定で選ばれた既定 profile を Host 公開後に解決できるようにする。
+            assert!(
+                backend.started_profiles.lock().unwrap().is_empty(),
+                "表示前には起動しない"
+            );
             entity.update(cx, |feature, cx| {
                 feature.default_profile = Some(terminal::TerminalProfileId::new("cmd"));
                 feature.load_profiles(cx);

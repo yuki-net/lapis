@@ -200,7 +200,7 @@ impl DesktopRoot {
     /// Installs command, snapshot, persistence, and close subscriptions and focuses the editor.
     pub(crate) fn new(
         session: EditorSession,
-        mut services: DesktopServices,
+        services: DesktopServices,
         initial: InitialView,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -223,15 +223,6 @@ impl DesktopRoot {
         let terminal_context = conversation_id.clone();
         let terminal_root = session.workspace_root().map(ToOwned::to_owned);
         let initial_locale = services.settings.settings().locale();
-        if services.terminal.terminals().is_empty() {
-            let summaries = services
-                .conversation
-                .active_record()
-                .filter(|record| record.workspace.root == terminal_root)
-                .map(|record| record.terminals.clone())
-                .unwrap_or_default();
-            services.terminal.restore_summaries(&summaries);
-        }
         let document_connection = Some(session.document_connection());
         let initial_workspace = session.workspace_id().cloned();
         #[cfg_attr(target_family = "wasm", allow(unused_mut))]

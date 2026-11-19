@@ -199,7 +199,7 @@ fn main() {
     let terminal_backend: Arc<dyn terminal::TerminalBackend> = Arc::new(
         lapis::extension_terminal::ExtensionTerminals::new(host.clone()),
     );
-    let mut terminal_session = TerminalSession::new(terminal_backend);
+    let terminal_session = TerminalSession::new(terminal_backend);
     let search_session = if use_loopback {
         WorkspaceSearchSession::new(Arc::new(LoopbackBackend::new(
             Arc::new(LocalWorkspaceSearchBackend),
@@ -210,12 +210,6 @@ fn main() {
     };
 
     let show_terminal = arguments.iter().any(|value| value == "--show-terminal");
-    if show_terminal
-        && let Some(root) = session.workspace_root()
-        && let Err(error) = terminal_session.start(root, 120, 30)
-    {
-        eprintln!("Terminal start failed: {error}");
-    }
     let initial_view = desktop_ui::InitialView {
         empty_window: false,
         native_window_smoke: arguments.iter().any(|value| value == "--window-host-smoke"),
