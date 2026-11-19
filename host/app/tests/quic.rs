@@ -668,29 +668,6 @@ async fn self_revoke_is_rejected_and_other_devices_still_revoke() {
     ));
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn legacy_terminal_start_is_unavailable_over_quic() {
-    let fixture = Fixture::new().await;
-    let (mut client, _) = fixture.pair("legacy-terminal").await;
-    connect_workspace(&mut client, &fixture.workspace).await;
-    let response = request(
-        &mut client,
-        2,
-        RequestBody::TerminalStart(TerminalStartRequest {
-            workspace_id: fixture.workspace.clone(),
-            cwd: None,
-            command: None,
-            profile: None,
-            size: TerminalSize {
-                columns: 80,
-                rows: 24,
-            },
-        }),
-    )
-    .await;
-    assert!(matches!(response, ResponseBody::Error(_)));
-}
-
 fn hello(id: &str) -> HelloRequest {
     HelloRequest {
         protocol: ProtocolRange::exact(CURRENT_PROTOCOL),

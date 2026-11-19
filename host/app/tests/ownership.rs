@@ -514,26 +514,3 @@ fn embedded_clients_share_document_revisions_and_reconnect_state() {
     assert_eq!(restored.document_id, original.document_id);
     assert!(restored.revision > original.revision);
 }
-
-#[test]
-fn legacy_terminal_requests_are_unavailable_without_an_extension() {
-    let root = tempfile::tempdir().unwrap();
-    let host = BackendHost::start().unwrap();
-    let workspace = host.register_workspace(root.path()).unwrap();
-    let client = host.connect(root.path()).unwrap();
-    let response = client
-        .request(RequestBody::TerminalStart(
-            client_api::TerminalStartRequest {
-                workspace_id: workspace,
-                cwd: None,
-                command: None,
-                profile: None,
-                size: client_api::TerminalSize {
-                    columns: 80,
-                    rows: 24,
-                },
-            },
-        ))
-        .unwrap();
-    assert!(matches!(response, ResponseBody::Error(_)));
-}

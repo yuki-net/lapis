@@ -732,13 +732,6 @@ impl BackendState {
                 self.require_connected(session)?;
                 self.snapshot(session)
             }
-            RequestBody::TerminalStart(_)
-            | RequestBody::TerminalListProfiles(_)
-            | RequestBody::TerminalInput(_)
-            | RequestBody::TerminalResize(_)
-            | RequestBody::TerminalTerminate(_)
-            | RequestBody::TerminalClaim(_)
-            | RequestBody::TerminalRelease(_) => Err(BackendStateError::Unsupported),
         }
     }
 

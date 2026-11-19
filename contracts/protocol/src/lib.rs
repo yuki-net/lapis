@@ -29,7 +29,6 @@ mod request;
 mod response;
 mod revision;
 mod snapshot;
-mod terminal;
 mod version;
 mod view;
 mod workbench;
@@ -78,9 +77,7 @@ pub use host::{
     HostDeviceRevokeResponse, HostInviteRequest, HostInviteResponse, HostWebStartRequest,
     HostWebStatus, HostWebStatusRequest, HostWebStopRequest,
 };
-pub use ids::{
-    ClientId, DocumentId, InvalidResourceId, RequestId, SessionId, TerminalId, WorkspaceId,
-};
+pub use ids::{ClientId, DocumentId, InvalidResourceId, RequestId, SessionId, WorkspaceId};
 pub use operations::{WorkspaceOperation, WorkspaceOperationRequest, WorkspaceOperationResponse};
 pub use remote_wire::{
     AuthMethod, AuthRequired, AuthenticateRequest, ClientMessage, InvalidSecretHex,
@@ -90,15 +87,6 @@ pub use request::RequestBody;
 pub use response::ResponseBody;
 pub use revision::{EventSequence, Revision};
 pub use snapshot::{SnapshotReason, SnapshotRequest, SnapshotResponse, WorkspaceSnapshot};
-pub use terminal::{
-    TerminalCell, TerminalClaimRequest, TerminalColor, TerminalCommandResponse, TerminalCursor,
-    TerminalDelta, TerminalInput, TerminalInputRequest, TerminalKey, TerminalKeyEvent,
-    TerminalListProfilesRequest, TerminalListProfilesResponse, TerminalModes, TerminalModifiers,
-    TerminalProfile, TerminalProfileId, TerminalProfiles, TerminalReleaseRequest,
-    TerminalResizeRequest, TerminalRevision, TerminalRow, TerminalRowUpdate, TerminalScreen,
-    TerminalScrollbackDelta, TerminalSize, TerminalSnapshot, TerminalStartRequest,
-    TerminalStartResponse, TerminalStatus, TerminalTerminateRequest,
-};
 pub use version::{
     CURRENT_PROTOCOL, InvalidProtocolRange, ProtocolRange, ProtocolVersion, VersionMismatch,
 };

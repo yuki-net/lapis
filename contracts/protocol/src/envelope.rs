@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+﻿use serde::{Deserialize, Serialize};
 
 use crate::{EventBody, EventSequence, RequestBody, RequestId, ResponseBody};
 
@@ -157,7 +157,7 @@ mod tests {
         };
         let mismatched = ResponseEnvelope {
             request_id: request.request_id.clone(),
-            body: ResponseBody::TerminalInput(crate::TerminalCommandResponse::default()),
+            body: ResponseBody::HostWorktree(String::new()),
         };
 
         assert!(!mismatched.matches_request(&request));

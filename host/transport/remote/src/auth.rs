@@ -1433,36 +1433,32 @@ mod tests {
         let (client, workspace) = ids();
         let requested = CapabilitySet::try_new([
             CapabilityId::try_new(capability::FILES_READ).unwrap(),
-            CapabilityId::try_new(capability::TERMINAL_START).unwrap(),
+            CapabilityId::try_new(capability::EXTENSIONS_EXECUTE).unwrap(),
         ])
         .unwrap();
         let token = auth.begin_pairing(workspace.clone()).unwrap();
         let credential = auth.complete_pairing(&token, &client, &requested).unwrap();
         let grant = auth.authenticate(&credential, &client, &workspace).unwrap();
         let files = CapabilityId::try_new(capability::FILES_READ).unwrap();
-        let terminal = CapabilityId::try_new(capability::TERMINAL_START).unwrap();
+        let extension = CapabilityId::try_new(capability::EXTENSIONS_EXECUTE).unwrap();
         assert_eq!(grant.require_capability(&files), Ok(()));
         assert!(matches!(
-            grant.require_capability(&terminal),
+            grant.require_capability(&extension),
             Err(crate::AuthorizationError::CapabilityDenied(_))
         ));
         let files_request = RequestBody::FileTree(client_api::FileTreeRequest {
             workspace_id: workspace.clone(),
             path: None,
         });
-        let terminal_request = RequestBody::TerminalStart(client_api::TerminalStartRequest {
-            workspace_id: workspace.clone(),
-            cwd: None,
-            command: None,
-            profile: None,
-            size: client_api::TerminalSize {
-                columns: 80,
-                rows: 24,
-            },
-        });
+        let extension_request =
+            RequestBody::HostExtensionDispatch(client_api::HostExtensionDispatchRequest {
+                id: "test.extension".into(),
+                operation: "test.v1.run".into(),
+                payload: "{}".into(),
+            });
         assert!(auth.authorize_request(&grant, &files_request).is_ok());
         assert!(matches!(
-            auth.authorize_request(&grant, &terminal_request),
+            auth.authorize_request(&grant, &extension_request),
             Err(AccessError::Authorization(_))
         ));
         let other_workspace_request = RequestBody::FileTree(client_api::FileTreeRequest {

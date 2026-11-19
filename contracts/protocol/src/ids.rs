@@ -79,7 +79,6 @@ resource_id!(ClientId, "client");
 resource_id!(SessionId, "session");
 resource_id!(WorkspaceId, "workspace");
 resource_id!(DocumentId, "document");
-resource_id!(TerminalId, "terminal");
 
 impl TryFrom<&editor_core::WorkspaceId> for WorkspaceId {
     type Error = InvalidResourceId;

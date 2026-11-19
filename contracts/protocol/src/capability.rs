@@ -16,8 +16,6 @@ pub const FILES_READ: &str = "workspace.files.read";
 pub const FILES_WRITE: &str = "workspace.files.write";
 pub const DOCUMENTS_READ: &str = "workspace.documents.read";
 pub const DOCUMENTS_WRITE: &str = "workspace.documents.write";
-pub const TERMINAL_START: &str = "workspace.terminal.start";
-pub const TERMINAL_CONTROL: &str = "workspace.terminal.control";
 /// 導入済み拡張の宣言を読む。有効化・無効化は含まない。
 ///
 /// `host.` を付けないのは、Host 管理権限ではなく、拡張の宣言を表示する通常の
@@ -133,14 +131,15 @@ mod tests {
     #[test]
     fn intersection_only_grants_capabilities_held_by_both_sides() {
         let requested =
-            CapabilitySet::try_new([capability(FILES_READ), capability(TERMINAL_START)]).unwrap();
+            CapabilitySet::try_new([capability(FILES_READ), capability(EXTENSIONS_EXECUTE)])
+                .unwrap();
         let allowed =
             CapabilitySet::try_new([capability(FILES_READ), capability(DOCUMENTS_READ)]).unwrap();
 
         let granted = requested.intersection(&allowed);
 
         assert!(granted.contains(&capability(FILES_READ)));
-        assert!(!granted.contains(&capability(TERMINAL_START)));
+        assert!(!granted.contains(&capability(EXTENSIONS_EXECUTE)));
     }
 
     #[test]

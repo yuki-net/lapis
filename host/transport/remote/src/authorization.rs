@@ -242,7 +242,7 @@ mod tests {
     #[test]
     fn rejects_other_workspace_and_missing_capability() {
         let files = CapabilityId::try_new(capability::FILES_READ).unwrap();
-        let terminal = CapabilityId::try_new(capability::TERMINAL_START).unwrap();
+        let extension = CapabilityId::try_new(capability::EXTENSIONS_EXECUTE).unwrap();
         let grant = SessionGrant::from_authenticated(
             SessionId::try_new("session-1").unwrap(),
             WorkspaceId::try_new("workspace-1").unwrap(),
@@ -259,7 +259,7 @@ mod tests {
         );
         assert_eq!(grant.require_capability(&files), Ok(()));
         assert!(matches!(
-            grant.require_capability(&terminal),
+            grant.require_capability(&extension),
             Err(AuthorizationError::CapabilityDenied(_))
         ));
 
@@ -267,16 +267,12 @@ mod tests {
             workspace_id: WorkspaceId::try_new("workspace-1").unwrap(),
             path: None,
         });
-        let terminal_start = RequestBody::TerminalStart(client_api::TerminalStartRequest {
-            workspace_id: WorkspaceId::try_new("workspace-1").unwrap(),
-            cwd: None,
-            command: None,
-            profile: None,
-            size: client_api::TerminalSize {
-                columns: 80,
-                rows: 24,
-            },
-        });
+        let extension_dispatch =
+            RequestBody::HostExtensionDispatch(client_api::HostExtensionDispatchRequest {
+                id: "test.extension".into(),
+                operation: "test.v1.run".into(),
+                payload: "{}".into(),
+            });
         assert_eq!(grant.require_request(&file_tree), Ok(()));
         let create_directory = RequestBody::CreateDirectory(client_api::CreateDirectoryRequest {
             workspace_id: WorkspaceId::try_new("workspace-1").unwrap(),
@@ -296,7 +292,7 @@ mod tests {
         );
         assert_eq!(write_grant.require_request(&create_directory), Ok(()));
         assert!(matches!(
-            grant.require_request(&terminal_start),
+            grant.require_request(&extension_dispatch),
             Err(AuthorizationError::CapabilityDenied(_))
         ));
     }

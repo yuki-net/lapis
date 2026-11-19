@@ -39,8 +39,6 @@ pub fn supported_capabilities() -> client_api::CapabilitySet {
             FILES_WRITE,
             DOCUMENTS_READ,
             DOCUMENTS_WRITE,
-            TERMINAL_START,
-            TERMINAL_CONTROL,
             "workspace.git.read",
             "workspace.git.write",
             "workspace.tasks.read",
