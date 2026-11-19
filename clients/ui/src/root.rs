@@ -293,7 +293,7 @@ impl DesktopRoot {
             )
         });
         settings.update(cx, |settings, _| {
-            settings.use_extension_terminal_settings(services.extension_terminal)
+            settings.set_legacy_terminal_settings_hidden(false)
         });
         #[cfg(target_family = "wasm")]
         let extension_contributions = desktop_client::web_host::extension_contributions();
@@ -406,6 +406,7 @@ impl DesktopRoot {
                 shell.set_view_available(ViewId::new(id::VIEW_TERMINAL), false, cx);
                 shell.set_view_hidden(ViewId::new(id::VIEW_TERMINAL), true, cx);
             }
+            shell.register_content_renderer("lapis.content.terminal-grid.v1", terminal.clone(), cx);
             shell.configure_view_lifecycles(terminal.clone(), ViewId::new(id::VIEW_TERMINAL), cx);
             shell.open_view_in_zone(ZonePosition::Left, id::VIEW_PROJECT_TASKS.into(), cx);
             if initial.show_tasks {
@@ -743,10 +744,38 @@ impl DesktopRoot {
                                     entity.update(cx, |terminal, cx| terminal.refresh_extension_settings(cx));
                                 }
                                 if extension_terminal {
+                                    let terminal_active = snapshot
+                                        .as_ref()
+                                        .is_some_and(|snapshot| snapshot.has_active_view("lapis.terminal", "lapis.content.terminal-grid.v1"));
+                                    root.settings.update(cx, |settings, _| {
+                                        settings.set_legacy_terminal_settings_hidden(terminal_active)
+                                    });
                                     let available = extension_view_available(snapshot.as_ref(), "lapis.terminal", "lapis.content.terminal-grid.v1");
                                     let hidden = extension_view_hidden(snapshot.as_ref(), "lapis.terminal", "lapis.content.terminal-grid.v1");
                                     let declaration = snapshot.as_ref().and_then(|snapshot| snapshot.active_view("lapis.terminal", "lapis.content.terminal-grid.v1"));
                                     let shells = root.group.read(cx).members.values().map(|member| member.shell.clone()).collect::<Vec<_>>();
+                                    if let Some(snapshot) = snapshot.as_ref() {
+                                        let live = snapshot
+                                            .extensions()
+                                            .iter()
+                                            .filter(|extension| extension.active == Some(true))
+                                            .map(|extension| extension.id.clone())
+                                            .collect::<Vec<_>>();
+                                        let catalog = snapshot
+                                            .extensions()
+                                            .iter()
+                                            .map(|extension| extension.id.clone())
+                                            .collect::<Vec<_>>();
+                                        for shell in &shells {
+                                            shell.update(cx, |shell, cx| {
+                                                shell.sync_extension_availability(
+                                                    live.clone(),
+                                                    catalog.clone(),
+                                                    cx,
+                                                )
+                                            });
+                                        }
+                                    }
                                     if let Some(view) = declaration {
                                         let next = ViewId::new(view.id.clone());
                                         let old = root.terminal_view.clone();
@@ -767,6 +796,41 @@ impl DesktopRoot {
                                             root.terminal_view = next;
                                         } else {
                                             tracing::warn!("拡張 View ID が既存の View と競合しています");
+                                        }
+                                    }
+                                    // 旧 View ID の付け替えが終わるまで新しい宣言を登録しない。
+                                    // 先に登録すると、遷移先 ID が既存宣言と競合して付け替えを拒否する。
+                                    if let Some(snapshot) = snapshot.as_ref() {
+                                        let declarations = snapshot
+                                            .active_views()
+                                            .filter_map(|(owner, view)| {
+                                                if view.content_type != "lapis.content.terminal-grid.v1" {
+                                                    return None;
+                                                }
+                                                let contribution = extension_ui_contract::UiContribution::view(
+                                                    view.id.clone(),
+                                                    extension_ui_contract::UiSlot::BottomDock,
+                                                    view.title.clone(),
+                                                    owner,
+                                                    100,
+                                                )
+                                                .multiple_instances()
+                                                .references_external_resource()
+                                                .feature_owned_scroll();
+                                                Some((owner.to_owned(), (view.clone(), contribution)))
+                                            })
+                                            .fold(std::collections::BTreeMap::<String, Vec<_>>::new(), |mut grouped, (owner, view)| {
+                                                grouped.entry(owner).or_default().push(view);
+                                                grouped
+                                            })
+                                            .into_iter()
+                                            .collect::<Vec<_>>();
+                                        for shell in &shells {
+                                            if let Err(error) = shell.update(cx, |shell, cx| {
+                                                shell.sync_extension_declarations(declarations.clone(), cx)
+                                            }) {
+                                                tracing::warn!(target: "lapis::extensions", "拡張宣言を登録できませんでした: {}", error.as_str());
+                                            }
                                         }
                                     }
                                     let terminal_view = root.terminal_view.clone();

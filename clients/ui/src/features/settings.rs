@@ -759,8 +759,9 @@ impl SettingsFeature {
         }
     }
 
-    pub(crate) fn use_extension_terminal_settings(&mut self, enabled: bool) {
-        self.extension_terminal = enabled;
+    /// 組み込み設定ページを隠すのは、そのページを所有する拡張が公開中の場合だけ。
+    pub(crate) fn set_legacy_terminal_settings_hidden(&mut self, hidden: bool) {
+        self.extension_terminal = hidden;
     }
 
     fn select_page(&mut self, page: &'static str, cx: &mut Context<Self>) {
@@ -2840,7 +2841,7 @@ mod tests {
         cx.update(|cx| {
             feature.update(cx, |feature, _| {
                 assert!(feature.visible_pages().contains(&"terminal.font"));
-                feature.use_extension_terminal_settings(true);
+                feature.set_legacy_terminal_settings_hidden(true);
                 assert!(!feature.visible_pages().contains(&"terminal.font"));
                 assert!(!feature.visible_pages().contains(&"terminal.startup"));
             });

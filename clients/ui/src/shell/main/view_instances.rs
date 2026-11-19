@@ -21,6 +21,102 @@ struct TabState {
 }
 
 impl Shell {
+    /// 宣言とクライアント描画器を接続する。
+    ///
+    /// 提供元 ID は宣言の識別と有効状態の更新にだけ使う。描画器は
+    /// `content_type` で共有するため、別リポジトリの拡張が同じ種別を宣言しても
+    /// 同じ native 描画器へ接続できる。
+    pub(crate) fn sync_extension_declarations(
+        &mut self,
+        declarations: impl IntoIterator<
+            Item = (
+                String,
+                Vec<(
+                    extension_ui_contract::ContributedView,
+                    extension_ui_contract::UiContribution,
+                )>,
+            ),
+        >,
+        cx: &mut Context<Self>,
+    ) -> Result<(), extension_ui_contract::FeatureId> {
+        let declarations = declarations.into_iter().collect::<Vec<_>>();
+        let removed = self
+            .feature_registry
+            .sync_providers(declarations.iter().cloned())?;
+        for (_, views) in &declarations {
+            for (view, _) in views {
+                let id = ViewId::new(view.id.clone());
+                self.feature_registry.set_view_presentation(
+                    &id,
+                    match view.default_zone {
+                        extension_ui_contract::ContributedZone::Main => ZonePosition::Main,
+                        extension_ui_contract::ContributedZone::Left => ZonePosition::Left,
+                        extension_ui_contract::ContributedZone::Bottom => ZonePosition::Bottom,
+                        extension_ui_contract::ContributedZone::Right => ZonePosition::Right,
+                    },
+                    view.multiple_instances,
+                    view.open_command.clone().map(Into::into),
+                );
+                self.shell.hidden_view_types.remove(&id);
+            }
+        }
+        for view in removed {
+            self.shell.hidden_view_types.insert(view);
+        }
+        let views = self
+            .feature_registry
+            .provider_view_ids()
+            .collect::<Vec<_>>();
+        for view in views {
+            if self.feature_registry.declaration(view).is_some()
+                && self.feature_registry.lifecycle(view).is_some()
+            {
+                self.shell.unregistered_view_types.remove(view);
+            }
+        }
+        self.synchronize_view_instances(cx);
+        self.refresh_feature_activation(cx);
+        cx.notify();
+        Ok(())
+    }
+
+    /// 目録と実際に稼働中の拡張から、公開する View を更新する。
+    pub(crate) fn sync_extension_availability(
+        &mut self,
+        live: impl IntoIterator<Item = String>,
+        catalog: impl IntoIterator<Item = String>,
+        cx: &mut Context<Self>,
+    ) {
+        for view in self
+            .feature_registry
+            .sync_provider_availability(live, catalog)
+        {
+            self.shell.hidden_view_types.insert(view);
+        }
+        self.synchronize_view_instances(cx);
+        self.refresh_feature_activation(cx);
+        cx.notify();
+    }
+
+    /// クライアント native 描画器をコンテンツ種別で登録する。
+    pub(crate) fn register_content_renderer(
+        &mut self,
+        content_type: &str,
+        renderer: Rc<RefCell<dyn ViewLifecycle>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.feature_registry
+            .register_content_renderer(content_type, renderer.clone());
+        let views = self
+            .feature_registry
+            .connect_renderer(content_type, renderer);
+        for view in views {
+            self.shell.unregistered_view_types.remove(&view);
+        }
+        self.synchronize_view_instances(cx);
+        cx.notify();
+    }
+
     /// 個体を所有する機能をレジストリへ登録し、タブとの配線を始める。
     ///
     /// Window ごとに1回だけ呼ぶ。以降のタブの生成・表示・終了は、登録した
@@ -758,6 +854,72 @@ mod tests {
                     .instance_view(&tab.instance_id())
                     .is_some(),
                 "個体所有者が作った実体を Shell が表示する"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn external_declaration_uses_the_shared_content_renderer_without_provider_binding(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx)
+        });
+        let lifecycle = Rc::new(RefCell::new(RecordingLifecycle::default()));
+        let shell = cx.new(|cx| {
+            let document = cx.new(|_| Empty);
+            let mut shell = Shell::new(document.into(), HashMap::new(), cx);
+            shell.register_content_renderer("example.grid.v1", lifecycle.clone(), cx);
+            shell
+        });
+        shell.update(cx, |shell, cx| {
+            let contributed = extension_ui_contract::ContributedView {
+                id: "example.extension.view".into(),
+                content_type: "example.grid.v1".into(),
+                title: "view.title".into(),
+                default_zone: extension_ui_contract::ContributedZone::Bottom,
+                multiple_instances: true,
+                open_command: Some("example.extension.open".into()),
+            };
+            let contribution = extension_ui_contract::UiContribution::view(
+                contributed.id.clone(),
+                UiSlot::BottomDock,
+                contributed.title.clone(),
+                "grid",
+                10,
+            )
+            .multiple_instances()
+            .references_external_resource();
+            shell
+                .sync_extension_declarations(
+                    [(
+                        "example.extension".to_owned(),
+                        vec![(contributed, contribution)],
+                    )],
+                    cx,
+                )
+                .unwrap();
+            let view = ViewId::new("example.extension.view");
+            shell.open_view_in_zone(ZonePosition::Bottom, view.clone(), cx);
+            let tab = shell
+                .shell
+                .layout
+                .placements()
+                .into_iter()
+                .find(|(tab, _)| tab.view_id() == Some(&view))
+                .map(|(tab, _)| tab)
+                .unwrap();
+            assert_eq!(lifecycle.borrow().created, vec![tab.instance_id()]);
+            shell.rebind_tab_resource(&tab.instance_id(), Some("resource".into()));
+            shell
+                .sync_extension_declarations(Vec::<(String, Vec<_>)>::new(), cx)
+                .unwrap();
+            assert!(shell.feature_registry.declaration(&view).is_none());
+            assert!(
+                shell
+                    .feature_registry
+                    .instance_view(&tab.instance_id())
+                    .is_some()
             );
         });
     }

@@ -1,12 +1,12 @@
 use gpui::{AnyView, App};
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 
 use extension_ui_contract::{
-    ActivationCondition, CommandId, FeatureDescriptor, FeatureId, FeatureKind, ToolInstancePolicy,
-    UiContribution, UiSlot, ViewId, ViewInstanceId, ViewVisibility, WorkspaceCapabilityId,
-    ZonePosition,
+    ActivationCondition, CommandId, ContributedView, FeatureDescriptor, FeatureId, FeatureKind,
+    ToolInstancePolicy, UiContribution, UiSlot, ViewId, ViewInstanceId, ViewVisibility,
+    WorkspaceCapabilityId, ZonePosition,
 };
 
 use super::ActivationEvent;
@@ -112,6 +112,12 @@ pub struct FeatureRegistry {
     unavailable_views: HashSet<ViewId>,
     view_open_commands: HashMap<ViewId, CommandId>,
     view_aliases: HashMap<ViewId, ViewId>,
+    /// 提供元 ID ごとの宣言済み View。差し替えと OFF に使う。
+    provider_views: HashMap<String, Vec<ViewId>>,
+    /// View とクライアント描画器の種別。提供元とは独立する。
+    content_types: HashMap<ViewId, String>,
+    /// クライアント native 描画器の登録。提供元ごとではなく共有する。
+    content_renderers: HashMap<String, SharedLifecycle>,
     workspace_open: bool,
     capabilities: HashSet<WorkspaceCapabilityId>,
     active_commands: HashSet<CommandId>,
@@ -291,8 +297,196 @@ impl FeatureRegistry {
         self.lifecycles.insert(view, lifecycle);
     }
 
+    /// 署名済み宣言を提供元単位で登録する。同じ提供元の旧宣言を置換する。
+    pub(crate) fn register_provider(
+        &mut self,
+        provider: &str,
+        views: impl IntoIterator<Item = (ContributedView, UiContribution)>,
+    ) -> Result<(), FeatureId> {
+        self.remove_provider(provider);
+        let mut views = views.into_iter();
+        let first = views.next();
+        if first.is_none() {
+            self.provider_views.insert(provider.to_owned(), Vec::new());
+            return Ok(());
+        }
+        let mut descriptor = FeatureDescriptor::core(format!("extension.{provider}"));
+        let mut view_ids = Vec::new();
+        for (view, contribution) in first.into_iter().chain(views) {
+            let id = ViewId::new(view.id);
+            self.content_types.insert(id.clone(), view.content_type);
+            view_ids.push(id);
+            descriptor = descriptor.contributes(contribution);
+        }
+        self.register(descriptor)?;
+        self.provider_views.insert(provider.to_owned(), view_ids);
+        Ok(())
+    }
+
+    /// 提供元の宣言を除去する。タブと個体は残し、表示可否だけを再評価する。
+    pub(crate) fn remove_provider(&mut self, provider: &str) -> Vec<ViewId> {
+        let Some(views) = self.provider_views.remove(provider) else {
+            return Vec::new();
+        };
+        for view in &views {
+            self.view_open_commands.remove(view);
+            self.unavailable_views.remove(view);
+            self.lifecycles.remove(view);
+            self.started.remove(view);
+            self.content_types.remove(view);
+        }
+        self.descriptors
+            .remove(&FeatureId::new(format!("extension.{provider}")));
+        self.states
+            .remove(&FeatureId::new(format!("extension.{provider}")));
+        self.recompute();
+        views
+    }
+
+    /// 現在の目録にある提供元を、現在稼働中の公開状態として反映する。
+    ///
+    /// 目録に存在するが稼働していない提供元は、セッションと描画器を保持した
+    /// まま公開面から隠す。目録から消えた提供元だけを宣言ごと除去する。
+    pub(crate) fn sync_provider_availability(
+        &mut self,
+        live: impl IntoIterator<Item = String>,
+        catalog: impl IntoIterator<Item = String>,
+    ) -> Vec<ViewId> {
+        let live = live.into_iter().collect::<BTreeSet<_>>();
+        let catalog = catalog.into_iter().collect::<BTreeSet<_>>();
+        let unavailable = self
+            .provider_views
+            .iter()
+            .filter(|(provider, _)| catalog.contains(*provider) && !live.contains(*provider))
+            .flat_map(|(_, views)| views.iter().cloned())
+            .collect::<Vec<_>>();
+        for view in &unavailable {
+            self.set_view_available(view.clone(), false);
+        }
+        self.provider_views
+            .keys()
+            .filter(|provider| !catalog.contains(*provider))
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .flat_map(|provider| self.remove_provider(&provider))
+            .collect()
+    }
+
+    /// 提供元の宣言を現在の有効状態へ反映する。
+    ///
+    /// 既に登録済みの View は再利用し、描画器の登録を失わない。無効化された
+    /// 提供元だけを除去し、同じ `content_type` を持つ別提供元は残す。
+    pub(crate) fn sync_providers(
+        &mut self,
+        declarations: impl IntoIterator<Item = (String, Vec<(ContributedView, UiContribution)>)>,
+    ) -> Result<Vec<ViewId>, FeatureId> {
+        let declarations = declarations.into_iter().collect::<Vec<_>>();
+        let active = declarations
+            .iter()
+            .map(|(provider, _)| provider.as_str())
+            .collect::<BTreeSet<_>>();
+        let stale = self
+            .provider_views
+            .keys()
+            .filter(|provider| !active.contains(provider.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut removed = Vec::new();
+        for provider in stale {
+            removed.extend(self.remove_provider(&provider));
+        }
+        for (provider, views) in declarations {
+            let next_views = views
+                .iter()
+                .map(|(view, _)| ViewId::new(view.id.clone()))
+                .collect::<Vec<_>>();
+            if self.provider_views.get(&provider) == Some(&next_views) {
+                continue;
+            }
+            self.register_provider(&provider, views)?;
+        }
+        self.reconnect_registered_renderers();
+        Ok(removed)
+    }
+
+    /// コンテンツ種別に対応する描画器を、宣言済みの全 View へ配線する。
+    pub(crate) fn connect_renderer(
+        &mut self,
+        content_type: &str,
+        renderer: SharedLifecycle,
+    ) -> Vec<ViewId> {
+        let views = self
+            .provider_views
+            .values()
+            .flatten()
+            .filter(|view| {
+                self.declaration(view)
+                    .is_some_and(|_| self.content_type(view) == Some(content_type))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for view in &views {
+            self.lifecycles.insert(view.clone(), renderer.clone());
+        }
+        views
+    }
+
+    pub(crate) fn register_content_renderer(
+        &mut self,
+        content_type: impl Into<String>,
+        renderer: SharedLifecycle,
+    ) {
+        self.content_renderers.insert(content_type.into(), renderer);
+    }
+
+    /// 追加された提供元の View へ、既に登録済みの描画器を接続する。
+    pub(crate) fn reconnect_registered_renderers(&mut self) {
+        let renderers = self
+            .content_renderers
+            .iter()
+            .map(|(kind, renderer)| (kind.clone(), renderer.clone()))
+            .collect::<Vec<_>>();
+        for (kind, renderer) in renderers {
+            self.connect_renderer(&kind, renderer);
+        }
+    }
+
+    pub(crate) fn content_type(&self, view: &ViewId) -> Option<&str> {
+        self.content_types.get(view).map(String::as_str)
+    }
+
+    /// 署名済み宣言から `UiContribution` の公開属性を更新する。
+    pub(crate) fn set_view_presentation(
+        &mut self,
+        view: &ViewId,
+        default_zone: ZonePosition,
+        multiple_instances: bool,
+        open_command: Option<CommandId>,
+    ) {
+        self.set_view_default_zone(view, default_zone);
+        self.set_view_instance_policy(
+            view,
+            if multiple_instances {
+                ToolInstancePolicy::Multiple
+            } else {
+                ToolInstancePolicy::Shared
+            },
+        );
+        let _ = self.set_view_open_command(view.clone(), open_command);
+    }
+
+    pub(crate) fn provider_view_ids(&self) -> impl Iterator<Item = &ViewId> {
+        self.provider_views.values().flatten()
+    }
+
     pub(crate) fn can_create_view(&self, view: &ViewId, policy: ToolInstancePolicy) -> bool {
-        if self.unavailable_views.contains(view) {
+        if self.unavailable_views.contains(view)
+            || self
+                .content_types
+                .get(view)
+                .is_some_and(|content_type| !self.content_renderers.contains_key(content_type))
+        {
             return false;
         }
         match policy {
@@ -358,7 +552,12 @@ impl FeatureRegistry {
         if let Some((definition, _)) = self.instances.get(instance) {
             return definition == view;
         }
-        if self.unavailable_views.contains(view) {
+        if self.unavailable_views.contains(view)
+            || self
+                .content_types
+                .get(view)
+                .is_some_and(|content_type| !self.content_renderers.contains_key(content_type))
+        {
             return false;
         }
         let policy = self
@@ -950,5 +1149,59 @@ mod tests {
                 .and_then(|contribution| contribution.view.as_ref()),
             Some(&view)
         );
+    }
+
+    #[test]
+    fn providers_share_a_renderer_by_content_type_and_off_removes_public_views() {
+        let content_type = "example.grid.v1";
+        let renderer = Rc::new(RefCell::new(CounterLifecycle::default()));
+        let mut registry = FeatureRegistry::default();
+        registry.register_content_renderer(content_type, renderer.clone());
+        let declaration = |owner: &str, id: &str| {
+            let view = ContributedView {
+                id: id.into(),
+                content_type: content_type.into(),
+                title: "title".into(),
+                default_zone: extension_ui_contract::ContributedZone::Bottom,
+                multiple_instances: true,
+                open_command: Some(format!("{owner}.open")),
+            };
+            (
+                view.clone(),
+                UiContribution::view(view.id, UiSlot::BottomDock, view.title, "terminal", 10)
+                    .multiple_instances()
+                    .references_external_resource(),
+            )
+        };
+        registry
+            .sync_providers(vec![
+                (
+                    "example.one".into(),
+                    vec![declaration("example.one", "example.one.view")],
+                ),
+                (
+                    "example.two".into(),
+                    vec![declaration("example.two", "example.two.view")],
+                ),
+            ])
+            .unwrap();
+        let first = ViewId::new("example.one.view");
+        let second = ViewId::new("example.two.view");
+        assert_eq!(registry.content_type(&first), Some(content_type));
+        assert_eq!(registry.content_type(&second), Some(content_type));
+        assert!(registry.lifecycle(&first).is_some());
+        assert!(registry.lifecycle(&second).is_some());
+        assert_eq!(registry.provider_view_ids().count(), 2);
+
+        registry
+            .sync_providers(vec![(
+                "example.two".into(),
+                vec![declaration("example.two", "example.two.view")],
+            )])
+            .unwrap();
+        assert!(registry.declaration(&first).is_none());
+        assert!(registry.declaration(&second).is_some());
+        assert!(registry.content_type(&first).is_none());
+        assert!(registry.content_type(&second).is_some());
     }
 }

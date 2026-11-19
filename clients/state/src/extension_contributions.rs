@@ -42,13 +42,10 @@ impl ExtensionContributionSnapshot {
     ) -> impl Iterator<Item = (&str, &extension_ui_contract::ContributedView)> + '_ {
         self.contributions()
             .iter()
-            .filter_map(move |entry| {
-                self.extensions()
-                    .iter()
-                    .any(|extension| {
-                        extension.id == entry.extension_id && extension.active == Some(true)
-                    })
-                    .then_some(entry)
+            .filter(move |entry| {
+                self.extensions().iter().any(|extension| {
+                    extension.id == entry.extension_id && extension.active == Some(true)
+                })
             })
             .flat_map(|entry| {
                 entry.views.iter().flat_map(move |views| {
