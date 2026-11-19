@@ -68,8 +68,12 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     } else {
         copy_binary(root, &bin, "lapis-web-bridge")?;
         let desktop = copy_binary(root, &bin, "lapis")?;
-        let hosts = session.join("hosts");
-        fs::create_dir(&hosts)?;
+        let hosts = argument_value(&arguments, "--local-host-directory")?
+            .map(PathBuf::from)
+            .unwrap_or_else(|| session.join("hosts"));
+        if !uses_host_file(&arguments) {
+            prepare_extensions(root, &session, &hosts)?;
+        }
         // Host を別の Run で起動する場合は、招待が現れるまで待ってから接続する。
         wait_for_host_file(root, &arguments)?;
         eprintln!(
@@ -123,6 +127,45 @@ fn has_flag(arguments: &[OsString], flag: &str) -> bool {
     arguments
         .iter()
         .any(|argument| argument.as_os_str() == OsStr::new(flag))
+}
+
+fn argument_value(arguments: &[OsString], flag: &str) -> Result<Option<OsString>, String> {
+    let mut found = None;
+    let mut values = arguments.iter();
+    while let Some(argument) = values.next() {
+        if argument == flag {
+            found = Some(
+                values
+                    .next()
+                    .ok_or_else(|| format!("{flag} の値がありません"))?
+                    .clone(),
+            );
+        }
+    }
+    Ok(found)
+}
+
+fn prepare_extensions(
+    root: &Path,
+    session: &Path,
+    hosts: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let python = if cfg!(windows) { "python" } else { "python3" };
+    let status = Command::new(python)
+        .current_dir(root)
+        .args(["-m", "scripts.extensions.dev_bundle"])
+        .arg(root.join("extensions"))
+        .arg(session)
+        .arg(root.join("target/dev-bundled-components"))
+        .arg("--hosts")
+        .arg(hosts)
+        .arg("--key-file")
+        .arg(root.join("target/dev-state/extension-signing-key"))
+        .status()?;
+    if !status.success() {
+        return Err("開発用拡張の準備に失敗しました".into());
+    }
+    Ok(())
 }
 
 /// ランチャー自身のフラグを取り除いた引数を返す。
@@ -220,8 +263,12 @@ fn hot_reload(root: &Path, arguments: &[OsString]) -> Result<i32, Box<dyn std::e
                 .join(&bridge_name),
             bin.join(&bridge_name),
         )?;
-        let hosts = session.join("hosts");
-        fs::create_dir(&hosts)?;
+        let hosts = argument_value(arguments, "--local-host-directory")?
+            .map(PathBuf::from)
+            .unwrap_or_else(|| session.join("hosts"));
+        if !uses_host_file(arguments) {
+            prepare_extensions(root, &session, &hosts)?;
+        }
         // Desktop と同じく、Host を別の Run で起動していれば招待を待ってから接続する。
         wait_for_host_file(root, arguments)?;
         // dx は --args= を空白で分割するため、worktree ルートからの相対パスを使う。
@@ -388,6 +435,23 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn last_host_directory_is_used_for_extension_trust() {
+        let arguments = vec![
+            OsString::from("--local-host-directory"),
+            OsString::from("first"),
+            OsString::from("--local-host-directory"),
+            OsString::from("second"),
+        ];
+        assert_eq!(
+            argument_value(&arguments, "--local-host-directory").unwrap(),
+            Some("second".into())
+        );
+        assert!(
+            argument_value(&["--local-host-directory".into()], "--local-host-directory").is_err()
+        );
+    }
 
     #[test]
     fn launcher_flags_are_not_forwarded_to_the_app() {

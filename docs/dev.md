@@ -51,6 +51,8 @@ $env:LAPIS_HOST_FILE = "target/dev-desktop/desktop.json"; cargo dev
 
 `cargo dev` も `Run Desktop` も Desktop と Host の両方をビルドします。2段階ビルドはありません。`Run Host` だけは Desktop を起動しないため Host だけをビルドし、Desktop のビルドが壊れていても Web 用 Host は起動できます。`Run Desktop (Hot Reload)` は Host を Cargo で、Desktop を修正版 `dx` でビルドします。
 
+`cargo dev` と Hot Reload は、ローカル Host 用の同梱拡張をビルドし、開発専用鍵で署名します。公開鍵は指定した Host の信頼済み鍵一覧に追加し、既存の鍵は保持します。既に稼働中の Host はそのまま再利用するため、同梱拡張の変更は Host の再起動後に読み込まれます。同じ版の拡張は自動更新されないため、拡張の内容を変更した場合は版を上げるか明示的に再導入してください。Terminal が要求するプロセス権限は拡張の設定から許可します。
+
 Run は Windows の Job Object で、その Run が起動した process をまとめて管理します。Stop は Run が起動した process だけを終了し、他の Run や既存の Host には影響しません。`cargo dev` や製品の通常起動では Desktop を閉じても Local Host は残るため、残した場合はログの `Desktop session:` の名前を使って `powershell -NoProfile -File scripts/stop_dev_host.ps1 -Session <session名>` で停止します。
 
 Hot Reload は次を守ります。

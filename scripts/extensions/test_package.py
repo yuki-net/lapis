@@ -262,6 +262,25 @@ class PackageTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             prepare(extensions, first, self.root / "target")
 
+    def test_development_bundle_reuses_persistent_key_without_losing_other_keys(self):
+        extensions = self.root / "extensions"
+        source = extensions / "example"
+        source.mkdir(parents=True)
+        (source / "extension.json").write_text(json.dumps(self.metadata), encoding="utf-8")
+        (source / "extension.wasm").write_bytes(b"component")
+        hosts, key = self.root / "hosts", self.root / "private/dev-key"
+        registry = hosts / "extensions/trusted-keys.json"
+        registry.parent.mkdir(parents=True)
+        existing = base64.b64encode(ed25519.public_key(bytes(range(32)))).decode("ascii")
+        registry.write_text(json.dumps({"schema": 1, "keys": {"existing": existing}}), encoding="utf-8")
+        prepare(extensions, self.root / "first", self.root / "target", hosts=hosts, key_file=key)
+        first = json.loads(registry.read_text(encoding="utf-8"))
+        prepare(extensions, self.root / "second", self.root / "target", hosts=hosts, key_file=key)
+        second = json.loads(registry.read_text(encoding="utf-8"))
+        self.assertEqual(first, second)
+        self.assertEqual(first["keys"]["existing"], existing)
+        self.assertEqual(len(first["keys"]), 2)
+
 
 if __name__ == "__main__":
     unittest.main()
