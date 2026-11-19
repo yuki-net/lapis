@@ -179,7 +179,7 @@ impl Shell {
             .filter(|position| *position != ZonePosition::Main)
             .unwrap_or(default_zone);
         let tab = match policy {
-            extension_ui_contract::ToolInstancePolicy::Shared => PanelTab::tool(view.clone()),
+            extension_ui_contract::ToolInstancePolicy::Shared => self.shared_tab_for_view(&view),
             extension_ui_contract::ToolInstancePolicy::Multiple => {
                 let Ok(instance) = self.shell.next_tool_instance(&view) else {
                     return;
@@ -188,12 +188,24 @@ impl Shell {
             }
         };
         if let Ok(panel) = self.shell.layout.open_tab(position, tab) {
+            let actual_zone = self.shell.layout.zone_for_panel(&panel).unwrap_or(position);
             self.shell.layout.set_panel_open(&panel, true);
-            self.shell.layout.set_zone_open(position, true);
+            self.shell.layout.set_zone_open(actual_zone, true);
             self.shell.focused_panel = Some(panel);
         }
         self.refresh_feature_activation(cx);
         cx.notify();
+    }
+
+    /// 単一 View は復元済みの個体を再利用し、Resource を置き換えない。
+    pub(super) fn shared_tab_for_view(&self, view: &ViewId) -> PanelTab {
+        self.shell
+            .layout
+            .placements()
+            .into_iter()
+            .map(|(tab, _)| tab)
+            .find(|tab| tab.view_id() == Some(view))
+            .unwrap_or_else(|| PanelTab::tool(view.clone()))
     }
 
     /// 宣言に従ってタブを作る。外部 Resource を参照する宣言なら Resource を渡す。
@@ -286,6 +298,7 @@ mod tests {
                 ViewId::new(id::VIEW_TERMINAL),
                 Some("lapis.terminal.open".into()),
                 ZonePosition::Right,
+                true,
                 cx,
             );
             shell
@@ -333,6 +346,89 @@ mod tests {
                         .count(),
                     2
                 );
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn declared_instance_policy_reuses_existing_tabs_without_closing_them(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx)
+        });
+        let lifecycle = Rc::new(RefCell::new(RecordingLifecycle::default()));
+        let window = cx.add_window(|_, cx| {
+            let document = cx.new(|_| Empty);
+            let mut shell = Shell::new(document.into(), HashMap::new(), cx);
+            shell.configure_view_lifecycles(lifecycle.clone(), ViewId::new(id::VIEW_TERMINAL), cx);
+            shell.set_extension_view_command(
+                ViewId::new(id::VIEW_TERMINAL),
+                Some("example.open".into()),
+                ZonePosition::Bottom,
+                false,
+                cx,
+            );
+            shell
+        });
+        window
+            .update(cx, |shell, window, cx| {
+                shell.execute_command("example.open".into(), window, cx);
+                shell.execute_command("example.open".into(), window, cx);
+                let count = |shell: &Shell| {
+                    shell
+                        .shell
+                        .layout
+                        .placements()
+                        .iter()
+                        .filter(|(tab, _)| {
+                            tab.view_id()
+                                .is_some_and(|v| v.as_str() == id::VIEW_TERMINAL)
+                        })
+                        .count()
+                };
+                assert_eq!(count(shell), 1);
+                shell.set_extension_view_command(
+                    ViewId::new(id::VIEW_TERMINAL),
+                    Some("example.open".into()),
+                    ZonePosition::Bottom,
+                    true,
+                    cx,
+                );
+                shell.execute_command("example.open".into(), window, cx);
+                assert_eq!(count(shell), 2);
+                let instance = shell
+                    .shell
+                    .layout
+                    .placements()
+                    .into_iter()
+                    .find(|(tab, _)| {
+                        tab.view_id()
+                            .is_some_and(|v| v.as_str() == id::VIEW_TERMINAL)
+                    })
+                    .unwrap()
+                    .0
+                    .instance_id();
+                shell.rebind_tab_resource(&instance, Some("preserved-resource".into()));
+                shell.set_extension_view_command(
+                    ViewId::new(id::VIEW_TERMINAL),
+                    Some("example.open".into()),
+                    ZonePosition::Bottom,
+                    false,
+                    cx,
+                );
+                shell.execute_command("example.open".into(), window, cx);
+                assert_eq!(count(shell), 2);
+                assert!(
+                    shell
+                        .shell
+                        .layout
+                        .placements()
+                        .iter()
+                        .any(|(tab, _)| tab.instance_id() == instance
+                            && tab.resource() == Some("preserved-resource"))
+                );
+                assert!(lifecycle.borrow().closed.is_empty());
             })
             .unwrap();
     }

@@ -464,7 +464,7 @@ impl Shell {
         // 宣言に従ってタブを作る。個体化する View は新しい個体、外部 Resource を
         // 参照する View は Resource 未確定の新しいタブになる。
         let tab = match instance_policy {
-            extension_ui_contract::ToolInstancePolicy::Shared => PanelTab::tool(view.clone()),
+            extension_ui_contract::ToolInstancePolicy::Shared => self.shared_tab_for_view(&view),
             extension_ui_contract::ToolInstancePolicy::Multiple => {
                 let Ok(instance) = self.shell.next_tool_instance(&view) else {
                     return;

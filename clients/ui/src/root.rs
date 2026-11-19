@@ -765,6 +765,7 @@ impl DesktopRoot {
                                                     ViewId::new(id::VIEW_TERMINAL),
                                                     view.open_command.clone().map(Into::into),
                                                     contributed_zone(view.default_zone),
+                                                    view.multiple_instances,
                                                     cx,
                                                 );
                                                 shell.set_extension_view_title(

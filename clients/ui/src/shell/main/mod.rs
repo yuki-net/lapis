@@ -517,10 +517,19 @@ impl Shell {
         view: ViewId,
         command: Option<extension_ui_contract::CommandId>,
         default_zone: ZonePosition,
+        multiple_instances: bool,
         cx: &mut Context<Self>,
     ) {
         self.feature_registry
             .set_view_default_zone(&view, default_zone);
+        self.feature_registry.set_view_instance_policy(
+            &view,
+            if multiple_instances {
+                extension_ui_contract::ToolInstancePolicy::Multiple
+            } else {
+                extension_ui_contract::ToolInstancePolicy::Shared
+            },
+        );
         if !self.feature_registry.set_view_open_command(view, command) {
             tracing::warn!("拡張の View コマンドが重複しています");
         }

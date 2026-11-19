@@ -142,6 +142,17 @@ impl FeatureRegistry {
         }
     }
 
+    pub(crate) fn set_view_instance_policy(&mut self, view: &ViewId, policy: ToolInstancePolicy) {
+        if let Some(contribution) = self
+            .descriptors
+            .values_mut()
+            .flat_map(|feature| &mut feature.contributions)
+            .find(|contribution| contribution.view.as_ref() == Some(view))
+        {
+            contribution.instance_policy = policy;
+        }
+    }
+
     /// View を開く公開コマンドを、その描画器が登録された View に結び付ける。
     pub(crate) fn set_view_open_command(
         &mut self,
@@ -208,7 +219,9 @@ impl FeatureRegistry {
             return false;
         }
         match policy {
-            ToolInstancePolicy::Shared => self.shared_views.contains_key(view),
+            ToolInstancePolicy::Shared => {
+                self.shared_views.contains_key(view) || self.lifecycles.contains_key(view)
+            }
             ToolInstancePolicy::Multiple => self.lifecycles.contains_key(view),
         }
     }
@@ -282,7 +295,13 @@ impl FeatureRegistry {
                 .lifecycles
                 .get(view)
                 .and_then(|lifecycle| lifecycle.borrow_mut().create(instance, cx)),
-            Some(ToolInstancePolicy::Shared) => self.shared_views.get(view).cloned(),
+            Some(ToolInstancePolicy::Shared) => {
+                self.shared_views.get(view).cloned().or_else(|| {
+                    self.lifecycles
+                        .get(view)
+                        .and_then(|lifecycle| lifecycle.borrow_mut().create(instance, cx))
+                })
+            }
             None => None,
         };
         let Some(entity) = entity else {
