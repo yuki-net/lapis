@@ -174,7 +174,8 @@ fn main() {
                         except (OSError, ValueError):
                             pass
                     if process.poll() is not None:
-                        self.fail(f"launcher exited: {process.returncode}")
+                        stderr = process.stderr.read().decode(errors="replace")
+                        self.fail(f"launcher exited: {process.returncode}: {stderr}")
                     time.sleep(0.05)
                 self.fail("session host did not start")
 
@@ -422,6 +423,11 @@ fn main() {
         result = self.run_launcher()
         self.assertEqual(result.returncode, 17, result.stderr.decode(errors="replace"))
         self.assertIn("--workspace", self.app_arguments())
+
+    def test_isolated_worktree_without_extensions_skips_extension_preparation(self):
+        self.assertFalse((self.root / "extensions").exists())
+        result = self.run_launcher()
+        self.assertEqual(result.returncode, 17, result.stderr.decode(errors="replace"))
 
     def test_hot_reload_with_host_leaves_the_workspace_to_the_host(self):
         invitation = self.root / "target/dev-desktop/desktop.json"

@@ -151,11 +151,26 @@ fn prepare_extensions(
     session: &Path,
     hosts: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let extension_root = root.join("extensions");
+    if !extension_root.is_dir() {
+        // テスト用の隔離 worktree には拡張ソースが無い。Client が空の保存先を
+        // 参照できるようディレクトリだけを用意する。
+        fs::create_dir_all(hosts)?;
+        return Ok(());
+    }
+    let dev_bundle = root.join("scripts/extensions/dev_bundle.py");
+    if !dev_bundle.is_file() {
+        return Err(format!(
+            "development extension helper is missing: {}",
+            dev_bundle.display()
+        )
+        .into());
+    }
     let python = if cfg!(windows) { "python" } else { "python3" };
     let status = Command::new(python)
         .current_dir(root)
         .args(["-m", "scripts.extensions.dev_bundle"])
-        .arg(root.join("extensions"))
+        .arg(&extension_root)
         .arg(session)
         .arg(root.join("target/dev-bundled-components"))
         .arg("--hosts")

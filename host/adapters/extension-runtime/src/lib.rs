@@ -528,7 +528,7 @@ impl ExtensionRuntime {
         let Request::ActivateNative { id, image } = request else {
             return self.handle(request);
         };
-        let result = if image.len() > MAX_COMPONENT_BYTES.div_ceil(3) * 4 {
+        let result: Result<(), String> = if image.len() > MAX_COMPONENT_BYTES.div_ceil(3) * 4 {
             Err("native image limit exceeded".to_owned())
         } else {
             let bytes = STANDARD
