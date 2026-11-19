@@ -606,9 +606,13 @@ mod tests {
         }
         let (sender, receiver) = mpsc::channel();
         let size = terminal::TerminalSize::new(80, 24);
-        let mut native = terminal_renderer::TerminalEngine::new(size, Box::new(Capture(sender)));
-        let portable =
-            terminal_portable_renderer::Renderer::with_conpty(size, cfg!(windows)).unwrap();
+        let conpty = cfg!(windows);
+        let mut native = terminal_renderer::TerminalEngine::with_conpty_quirks(
+            size,
+            Box::new(Capture(sender)),
+            conpty,
+        );
+        let portable = terminal_portable_renderer::Renderer::with_conpty(size, conpty).unwrap();
         let key = |key, modifiers| TerminalInput::Key(TerminalKeyEvent { key, modifiers });
         let control = TerminalModifiers {
             control: true,

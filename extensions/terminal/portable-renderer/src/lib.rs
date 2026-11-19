@@ -85,7 +85,9 @@ impl Renderer {
                     Ok(if self.conpty {
                         normalized.replace('\n', "\r\n")
                     } else {
-                        normalized
+                        // wezterm の native 実装は POSIX でも nano との互換性のため
+                        // 貼り付け改行を CR にする。
+                        normalized.replace('\n', "\r")
                     }
                     .into_bytes())
                 }
@@ -361,7 +363,7 @@ mod tests {
         let input = TerminalInput::Paste("a\nb\rc\r\nd".into());
         let posix = Renderer::with_conpty(TerminalSize::new(80, 24), false).unwrap();
         let windows = Renderer::with_conpty(TerminalSize::new(80, 24), true).unwrap();
-        assert_eq!(posix.input(&input).unwrap(), b"a\nb\nc\nd");
+        assert_eq!(posix.input(&input).unwrap(), b"a\rb\rc\rd");
         assert_eq!(windows.input(&input).unwrap(), b"a\r\nb\r\nc\r\nd");
     }
 
