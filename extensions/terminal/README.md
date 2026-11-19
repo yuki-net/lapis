@@ -1,15 +1,15 @@
 # Terminal 拡張
 
-Terminal の契約・Host 側状態・PTY 実装を配置する領域です。Client UI や Host の配線には Terminal 固有のコードが残っており、拡張 API を使った独立実行への移行は未完了です。
+Terminal のセッション操作、公開 DTO、Client の画面モデルを配置する領域です。Host の共通プロトコルは Terminal の型に依存せず、汎用拡張操作とプロセス能力を提供します。Client の表示器への配線には Terminal 固有のコードが残っています。
 
 ## 構成
 
-- `component/`: 公開 WIT を通して Host の能力を使う実行アダプター。Desktop・Web に試験用の接続があり、通常経路への移行は未完了。
+- `component/`: 公開 WIT を通して Host の能力を使う Wasm 実行アダプターと、表示・設定・翻訳の宣言。
 - `logic/`: セッション操作の判断。Host 能力を port として受け取り、Wasm や Host の内部実装を参照しない。
-- `native/`: 公開 native ABI v1 を使って同じロジックを接続する。Windows x86_64 の配布入力では、このライブラリと共通の設定・表示宣言を package に含める。通常の Client 経路への切り替えは未完了。
+- `native/`: 公開 native ABI v1 を使って同じロジックを接続する。Windows x86_64 の配布入力には、このライブラリと共通の設定・表示宣言を含める。
 - `api/`: component とクライアントが共有するセッション操作の v1 DTO。操作名も `terminal.v1.*` で版を持つ。Host 内部型には依存しない。
 - `contract/`（crate `terminal-contract`、参照名 `terminal`）: Terminal の型・wire DTO・`TerminalBackend` port の正本。
-- `adapter/`（crate `local-terminal`）: OS の PTY を使う `TerminalBackend` 実装。
+- `adapter/`（crate `local-terminal`）: 旧 `TerminalBackend` の PTY 実装。現行 Host は参照せず、一部の非 Windows テストで使う。
 - `renderer/`（crate `terminal-renderer`）: VT/ANSI の画面状態と入力変換。PTY の所有と分けたネイティブ描画器で、現在の実装は Wasm に未対応。
 - `portable-renderer/`（crate `terminal-portable-renderer`）: Web と Wasm でもビルドできる画面モデル。ターミナル画面を Wasm で描画するものではない。
 
@@ -22,7 +22,7 @@ workspace 設定なしでビルドできることを検証する。
 
 役割ディレクトリで分けます。機能ごとの `src/` を平坦に並べると、契約と OS 依存実装と Host 状態のどれが正本か読み取れなくなるためです。
 
-- `contract/` は `contracts/` と同じ「models」層として依存検査します。Client と Host の両方から参照するためです。
+- `contract/` は `contracts/` と同じ「models」層として依存検査します。現在は Client 側の描画・入力モデルと旧 adapter が参照します。
 - `logic/` もセッション状態と操作判断を持つため「runtime」層として扱います。Host の能力は port 経由で利用します。
 - `native/` は ABI とロジックを接続する「infrastructure」層として扱います。
 - `adapter/` は `host/adapters/*` と同じ「infrastructure」層として扱います。OS API と外部プロセスに触れるためです。
@@ -33,28 +33,29 @@ workspace 設定なしでビルドできることを検証する。
 
 ## 配線
 
+Desktop と Web は拡張の `terminal.v1.*` 操作を汎用の `host.extensions.dispatch` 経由で呼びます。Host は必要な PTY とプロセス情報を公開能力として仲介します。Terminal の ON／OFF は Host の次回起動で反映します。
 
-
-workspace は `Cargo.toml` の `extensions/*/*` glob で `contract` / `adapter` / `renderer` を拾います。
+開発起動では `scripts/extensions/dev_bundle.py` が `extensions/` の宣言を発見して同梱 package を作ります。Windows x86_64 では native アダプターを使用します。
 
 ## 挙動
 
 - タブを開くとセッションを開始し、タブを閉じると終了します。
 - Workspace の切断は detach で、PTY は残ります。
 - タブごとに個別のセッションを持ちます。
-- 試験用の拡張経路では `terminal.v1.profiles` で選択肢を取得し、
+- `terminal.v1.profiles` で選択肢を取得し、
   `terminal.v1.start-profile` に profile ID を渡す。起動 command は拡張側で決定し、
   未知の ID を拒否する。Desktop・Web は接続ごとに同じ操作を使用する。
-- 試験経路のフォント、行送り、カーソル、既定 profile は拡張の設定宣言から設定する。
+- フォント、行送り、カーソル、既定 profile は拡張の設定宣言から設定する。
   拡張側が未設定の場合は既存の Terminal 設定値を参照し、値がなければ描画器の既定値を使う。
-  旧経路の設定とコードは通常経路の移行が完了するまで残る。
+  旧設定との互換値は Client に残っている。
 
 ## Client 側の載せ方
 
 Terminal の Client UI は、共通 Layout の宣言と内部レジストリを通して載ります。
 
-- 宣言（`clients/ui/src/features/terminal/mod.rs` の `descriptor()`）が、BottomDock への View、`multiple_instances`、`references_external_resource` を供給します。タブ単位の Session はこの宣言で個体化されます。
-- `clients/ui/src/features/terminal/lifecycle.rs` が `ViewLifecycle` を実装し、`FeatureRegistry` に登録します。現在は内蔵の `descriptor()` と拡張の表示宣言が別にあり、試験経路の `root.rs` に Terminal 固有の分岐が残っています。拡張の宣言からのタブ登録は未完了です。
+- 拡張は `views.json` で表示名、配置、複数個体、オープン用コマンドを宣言します。
+- 現在の Client は宣言の表示名と初期配置を使用しますが、View ID、複数個体、コマンドは `clients/ui/src/features/terminal/mod.rs` の内蔵 descriptor と `root.rs` に固定されています。宣言のみからの登録は未完了です。
+- `clients/ui/src/features/terminal/lifecycle.rs` が `ViewLifecycle` を実装し、タブごとの Session を管理します。表示器は Desktop と Web の Client 内で動きます。
 - 設定への候補供給（フォント・既定 profile）は `SettingsSourceProvider` として登録します。設定画面は Terminal Feature の型を読まず、登録された供給元をキーで引きます。
 
 ## 検証

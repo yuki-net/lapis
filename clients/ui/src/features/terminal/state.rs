@@ -1,5 +1,9 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use desktop_client::{RestoredTerminal, TerminalSession};
 use editor_core::ConversationId;
@@ -13,6 +17,7 @@ pub(crate) struct TerminalSessions {
     inactive_sessions: HashMap<(Option<PathBuf>, ConversationId), TerminalSession>,
     /// 画面の投影順を決める単調増加の版。worker 上で観測した順序を表す。
     version: u64,
+    live_sessions: Arc<AtomicBool>,
 }
 
 impl TerminalSessions {
@@ -21,11 +26,20 @@ impl TerminalSessions {
         root: Option<PathBuf>,
         conversation: ConversationId,
     ) -> Self {
+        let live_sessions = Arc::new(AtomicBool::new(session.terminals().iter().any(
+            |terminal| {
+                matches!(
+                    terminal.status,
+                    terminal::TerminalStatus::Running | terminal::TerminalStatus::Disconnected
+                )
+            },
+        )));
         Self {
             session,
             active_context: (root, conversation),
             inactive_sessions: HashMap::new(),
             version: 0,
+            live_sessions,
         }
     }
 
@@ -40,6 +54,16 @@ impl TerminalSessions {
     }
 
     fn bump(&mut self) {
+        let live = std::iter::once(&self.session)
+            .chain(self.inactive_sessions.values())
+            .flat_map(TerminalSession::terminals)
+            .any(|terminal| {
+                matches!(
+                    terminal.status,
+                    terminal::TerminalStatus::Running | terminal::TerminalStatus::Disconnected
+                )
+            });
+        self.live_sessions.store(live, Ordering::Release);
         self.version = self.version.wrapping_add(1);
     }
 
@@ -199,6 +223,7 @@ impl TerminalRequests {
 
 pub(crate) struct TerminalFeature {
     worker: crate::client_adapter::ClientWorker<TerminalSessions>,
+    live_sessions: Arc<AtomicBool>,
     extension_settings: Option<desktop_client::ExtensionContributionSession>,
     pub(super) terminals: Vec<terminal::TerminalSnapshot>,
     /// 各 Terminal の操作権。表示に使う。
@@ -240,8 +265,6 @@ pub(crate) struct TerminalFeature {
     auto_start: AutoStart,
     /// タブ表示後に自動起動を要求されたか。
     pending_auto_start: bool,
-    /// 非表示コンテキストに実行中の Session が残る可能性。
-    inactive_may_be_running: bool,
     /// ターミナルタブが画面に出ているか。表示の切り替えだけでは終了しない。
     tab_visible: bool,
     /// Host の profile 一覧を読み終えたか。読み終えるまで既定 profile は決めない。
@@ -516,8 +539,10 @@ impl TerminalFeature {
             .and_then(terminal_profile)
             .map(terminal::TerminalProfileId::new);
         let sessions = TerminalSessions::new(session, root.clone(), conversation.clone());
+        let live_sessions = Arc::clone(&sessions.live_sessions);
         let mut feature = Self {
             worker: crate::client_adapter::ClientWorker::new(sessions),
+            live_sessions,
             extension_settings,
             terminals,
             owners: HashMap::new(),
@@ -546,7 +571,6 @@ impl TerminalFeature {
             default_profile,
             auto_start: AutoStart::Idle,
             pending_auto_start: false,
-            inactive_may_be_running: false,
             tab_visible: false,
             profiles_loaded: false,
             profiles_retry: false,
@@ -648,7 +672,6 @@ impl TerminalFeature {
         {
             return;
         }
-        self.inactive_may_be_running |= self.requires_close_confirmation();
         let next = conversation.clone();
         let next_root = root.clone();
         self.requests.invalidate();
@@ -783,7 +806,6 @@ impl TerminalFeature {
         // 閉じた直後に開き直しても、次の表示で自動起動できるようにする。
         self.auto_start = AutoStart::Idle;
         self.pending_auto_start = false;
-        self.inactive_may_be_running = false;
         self.tab_visible = false;
         self.requests.invalidate();
         if self.root.is_none() {
@@ -834,7 +856,7 @@ impl TerminalFeature {
     }
 
     pub(crate) fn requires_close_confirmation(&self) -> bool {
-        self.inactive_may_be_running
+        self.live_sessions.load(Ordering::Acquire)
             || self.requests.pending_actions > 0
             || self.requests.context_unavailable
             || (self.pending_auto_start && self.root.is_some())
@@ -2646,6 +2668,7 @@ mod tests {
             .start(Path::new("workspace"), 80, 24)
             .unwrap();
         feature.switch_context(Some("workspace".into()), ConversationId::new("second"), &[]);
+        assert!(feature.live_sessions.load(Ordering::Acquire));
         backend.events.lock().unwrap().insert(
             terminal.as_str().to_owned(),
             vec![
@@ -2654,6 +2677,7 @@ mod tests {
             ],
         );
         assert!(feature.refresh().unwrap());
+        assert!(!feature.live_sessions.load(Ordering::Acquire));
         feature.switch_context(Some("workspace".into()), ConversationId::new("first"), &[]);
         assert!(
             feature.session.terminals()[0].screen.rows[0]
