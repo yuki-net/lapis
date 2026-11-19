@@ -189,7 +189,15 @@ jobs:
         run: python scripts/check.py host format
 
       - name: Test Host
-        run: python scripts/check.py host test
+        shell: pwsh
+        timeout-minutes: 20
+        run: |
+          $process = Start-Process python -ArgumentList @('scripts/check.py', 'host', 'test') -NoNewWindow -PassThru
+          if (-not $process.WaitForExit(1200000)) {
+            & taskkill /F /T /PID $process.Id 2>$null
+            throw 'Host tests exceeded 20 minutes'
+          }
+          exit $process.ExitCode
 
       - name: Test approved extension PTY
         shell: pwsh
@@ -291,13 +299,18 @@ jobs:
 
       - name: Test Desktop
         shell: pwsh
+        timeout-minutes: 20
         run: |
           cargo build --locked -p extension-runtime --bin lapis-extension-host
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --locked -p lapis-terminal-native
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/check.py desktop test
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $process = Start-Process python -ArgumentList @('scripts/check.py', 'desktop', 'test') -NoNewWindow -PassThru
+          if (-not $process.WaitForExit(1200000)) {
+            & taskkill /F /T /PID $process.Id 2>$null
+            throw 'Desktop tests exceeded 20 minutes'
+          }
+          if ($process.ExitCode -ne 0) { exit $process.ExitCode }
 
       - name: Lint Desktop
         run: python scripts/check.py desktop lint
