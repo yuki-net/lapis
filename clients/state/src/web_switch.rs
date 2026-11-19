@@ -226,12 +226,7 @@ mod tests {
 
     fn cached(workspace: &str) -> CachedWorkspace {
         CachedWorkspace {
-            replica: Replica::new(
-                WorkspaceId::new(workspace),
-                Vec::new(),
-                None,
-                Default::default(),
-            ),
+            replica: Replica::new(WorkspaceId::new(workspace), Vec::new(), None),
         }
     }
 

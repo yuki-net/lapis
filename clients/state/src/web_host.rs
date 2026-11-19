@@ -90,7 +90,6 @@ struct BackendState {
     workspaces: Vec<WorkspaceSummary>,
     replica: Rc<RefCell<Replica>>,
     commands: mpsc::UnboundedSender<Command>,
-    /// Editor 向けの文書変更通知。Terminal 向けの `changes` とは分ける。
     document_changes: Rc<RefCell<Vec<mpsc::UnboundedSender<()>>>>,
     /// 共有 view state の変更通知。tabs の適用は他の通知と独立させる。
     session_view_changes: Rc<RefCell<Vec<mpsc::UnboundedSender<()>>>>,
@@ -243,7 +242,6 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
         connection
             .session_id()
             .map(|session| SessionId::new(session.as_str())),
-        terminal::TerminalProfiles::default(),
     )));
     if let Ok(ResponseBody::WorkbenchGet(snapshot)) = request(
         &connection,
@@ -450,18 +448,12 @@ async fn switch_workspace_inner(
         .with(|backend| backend.borrow().as_ref().map(|state| state.replica.clone()))
         .ok_or("Hostに接続していません")?;
     // 表示中の Root を組み直せなかった場合に戻せるよう、切替前の複製を残す。
-    let (next, next_terminal, session) = {
+    let (next, session) = {
         let replica = replica.borrow();
-        (replica.next, replica.next_terminal, replica.session.clone())
+        (replica.next, replica.session.clone())
     };
-    let mut next_replica = Replica::new(
-        workspace.clone(),
-        entries,
-        session,
-        terminal::TerminalProfiles::default(),
-    );
+    let mut next_replica = Replica::new(workspace.clone(), entries, session);
     next_replica.next = next;
-    next_replica.next_terminal = next_terminal;
     next_replica.workbench = workbench::WorkbenchReplica::default();
     if let Some(state) = workbench {
         let _ = next_replica.workbench.open(state);
