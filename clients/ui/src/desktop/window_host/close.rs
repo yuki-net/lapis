@@ -72,6 +72,19 @@ impl DesktopRoot {
         } else {
             vec![host]
         };
+        let confirm_tools = windows
+            .iter()
+            .filter_map(|id| group.members.get(id))
+            .map(|member| member.shell.read(cx))
+            .find(|shell| shell.running_work_requires_confirmation(cx))
+            .map(|shell| {
+                [
+                    shell.t("window.close-resource.title"),
+                    shell.t("window.close-resource.message"),
+                    shell.t("tab.close-resource.confirm"),
+                    shell.t("tab.close-resource.cancel"),
+                ]
+            });
         Ok(CloseRequest {
             group: self.group.clone(),
             worker: self.worker.clone(),
@@ -86,7 +99,7 @@ impl DesktopRoot {
             host,
             documents,
             close_tools: Vec::new(),
-            confirm_tools: None,
+            confirm_tools,
             placements: group
                 .layout
                 .tabs

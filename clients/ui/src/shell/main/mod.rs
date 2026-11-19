@@ -332,6 +332,14 @@ impl Shell {
             })
             .unwrap_or(false)
     }
+
+    pub(crate) fn running_work_requires_confirmation(&self, cx: &gpui::App) -> bool {
+        self.shell
+            .layout
+            .placements()
+            .iter()
+            .any(|(tab, _)| self.tool_close_requires_confirmation(tab, cx))
+    }
     fn refresh_feature_activation(&mut self, cx: &mut Context<Self>) {
         self.synchronize_view_instances(cx);
         self.shell

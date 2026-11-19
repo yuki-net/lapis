@@ -434,6 +434,46 @@ mod tests {
     }
 
     #[gpui::test]
+    fn window_close_detects_running_work_even_when_tab_is_pinned(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx);
+            let lifecycle = Rc::new(RefCell::new(RecordingLifecycle {
+                requires_confirmation: true,
+                ..Default::default()
+            }));
+            let document = cx.new(|_| Empty);
+            let shell = cx.new(|cx| {
+                let mut shell = Shell::new(document.into(), HashMap::new(), cx);
+                shell.configure_view_lifecycles(
+                    lifecycle.clone(),
+                    ViewId::new(id::VIEW_TERMINAL),
+                    cx,
+                );
+                shell
+            });
+            shell.update(cx, |shell, cx| {
+                assert!(!shell.running_work_requires_confirmation(cx));
+                shell.open_view_in_zone(ZonePosition::Bottom, ViewId::new(id::VIEW_TERMINAL), cx);
+                let tab = shell
+                    .shell
+                    .layout
+                    .placements()
+                    .into_iter()
+                    .find(|(tab, _)| {
+                        tab.view_id()
+                            .is_some_and(|v| v.as_str() == id::VIEW_TERMINAL)
+                    })
+                    .unwrap()
+                    .0;
+                shell.shell.layout.set_tab_pinned(&tab, true);
+                assert!(shell.running_work_requires_confirmation(cx));
+                lifecycle.borrow_mut().requires_confirmation = false;
+                assert!(!shell.running_work_requires_confirmation(cx));
+            });
+        });
+    }
+
+    #[gpui::test]
     fn closing_running_resource_can_be_cancelled(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx)
