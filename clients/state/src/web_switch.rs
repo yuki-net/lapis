@@ -3,7 +3,7 @@
 //! wasm とホスト側のテストの両方から使う。WebSocket の送信自体はここでは行わない。
 #![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use client_api::{
     RequestBody, ResponseBody, WorkspaceCloseRequest, WorkspaceConnectRequest,
@@ -11,7 +11,6 @@ use client_api::{
 };
 use editor_core::DocumentId;
 use futures_channel::oneshot;
-use terminal::{TerminalId, TerminalInput};
 use workbench::ConversationViewState;
 
 /// 送信待ちのCommand。
@@ -42,33 +41,6 @@ pub(crate) enum Command {
     Close {
         local: DocumentId,
     },
-    StartTerminal {
-        local: TerminalId,
-        cwd: Option<PathBuf>,
-        columns: u16,
-        rows: u16,
-        profile: Option<terminal::TerminalProfileId>,
-    },
-    TerminalInput {
-        local: TerminalId,
-        input: TerminalInput,
-    },
-    TerminalResize {
-        local: TerminalId,
-        columns: u16,
-        rows: u16,
-    },
-    TerminalTerminate {
-        local: TerminalId,
-    },
-    TerminalClaim {
-        local: TerminalId,
-    },
-    TerminalRelease {
-        local: TerminalId,
-    },
-    /// Terminal の取りこぼしを Host の snapshot から復旧する。
-    ResyncTerminals,
     SaveWorkbench {
         view: ConversationViewState,
     },
@@ -99,12 +71,6 @@ impl Command {
                 | Self::Reload { .. }
                 | Self::Discard { .. }
                 | Self::Close { .. }
-                | Self::StartTerminal { .. }
-                | Self::TerminalInput { .. }
-                | Self::TerminalResize { .. }
-                | Self::TerminalTerminate { .. }
-                | Self::TerminalClaim { .. }
-                | Self::TerminalRelease { .. }
                 | Self::SaveWorkbench { .. }
                 | Self::RetryWorkbenchLocal
                 | Self::PublishView { .. }
@@ -297,12 +263,6 @@ mod tests {
     #[test]
     fn open_is_still_a_read() {
         assert!(!Command::Open { local: document() }.is_mutation());
-    }
-
-    #[test]
-    fn terminal_resync_is_a_read() {
-        // 切替中でも Host の snapshot 取得は止めない。
-        assert!(!Command::ResyncTerminals.is_mutation());
     }
 
     #[test]

@@ -34,9 +34,6 @@ use lsp::{
 };
 use settings::{SettingsDocument, SettingsError, SettingsRepository, SettingsScope};
 use task::{TaskConnection, TaskControl, TaskError, TaskSnapshot, TaskStart};
-use terminal::{
-    TerminalBackend, TerminalError, TerminalEvent, TerminalId, TerminalInput, TerminalSnapshot,
-};
 use workbench::ConversationViewState;
 use workspace::{
     FileEntry, SearchError, SearchHit, WorkspaceError, WorkspaceIdentity, WorkspaceRepository,
@@ -52,9 +49,7 @@ pub use extension_terminal::{ExtensionTerminal, ExtensionTerminalUpdate};
 pub use crate::web_replica::ROOT;
 
 use crate::web_cache::{CachedWorkspace, WorkspaceCache};
-use crate::web_replica::{
-    DocumentState, Replica, TerminalState, cache_of, local_id, versioned_workbench,
-};
+use crate::web_replica::{DocumentState, Replica, cache_of, local_id, versioned_workbench};
 use crate::web_switch::{self, Command, Operation};
 use transport::{event_pump, fetch_tree, preload, preload_workbench, pump, request};
 
@@ -95,7 +90,6 @@ struct BackendState {
     workspaces: Vec<WorkspaceSummary>,
     replica: Rc<RefCell<Replica>>,
     commands: mpsc::UnboundedSender<Command>,
-    changes: Rc<RefCell<Vec<mpsc::UnboundedSender<()>>>>,
     /// Editor 向けの文書変更通知。Terminal 向けの `changes` とは分ける。
     document_changes: Rc<RefCell<Vec<mpsc::UnboundedSender<()>>>>,
     /// 共有 view state の変更通知。tabs の適用は他の通知と独立させる。
@@ -264,7 +258,6 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
     }
     preload_workbench(&connection, &replica, &api_workspace).await;
     let (commands, receiver) = mpsc::unbounded();
-    let changes = Rc::new(RefCell::new(Vec::new()));
     let document_changes = Rc::new(RefCell::new(Vec::new()));
     let session_view_changes = Rc::new(RefCell::new(Vec::new()));
     BACKEND.with(|backend| {
@@ -278,7 +271,6 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
             workspaces,
             replica: replica.clone(),
             commands: commands.clone(),
-            changes: changes.clone(),
             document_changes: document_changes.clone(),
             session_view_changes: session_view_changes.clone(),
             extensions,
@@ -294,8 +286,6 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
         connection.clone(),
         receiver,
         replica.clone(),
-        changes.clone(),
-        document_changes.clone(),
         session_view_changes.clone(),
     ));
     if let Some(events) = events {
@@ -303,7 +293,6 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
             connection.clone(),
             events,
             replica.clone(),
-            changes,
             document_changes,
             session_view_changes,
         ));
@@ -1992,178 +1981,5 @@ impl LanguageServerBackend for WebBackend {
     }
     fn shutdown(&self) -> Result<(), LspError> {
         Ok(())
-    }
-}
-
-impl TerminalBackend for WebBackend {
-    fn start(&self, cwd: &Path, columns: u16, rows: u16) -> Result<TerminalId, TerminalError> {
-        self.start_profile(cwd, columns, rows, None)
-    }
-
-    fn start_profile(
-        &self,
-        cwd: &Path,
-        columns: u16,
-        rows: u16,
-        profile: Option<&terminal::TerminalProfileId>,
-    ) -> Result<TerminalId, TerminalError> {
-        let profile = profile.cloned();
-        self.with(|state| {
-            let mut replica = state.replica.borrow_mut();
-            let local = TerminalId::new(format!("web-terminal-{}", replica.next_terminal));
-            replica.next_terminal += 1;
-            replica.terminals.insert(
-                local.as_str().to_owned(),
-                TerminalState {
-                    host: None,
-                    snapshot: None,
-                    owner: None,
-                    events: Vec::new(),
-                    finished: false,
-                },
-            );
-            let _ = state.commands.unbounded_send(Command::StartTerminal {
-                local: local.clone(),
-                cwd: Some(cwd.to_owned()),
-                columns,
-                rows,
-                profile,
-            });
-            local
-        })
-        .map_err(TerminalError::new)
-    }
-
-    fn profiles(&self, _cwd: &Path) -> Result<terminal::TerminalProfiles, TerminalError> {
-        self.with(|state| state.replica.borrow().profiles.clone())
-            .map_err(TerminalError::new)
-    }
-
-    fn input(&self, id: &TerminalId, input: &TerminalInput) -> Result<(), TerminalError> {
-        self.with(|state| {
-            let _ = state.commands.unbounded_send(Command::TerminalInput {
-                local: id.clone(),
-                input: input.clone(),
-            });
-        })
-        .map_err(TerminalError::new)
-    }
-
-    fn resize(&self, id: &TerminalId, columns: u16, rows: u16) -> Result<(), TerminalError> {
-        let sent = self
-            .with(|state| {
-                // 画面は terminal.delta イベントで届くため、ここでは要求だけ送る。
-                state
-                    .commands
-                    .unbounded_send(Command::TerminalResize {
-                        local: id.clone(),
-                        columns,
-                        rows,
-                    })
-                    .is_ok()
-            })
-            .map_err(TerminalError::new)?;
-        if !sent {
-            return Err(TerminalError::new("Terminalの要求を送信できません"));
-        }
-        Ok(())
-    }
-
-    fn claim(&self, id: &TerminalId) -> Result<(), TerminalError> {
-        let sent = self
-            .with(|state| {
-                state
-                    .commands
-                    .unbounded_send(Command::TerminalClaim { local: id.clone() })
-                    .is_ok()
-            })
-            .map_err(TerminalError::new)?;
-        if !sent {
-            return Err(TerminalError::new("Terminalの要求を送信できません"));
-        }
-        Ok(())
-    }
-
-    fn release(&self, id: &TerminalId) -> Result<(), TerminalError> {
-        let sent = self
-            .with(|state| {
-                state
-                    .commands
-                    .unbounded_send(Command::TerminalRelease { local: id.clone() })
-                    .is_ok()
-            })
-            .map_err(TerminalError::new)?;
-        if !sent {
-            return Err(TerminalError::new("Terminalの要求を送信できません"));
-        }
-        Ok(())
-    }
-
-    fn changes(&self) -> Option<mpsc::UnboundedReceiver<()>> {
-        // Root の再構築でも同じ接続から購読し直せるよう、購読を都度追加する。
-        self.with(|state| {
-            let (sender, receiver) = mpsc::unbounded();
-            state.changes.borrow_mut().push(sender);
-            receiver
-        })
-        .ok()
-    }
-
-    fn poll(&self, id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
-        let events = self
-            .with(|state| {
-                let mut replica = state.replica.borrow_mut();
-                let terminal = replica
-                    .terminals
-                    .get_mut(id.as_str())
-                    .ok_or_else(|| "Terminalがありません".to_owned())?;
-                if terminal.finished && terminal.events.is_empty() {
-                    return Err("Terminalは終了しました".to_owned());
-                }
-                Ok(std::mem::take(&mut terminal.events))
-            })
-            .map_err(TerminalError::new)?;
-        events.map_err(TerminalError::new)
-    }
-
-    fn list(&self, _: &Path) -> Result<Vec<TerminalSnapshot>, TerminalError> {
-        self.with(|state| {
-            state
-                .replica
-                .borrow()
-                .terminals
-                .values()
-                .filter_map(|state| state.snapshot.clone())
-                .collect()
-        })
-        .map_err(TerminalError::new)
-    }
-
-    fn attach(&self, _: &Path, id: &TerminalId) -> Result<TerminalSnapshot, TerminalError> {
-        let snapshot = self
-            .with(|state| {
-                let snapshot = state
-                    .replica
-                    .borrow()
-                    .terminals
-                    .get(id.as_str())
-                    .and_then(|state| state.snapshot.clone())
-                    .ok_or_else(|| TerminalError::new("Terminalがありません"))?;
-                // キャッシュだけを返さず、Host の現在の snapshot を取得し直す。
-                // delta 欠番や開始応答前の取りこぼしはこの snapshot で回復する。
-                let _ = state.commands.unbounded_send(Command::ResyncTerminals);
-                Ok::<_, TerminalError>(snapshot)
-            })
-            .map_err(TerminalError::new)??;
-        Ok(snapshot)
-    }
-
-    fn terminate(&self, id: &TerminalId) -> Result<(), TerminalError> {
-        self.with(|state| {
-            let _ = state
-                .commands
-                .unbounded_send(Command::TerminalTerminate { local: id.clone() });
-        })
-        .map_err(TerminalError::new)
     }
 }

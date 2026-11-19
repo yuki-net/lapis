@@ -10,10 +10,8 @@ use client_api::{
     DocumentClaimRequest, DocumentEditRequest, DocumentInspectRequest, DocumentOpenRequest,
     DocumentReleaseRequest, DocumentSaveRequest, DocumentTextEdit, DocumentTransaction, EventBody,
     EventEnvelope, FileTreeKind, FileTreeRequest, RequestBody, ResponseBody,
-    Revision as ApiRevision, SnapshotReason, SnapshotRequest, TerminalClaimRequest,
-    TerminalInputRequest, TerminalReleaseRequest, TerminalResizeRequest, TerminalSize,
-    TerminalStartRequest, TerminalStatus as WireTerminalStatus, TerminalTerminateRequest,
-    WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse, WorkspaceId as ApiWorkspaceId,
+    Revision as ApiRevision, SnapshotReason, SnapshotRequest, WorkbenchGetRequest,
+    WorkbenchPutRequest, WorkbenchPutResponse, WorkspaceId as ApiWorkspaceId,
     WorkspaceRelativePath, WorkspaceViewSubscribeRequest, WorkspaceViewUpdateRequest,
 };
 use client_core::{AsyncHostConnection, browser::BrowserConnection};
@@ -21,7 +19,6 @@ use document::{ExternalChange, FileFingerprint};
 use editor_core::{DocumentId, SessionId};
 use futures_channel::mpsc;
 use futures_util::StreamExt;
-use terminal::TerminalEvent;
 use workbench::{WorkbenchUpdate, WorkbenchWritePlan};
 use workspace::{FileEntry, FileEntryKind};
 
@@ -29,8 +26,8 @@ use crate::web_switch::Command;
 
 use super::{MAX_PRELOAD_BYTES, MAX_TREE_ENTRIES, ROOT, api_workspace};
 use crate::web_replica::{
-    DocumentState, Replica, diff_chars, document_from_snapshot, local_id, model_terminal_snapshot,
-    owner_of, versioned_workbench,
+    DocumentState, Replica, diff_chars, document_from_snapshot, local_id, owner_of,
+    versioned_workbench,
 };
 
 pub(super) async fn request(
@@ -209,30 +206,13 @@ pub(super) async fn pump(
     connection: Rc<BrowserConnection>,
     mut commands: mpsc::UnboundedReceiver<Command>,
     replica: Rc<RefCell<Replica>>,
-    changes: Rc<RefCell<Vec<mpsc::UnboundedSender<()>>>>,
-    document_changes: Rc<RefCell<Vec<mpsc::UnboundedSender<()>>>>,
     session_view_changes: Rc<RefCell<Vec<mpsc::UnboundedSender<()>>>>,
 ) {
     while let Some(command) = commands.next().await {
-        if let Err(error) = handle(
-            &connection,
-            &replica,
-            &changes,
-            &document_changes,
-            &session_view_changes,
-            command,
-        )
-        .await
-        {
+        if let Err(error) = handle(&connection, &replica, &session_view_changes, command).await {
             web_sys::console::warn_1(&format!("Host同期: {error}").into());
         }
     }
-}
-
-pub(super) fn notify_changes(changes: &RefCell<Vec<mpsc::UnboundedSender<()>>>) {
-    changes
-        .borrow_mut()
-        .retain(|changes| changes.unbounded_send(()).is_ok());
 }
 
 pub(super) fn notify_documents(documents: &RefCell<Vec<mpsc::UnboundedSender<()>>>) {
@@ -250,46 +230,11 @@ pub(super) async fn event_pump(
     connection: Rc<BrowserConnection>,
     mut events: mpsc::Receiver<EventEnvelope>,
     replica: Rc<RefCell<Replica>>,
-    changes: Rc<RefCell<Vec<mpsc::UnboundedSender<()>>>>,
     document_changes: Rc<RefCell<Vec<mpsc::UnboundedSender<()>>>>,
     session_view_changes: Rc<RefCell<Vec<mpsc::UnboundedSender<()>>>>,
 ) {
     while let Some(event) = events.next().await {
-        // 画面や状態の変化を UI に知らせる。UI は通知で terminal の poll を呼ぶ。
-        notify_changes(&changes);
         match event.body {
-            EventBody::TerminalDelta { terminal_id, delta } => {
-                replica
-                    .borrow_mut()
-                    .apply_terminal_event(&terminal_id, TerminalEvent::Delta(delta));
-            }
-            EventBody::TerminalStatus {
-                terminal_id,
-                status,
-            } => {
-                let event = match status {
-                    WireTerminalStatus::Exited | WireTerminalStatus::Terminated => {
-                        Some(TerminalEvent::Exited { code: None })
-                    }
-                    WireTerminalStatus::Failed => {
-                        Some(TerminalEvent::Failed("Terminalが失敗しました".into()))
-                    }
-                    _ => None,
-                };
-                if let Some(event) = event {
-                    replica
-                        .borrow_mut()
-                        .apply_terminal_event(&terminal_id, event);
-                }
-            }
-            EventBody::TerminalOwner { terminal_id, owner } => {
-                replica.borrow_mut().apply_terminal_event(
-                    &terminal_id,
-                    TerminalEvent::Owner {
-                        owner: owner.map(|owner| owner.as_str().to_owned()),
-                    },
-                );
-            }
             EventBody::DocumentOwner { document_id, owner } => {
                 if let Some(state) = replica
                     .borrow_mut()
@@ -367,9 +312,6 @@ pub(super) async fn event_pump(
                 super::SESSION_VIEW.with(|session| session.borrow().watch().mark_stale());
                 notify_session_view(&session_view_changes);
                 let delta = sync_snapshot(&connection, &replica).await;
-                if delta.display {
-                    notify_changes(&changes);
-                }
                 if delta.documents {
                     // Editor は DocumentConnection::subscribe を持たないため、
                     // 文書の変更を専用の通知で伝えて再同期させる。
@@ -451,8 +393,6 @@ async fn sync_snapshot(
 async fn handle(
     connection: &BrowserConnection,
     replica: &Rc<RefCell<Replica>>,
-    changes: &RefCell<Vec<mpsc::UnboundedSender<()>>>,
-    document_changes: &RefCell<Vec<mpsc::UnboundedSender<()>>>,
     session_view_changes: &RefCell<Vec<mpsc::UnboundedSender<()>>>,
     command: Command,
 ) -> Result<(), String> {
@@ -668,157 +608,6 @@ async fn handle(
                 && let Some(path) = state.path
             {
                 replica.by_path.remove(&path);
-            }
-        }
-        Command::StartTerminal {
-            local,
-            cwd,
-            columns,
-            rows,
-            profile,
-        } => {
-            // 切替で消えた旧WorkspaceのTerminalを新Workspaceに作らない。
-            if !replica.borrow().terminals.contains_key(local.as_str()) {
-                return Err("Terminalがありません".into());
-            }
-            let workspace_id = replica.borrow().workspace.clone();
-            let cwd = match cwd.as_deref() {
-                Some(path) => match path.strip_prefix(ROOT) {
-                    Ok(relative) if relative.as_os_str().is_empty() => None,
-                    Ok(relative) => Some(
-                        WorkspaceRelativePath::from_path(relative)
-                            .map_err(|_| "Terminalのcwdが不正です")?,
-                    ),
-                    Err(_) => None,
-                },
-                None => None,
-            };
-            let body = request(
-                connection,
-                RequestBody::TerminalStart(TerminalStartRequest {
-                    workspace_id: api_workspace(&workspace_id),
-                    cwd,
-                    command: None,
-                    profile,
-                    size: TerminalSize { columns, rows },
-                }),
-            )
-            .await?;
-            let ResponseBody::TerminalStart(response) = body else {
-                return Err("TerminalStart応答が不正です".into());
-            };
-            let mut replica = replica.borrow_mut();
-            if replica.terminals.contains_key(local.as_str()) {
-                let snapshot = model_terminal_snapshot(&local, &response.terminal);
-                replica.connect_terminal(&local, response.terminal.terminal_id, snapshot);
-            }
-            // 応答前のイベントを保留していた場合も、対応付け後の snapshot を UI に届ける。
-            drop(replica);
-            notify_changes(changes);
-        }
-        Command::TerminalInput { local, input } => {
-            let host = {
-                let replica = replica.borrow();
-                replica
-                    .terminals
-                    .get(local.as_str())
-                    .and_then(|state| state.host.clone())
-            };
-            if let Some(host) = host {
-                let _ = request(
-                    connection,
-                    RequestBody::TerminalInput(TerminalInputRequest {
-                        terminal_id: host,
-                        input,
-                    }),
-                )
-                .await;
-            }
-        }
-        Command::TerminalResize {
-            local,
-            columns,
-            rows,
-        } => {
-            let host = {
-                let replica = replica.borrow();
-                replica
-                    .terminals
-                    .get(local.as_str())
-                    .and_then(|state| state.host.clone())
-            };
-            if let Some(host) = host {
-                // 画面は terminal.delta イベントで届くため、応答は受理確認だけ。
-                request(
-                    connection,
-                    RequestBody::TerminalResize(TerminalResizeRequest {
-                        terminal_id: host,
-                        size: TerminalSize { columns, rows },
-                    }),
-                )
-                .await?;
-            }
-        }
-        Command::TerminalTerminate { local } => {
-            let host = {
-                let replica = replica.borrow();
-                replica
-                    .terminals
-                    .get(local.as_str())
-                    .and_then(|state| state.host.clone())
-            };
-            if let Some(host) = host {
-                let _ = request(
-                    connection,
-                    RequestBody::TerminalTerminate(TerminalTerminateRequest { terminal_id: host }),
-                )
-                .await;
-            }
-            if let Some(state) = replica.borrow_mut().terminals.get_mut(local.as_str()) {
-                state.events.push(TerminalEvent::Exited { code: None });
-                state.finished = true;
-            }
-        }
-        Command::TerminalClaim { local } => {
-            let host = {
-                let replica = replica.borrow();
-                replica
-                    .terminals
-                    .get(local.as_str())
-                    .and_then(|state| state.host.clone())
-            };
-            if let Some(host) = host {
-                let _ = request(
-                    connection,
-                    RequestBody::TerminalClaim(TerminalClaimRequest { terminal_id: host }),
-                )
-                .await;
-            }
-        }
-        Command::TerminalRelease { local } => {
-            let host = {
-                let replica = replica.borrow();
-                replica
-                    .terminals
-                    .get(local.as_str())
-                    .and_then(|state| state.host.clone())
-            };
-            if let Some(host) = host {
-                let _ = request(
-                    connection,
-                    RequestBody::TerminalRelease(TerminalReleaseRequest { terminal_id: host }),
-                )
-                .await;
-            }
-        }
-        // delta 欠番や開始応答前の取りこぼしを、Host の現在の snapshot で回復する。
-        Command::ResyncTerminals => {
-            let delta = sync_snapshot(connection, replica).await;
-            if delta.display {
-                notify_changes(changes);
-            }
-            if delta.documents {
-                notify_documents(document_changes);
             }
         }
         Command::SaveWorkbench { view } => {
