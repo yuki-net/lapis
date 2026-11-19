@@ -540,13 +540,7 @@ impl BackendState {
             RequestBody::WorkbenchPut(request) => {
                 self.require_workspace(session, &request.workspace_id)?;
                 self.require_connected(session)?;
-                let current = self
-                    .workspace(session)?
-                    .workbench
-                    .view
-                    .as_ref()
-                    .and_then(|view| view.workspace.as_ref())
-                    .cloned();
+                let current = self.workspace(session)?.workbench.view.as_ref().cloned();
                 let view = workbench_state::parse_update_view(request.view, current.as_ref())?;
                 workbench_state::validate_workspace(&view, &request.workspace_id)?;
                 let workspace = self.workspace_mut(session)?;

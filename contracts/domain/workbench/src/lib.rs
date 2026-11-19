@@ -67,6 +67,30 @@ impl Default for ConversationViewState {
 }
 
 impl ConversationViewState {
+    /// 旧 Client が省略した View ID を、同じ用途の以前の Layout から補う。
+    pub fn preserve_view_ids_from(&mut self, previous: &Self) {
+        fn preserve(
+            next: &mut Option<ZoneLayoutViewState>,
+            previous: &Option<ZoneLayoutViewState>,
+        ) {
+            if let (Some(next), Some(previous)) = (next, previous) {
+                next.preserve_view_ids_from(previous);
+            }
+        }
+        preserve(&mut self.layout, &previous.layout);
+        if let (Some(next), Some(old)) = (
+            &mut self.workbench.ide_layout,
+            &previous.workbench.ide_layout,
+        ) {
+            preserve(&mut next.layout, &old.layout);
+        }
+        for (task, next) in &mut self.workbench.task_layouts {
+            if let Some(old) = previous.workbench.task_layouts.get(task) {
+                preserve(&mut next.layout, &old.layout);
+            }
+        }
+    }
+
     /// 共有Workbenchへ通知できる状態に整える。
     /// 配置とタブ一覧は共有し、Workspaceの表示位置とアクティブタブはClient固有に残す。
     pub fn for_shared_workbench(mut self) -> Self {
@@ -242,9 +266,51 @@ impl ZoneLayoutViewState {
                 let Some(active) = &local_panel.active_tab else {
                     continue;
                 };
-                if panel.tabs.contains(active) {
-                    panel.active_tab = Some(active.clone());
+                if let Some(tab) = panel.tabs.iter().find(|tab| tab.same_identity(active)) {
+                    panel.active_tab = Some(tab.clone());
                 }
+            }
+        }
+    }
+
+    /// 旧 Client が省略した View ID を、同じ Layout の一意な個体から引き継ぐ。
+    pub fn preserve_view_ids_from(&mut self, previous: &Self) {
+        use std::collections::btree_map::Entry;
+        let mut ids = std::collections::BTreeMap::<&str, Option<&str>>::new();
+        for tab in previous
+            .zones
+            .iter()
+            .flat_map(|zone| &zone.panels)
+            .flat_map(|panel| &panel.tabs)
+        {
+            if let TabRef::View { id, view } = tab {
+                match ids.entry(id) {
+                    Entry::Vacant(entry) => {
+                        entry.insert(view.as_deref());
+                    }
+                    Entry::Occupied(mut entry) => {
+                        entry.insert(None);
+                    }
+                }
+            }
+        }
+        let restore = |tab: &mut TabRef| {
+            if let TabRef::View { id, view } = tab
+                && view.is_none()
+                && let Some(Some(previous)) = ids.get(id.as_str())
+            {
+                *view = Some((*previous).to_owned());
+            }
+        };
+        for panel in self.zones.iter_mut().flat_map(|zone| &mut zone.panels) {
+            for tab in &mut panel.tabs {
+                restore(tab);
+            }
+            for tab in &mut panel.pinned_tabs {
+                restore(tab);
+            }
+            if let Some(tab) = &mut panel.active_tab {
+                restore(tab);
             }
         }
     }
@@ -306,6 +372,14 @@ pub enum TabRef {
 }
 
 impl TabRef {
+    fn same_identity(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::View { id: a, view: av }, Self::View { id: b, view: bv }) => {
+                a == b && (av.is_none() || bv.is_none() || av == bv)
+            }
+            _ => self == other,
+        }
+    }
     /// 旧形式の文字列を読み、現在の参照へ変換する。
     pub fn from_legacy(value: &str) -> Option<Self> {
         if let Some(id) = value.strip_prefix("document:") {
@@ -581,6 +655,99 @@ mod tests {
         let mut restored = shared.layout.unwrap();
         restored.retain_active_tabs_from(&local);
         assert_eq!(restored, local);
+    }
+
+    #[test]
+    fn active_selection_matches_old_and_new_view_references_without_changing_shared_tab() {
+        let legacy = TabRef::View {
+            id: "opaque".into(),
+            view: None,
+        };
+        let modern = TabRef::View {
+            id: "opaque".into(),
+            view: Some("example.view".into()),
+        };
+        let mut local = tabs_layout(None);
+        local.zones[0].panels[0].tabs = vec![modern.clone()];
+        local.zones[0].panels[0].active_tab = Some(modern.clone());
+        let mut remote = local.clone();
+        remote.zones[0].panels[0].tabs = vec![legacy.clone()];
+        remote.zones[0].panels[0].active_tab = None;
+        remote.retain_active_tabs_from(&local);
+        assert_eq!(remote.zones[0].panels[0].active_tab, Some(legacy));
+        remote.zones[0].panels[0].tabs = vec![TabRef::View {
+            id: "opaque".into(),
+            view: Some("other.view".into()),
+        }];
+        remote.zones[0].panels[0].active_tab = None;
+        remote.retain_active_tabs_from(&local);
+        assert!(remote.zones[0].panels[0].active_tab.is_none());
+    }
+
+    #[test]
+    fn ambiguous_old_instance_ids_do_not_inherit_a_view_owner() {
+        let mut previous = tabs_layout(None);
+        previous.zones[0].panels[0].tabs = vec![
+            TabRef::View {
+                id: "duplicate".into(),
+                view: Some("example.one".into()),
+            },
+            TabRef::View {
+                id: "duplicate".into(),
+                view: Some("example.two".into()),
+            },
+        ];
+        let mut next = previous.clone();
+        next.zones[0].panels[0].tabs = vec![TabRef::View {
+            id: "duplicate".into(),
+            view: None,
+        }];
+        next.preserve_view_ids_from(&previous);
+        assert!(matches!(
+            &next.zones[0].panels[0].tabs[0],
+            TabRef::View { view: None, .. }
+        ));
+    }
+
+    #[test]
+    fn view_owner_is_inherited_only_from_the_matching_task_layout() {
+        let tab = |view: Option<&str>| TabRef::View {
+            id: "same".into(),
+            view: view.map(str::to_owned),
+        };
+        let make_layout = |view: Option<&str>| {
+            let mut layout = tabs_layout(None);
+            layout.zones[0].panels[0].tabs = vec![tab(view)];
+            WorkbenchLayoutState {
+                layout: Some(layout),
+                show_panel_controls: true,
+            }
+        };
+        let a = ConversationId::new("task-a");
+        let b = ConversationId::new("task-b");
+        let mut previous = ConversationViewState::default();
+        previous
+            .workbench
+            .task_layouts
+            .insert(a.clone(), make_layout(Some("example.a")));
+        previous
+            .workbench
+            .task_layouts
+            .insert(b.clone(), make_layout(Some("example.b")));
+        let mut next = previous.clone();
+        next.workbench
+            .task_layouts
+            .insert(a.clone(), make_layout(None));
+        next.workbench
+            .task_layouts
+            .insert(b.clone(), make_layout(None));
+        next.preserve_view_ids_from(&previous);
+        for (task, expected) in [(a, "example.a"), (b, "example.b")] {
+            let layout = next.workbench.task_layouts[&task].layout.as_ref().unwrap();
+            assert!(
+                matches!(&layout.zones[0].panels[0].tabs[0], TabRef::View { view: Some(view), .. } if view == expected)
+            );
+        }
     }
 
     #[test]

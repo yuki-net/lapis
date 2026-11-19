@@ -209,10 +209,7 @@ impl BackendService {
         let current: Option<workbench::ConversationViewState> =
             serde_json::from_value(snapshot.view.clone())
                 .map_err(|_| BackendServiceError::Unavailable)?;
-        let view = match workbench_state::parse_update_view(
-            put.view,
-            current.as_ref().and_then(|view| view.workspace.as_ref()),
-        ) {
+        let view = match workbench_state::parse_update_view(put.view, current.as_ref()) {
             Ok(view) => view,
             Err(error) => {
                 return Ok(ResponseEnvelope {
