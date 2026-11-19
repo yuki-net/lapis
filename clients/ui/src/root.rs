@@ -126,6 +126,7 @@ pub(crate) struct DesktopRoot {
     pub(crate) group: Entity<crate::window_host::WindowGroup>,
     /// Terminal のタブ個体と Session を所有する機能。Composition Root だけが具体型を知る。
     terminal: std::rc::Rc<std::cell::RefCell<features::terminal::TerminalLifecycle>>,
+    terminal_view: ViewId,
     pub(crate) editor: Entity<Editor>,
     files: Entity<FilesFeature>,
     git: Entity<GitFeature>,
@@ -755,19 +756,44 @@ impl DesktopRoot {
                                     let hidden = extension_view_hidden(snapshot.as_ref(), "lapis.terminal", "lapis.content.terminal-grid.v1");
                                     let declaration = snapshot.as_ref().and_then(|snapshot| snapshot.active_view("lapis.terminal", "lapis.content.terminal-grid.v1"));
                                     let shells = root.group.read(cx).members.values().map(|member| member.shell.clone()).collect::<Vec<_>>();
+                                    if let Some(view) = declaration {
+                                        let next = ViewId::new(view.id.clone());
+                                        let old = root.terminal_view.clone();
+                                        let legacy = ViewId::new(id::VIEW_TERMINAL);
+                                        let sources = shells.iter().map(|shell| {
+                                            let shell = shell.read(cx);
+                                            if shell.can_rekey_extension_view(&old, &next) { Some(old.clone()) }
+                                            else if shell.can_rekey_extension_view(&legacy, &next) { Some(legacy.clone()) }
+                                            else { None }
+                                        }).collect::<Option<Vec<_>>>();
+                                        if let Some(sources) = sources.filter(|sources| root.group.read(cx).layout.can_rekey_views(sources, &next)) {
+                                            root.group.update(cx, |group, _| group.layout.rekey_views(&sources, &next));
+                                            for (shell, source) in shells.iter().zip(&sources) {
+                                                if source != &next {
+                                                    shell.update(cx, |shell, cx| { shell.rekey_extension_view(source, &next, cx); });
+                                                }
+                                            }
+                                            root.terminal_view = next;
+                                        } else {
+                                            tracing::warn!("拡張 View ID が既存の View と競合しています");
+                                        }
+                                    }
+                                    let terminal_view = root.terminal_view.clone();
+                                    let declaration = declaration.filter(|view| view.id == terminal_view.as_str());
+                                    let available = available && declaration.is_some();
                                     for shell in shells {
                                         shell.update(cx, |shell, cx| {
-                                            shell.set_view_available(ViewId::new(id::VIEW_TERMINAL), available, cx);
+                                            shell.set_view_available(terminal_view.clone(), available, cx);
                                             if let (Some(snapshot), Some(view)) = (snapshot.as_ref(), declaration) {
                                                 shell.set_extension_view_command(
-                                                    ViewId::new(id::VIEW_TERMINAL),
+                                                    terminal_view.clone(),
                                                     view.open_command.clone().map(Into::into),
                                                     contributed_zone(view.default_zone),
                                                     view.multiple_instances,
                                                     cx,
                                                 );
                                                 shell.set_extension_view_title(
-                                                    ViewId::new(id::VIEW_TERMINAL),
+                                                    terminal_view.clone(),
                                                     snapshot.clone(),
                                                     "lapis.terminal".to_owned(),
                                                     localization::MessageId::new(view.title.clone()),
@@ -775,13 +801,13 @@ impl DesktopRoot {
                                                 );
                                             }
                                             if let Some(hidden) = hidden {
-                                                shell.set_view_hidden(ViewId::new(id::VIEW_TERMINAL), hidden, cx);
+                                                shell.set_view_hidden(terminal_view.clone(), hidden, cx);
                                             }
                                         });
                                     }
                                     if available && pending_terminal {
                                         let zone = declaration.map(|view| contributed_zone(view.default_zone)).unwrap_or(ZonePosition::Bottom);
-                                        root.shell.update(cx, |shell, cx| shell.open_view_in_zone(zone, id::VIEW_TERMINAL.into(), cx));
+                                        root.shell.update(cx, |shell, cx| shell.open_view_in_zone(zone, terminal_view.clone(), cx));
                                         pending_terminal = false;
                                     }
                                 }
@@ -915,6 +941,7 @@ impl DesktopRoot {
             group,
             shell,
             terminal,
+            terminal_view: ViewId::new(id::VIEW_TERMINAL),
             editor,
             files,
             git,
@@ -1081,7 +1108,7 @@ impl DesktopRoot {
         let terminal_key = self
             .shell
             .read(cx)
-            .first_active_tab_of(id::VIEW_TERMINAL)
+            .first_active_tab_of(self.terminal_view.as_str())
             .and_then(|tab| ViewInstanceKey::new(tab.stable_view_key()));
         let terminal_scope = terminal_key
             .as_ref()
@@ -1849,7 +1876,7 @@ impl DesktopRoot {
     ) -> Option<editor_core::ConversationId> {
         self.shell
             .read(cx)
-            .view_resource_owner(&ViewId::new(id::VIEW_TERMINAL), cx)
+            .view_resource_owner(&self.terminal_view, cx)
     }
 
     /// 外部 Resource の永続化用サマリー。Resource の意味は所有する機能が決める。
@@ -1859,7 +1886,7 @@ impl DesktopRoot {
     ) -> Vec<desktop_client::RestoredTerminal> {
         self.shell
             .read(cx)
-            .persisted_view_resources(&ViewId::new(id::VIEW_TERMINAL), cx)
+            .persisted_view_resources(&self.terminal_view, cx)
     }
 
     /// Captures this root's editor, layout, task, terminal, and draft state for later persistence.

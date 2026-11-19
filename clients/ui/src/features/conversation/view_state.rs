@@ -31,6 +31,29 @@ pub(crate) fn apply_view_state(
     // 共有状態に含まれないアクティブタブは、このClientの現在の選択を残す。
     let local_layout = shell.layout.capture();
     if let Some(layout) = view.layout.as_mut() {
+        for panel in layout.zones.iter_mut().flat_map(|zone| &mut zone.panels) {
+            for tab in panel
+                .tabs
+                .iter_mut()
+                .chain(&mut panel.pinned_tabs)
+                .chain(panel.active_tab.iter_mut())
+            {
+                match tab {
+                    TabRef::View {
+                        view: Some(view), ..
+                    }
+                    | TabRef::Resource {
+                        view: Some(view), ..
+                    } => {
+                        *view = registry
+                            .resolve_view(&ViewId::new(view.as_str()))
+                            .as_str()
+                            .to_owned();
+                    }
+                    _ => {}
+                }
+            }
+        }
         layout.retain_active_tabs_from(&local_layout);
     }
     let restored = view.layout.as_ref().and_then(|layout| {
@@ -74,16 +97,22 @@ fn deserialize_panel_tab(value: &TabRef, registry: &FeatureRegistry) -> Option<P
         TabRef::Document { id } => Some(PanelTab::Document(id.clone())),
         TabRef::Resource { view, id } => {
             // View 未指定の旧形式は Terminal として保存されていた。
-            let view = view.as_deref().map(ViewId::new).or_else(|| {
-                let terminal = ViewId::new(crate::features::id::VIEW_TERMINAL);
-                (value.legacy_terminal_id().is_some()
-                    && registry.declaration(&terminal).is_some_and(|declaration| {
-                        declaration.tab_reference
-                            == extension_ui_contract::TabReference::ExternalResource
-                    }))
-                .then_some(terminal)
-            })?;
-            let instance = if view.as_str() == crate::features::id::VIEW_TERMINAL {
+            let view = view
+                .as_deref()
+                .map(|view| registry.resolve_view(&ViewId::new(view)))
+                .or_else(|| {
+                    let terminal =
+                        registry.resolve_view(&ViewId::new(crate::features::id::VIEW_TERMINAL));
+                    (value.legacy_terminal_id().is_some()
+                        && registry.declaration(&terminal).is_some_and(|declaration| {
+                            declaration.tab_reference
+                                == extension_ui_contract::TabReference::ExternalResource
+                        }))
+                    .then_some(terminal)
+                })?;
+            let instance = if view
+                == registry.resolve_view(&ViewId::new(crate::features::id::VIEW_TERMINAL))
+            {
                 ViewInstanceId::new(format!("{TERMINAL_INSTANCE_PREFIX}{id}"))
             } else {
                 ViewInstanceId::new(format!(
@@ -107,7 +136,10 @@ fn deserialize_panel_tab(value: &TabRef, registry: &FeatureRegistry) -> Option<P
             if view.is_empty() {
                 return None;
             }
-            Some(PanelTab::tool_instance(ViewId::new(view), id.clone()))
+            Some(PanelTab::tool_instance(
+                registry.resolve_view(&ViewId::new(view)),
+                id.clone(),
+            ))
         }
     }
 }
@@ -212,6 +244,35 @@ mod tests {
         assert!(restored.layout.find_tab(&pending).is_some());
         assert!(restored.view_visible(&pending));
         assert!(restored.view_visible(&restored_resource));
+    }
+
+    #[test]
+    fn old_terminal_view_reference_restores_to_declared_id_with_pin() {
+        let mut registry = crate::features::bundled_registry();
+        let old = ViewId::new(crate::features::id::VIEW_TERMINAL);
+        let new = ViewId::new("lapis.terminal.view");
+        let tab = PanelTab::external(old.clone(), "terminal:before", Some("session".into()));
+        let mut original = ShellState::default();
+        original.layout_profile.set(LayoutProfile::Wide);
+        original
+            .layout
+            .open_tab(ZonePosition::Bottom, tab.clone())
+            .unwrap();
+        original.layout.set_tab_pinned(&tab, true);
+        let saved = capture_view_state(&original);
+        assert!(registry.rekey_view(&old, &new));
+        let mut restored = ShellState::default();
+        restored.layout_profile.set(LayoutProfile::Wide);
+        apply_view_state(saved, &mut restored, &[], &registry);
+        let tab = restored
+            .layout
+            .placements()
+            .into_iter()
+            .map(|(tab, _)| tab)
+            .find(|tab| tab.resource() == Some("session"))
+            .unwrap();
+        assert_eq!(tab.view_id(), Some(&new));
+        assert!(restored.layout.tab_is_pinned(&tab));
     }
 
     #[test]

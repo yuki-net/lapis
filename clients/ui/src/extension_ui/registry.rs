@@ -111,6 +111,7 @@ pub struct FeatureRegistry {
     instances: HashMap<ViewInstanceId, (ViewId, AnyView)>,
     unavailable_views: HashSet<ViewId>,
     view_open_commands: HashMap<ViewId, CommandId>,
+    view_aliases: HashMap<ViewId, ViewId>,
     workspace_open: bool,
     capabilities: HashSet<WorkspaceCapabilityId>,
     active_commands: HashSet<CommandId>,
@@ -131,6 +132,82 @@ fn is_visible(
 }
 
 impl FeatureRegistry {
+    /// 保存済みの旧 View ID を現在登録されている ID に解決する。
+    pub(crate) fn resolve_view(&self, view: &ViewId) -> ViewId {
+        self.view_aliases
+            .get(view)
+            .cloned()
+            .unwrap_or_else(|| view.clone())
+    }
+
+    /// 描画器の登録名を宣言 ID に移し、既存の Entity と個体 ID を維持する。
+    pub(crate) fn can_rekey_view(&self, old: &ViewId, new: &ViewId) -> bool {
+        self.declaration(old).is_some()
+            && (old == new
+                || (self.declaration(new).is_none()
+                    && !self.lifecycles.contains_key(new)
+                    && !self.shared_views.contains_key(new)
+                    && self.view_aliases.get(new).is_none_or(|owner| owner == old)))
+    }
+    pub(crate) fn rekey_view(&mut self, old: &ViewId, new: &ViewId) -> bool {
+        if !self.can_rekey_view(old, new) {
+            return false;
+        }
+        if old == new {
+            return true;
+        }
+        for descriptor in self.descriptors.values_mut() {
+            for contribution in &mut descriptor.contributions {
+                if contribution.view.as_ref() == Some(old) {
+                    contribution.view = Some(new.clone());
+                }
+            }
+            for activation in &mut descriptor.activation {
+                if let ActivationCondition::OnView(view) = activation
+                    && view == old
+                {
+                    *view = new.clone();
+                }
+            }
+        }
+        if let Some(value) = self.lifecycles.remove(old) {
+            self.lifecycles.insert(new.clone(), value);
+        }
+        if let Some(value) = self.shared_views.remove(old) {
+            self.shared_views.insert(new.clone(), value);
+        }
+        if let Some(value) = self.view_open_commands.remove(old) {
+            self.view_open_commands.insert(new.clone(), value);
+        }
+        if self.started.remove(old) {
+            self.started.insert(new.clone());
+        }
+        if self.unavailable_views.remove(old) {
+            self.unavailable_views.insert(new.clone());
+        }
+        if self.visible_views.remove(old) {
+            self.visible_views.insert(new.clone());
+        }
+        for value in self.active_views.values_mut() {
+            if value == old {
+                *value = new.clone();
+            }
+        }
+        for (owner, _) in self.instances.values_mut() {
+            if owner == old {
+                *owner = new.clone();
+            }
+        }
+        for value in self.view_aliases.values_mut() {
+            if value == old {
+                *value = new.clone();
+            }
+        }
+        self.view_aliases.remove(new);
+        self.view_aliases.insert(old.clone(), new.clone());
+        self.recompute();
+        true
+    }
     pub(crate) fn set_view_default_zone(&mut self, view: &ViewId, zone: ZonePosition) {
         if let Some(contribution) = self
             .descriptors
@@ -578,6 +655,32 @@ mod tests {
     use extension_ui_contract::{IconId, MessageId};
 
     struct InstanceCounter(usize);
+
+    #[test]
+    fn rekey_preserves_aliases_and_prevents_reusing_another_views_old_id() {
+        let mut registry = FeatureRegistry::default();
+        for (feature, view) in [("one", "example.one"), ("two", "example.two")] {
+            registry
+                .register(
+                    FeatureDescriptor::core(feature).contributes(UiContribution::view(
+                        view,
+                        UiSlot::BottomDock,
+                        "title",
+                        "icon",
+                        0,
+                    )),
+                )
+                .unwrap();
+        }
+        let one = ViewId::new("example.one");
+        let renamed = ViewId::new("example.renamed");
+        let two = ViewId::new("example.two");
+        assert!(registry.rekey_view(&one, &renamed));
+        assert!(!registry.rekey_view(&two, &one));
+        assert_eq!(registry.resolve_view(&one), renamed);
+        assert!(registry.rekey_view(&renamed, &one));
+        assert_eq!(registry.resolve_view(&renamed), one);
+    }
     impl gpui::Render for InstanceCounter {
         fn render(
             &mut self,

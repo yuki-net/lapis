@@ -505,6 +505,46 @@ impl Shell {
         self.synchronize_view_instances(cx);
         cx.notify();
     }
+
+    /// View の登録名だけを差し替え、タブ個体と接続中の Resource を維持する。
+    pub(crate) fn can_rekey_extension_view(&self, old: &ViewId, new: &ViewId) -> bool {
+        self.feature_registry.can_rekey_view(old, new)
+    }
+    pub(crate) fn rekey_extension_view(
+        &mut self,
+        old: &ViewId,
+        new: &ViewId,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.feature_registry.rekey_view(old, new) {
+            return false;
+        }
+        let tabs = self
+            .shell
+            .layout
+            .placements()
+            .into_iter()
+            .map(|(tab, _)| tab)
+            .filter(|tab| tab.view_id() == Some(old))
+            .collect::<Vec<_>>();
+        for tab in tabs {
+            self.shell
+                .layout
+                .rebind_tab(&tab, tab.with_view(new.clone()));
+        }
+        if let Some(value) = self.extension_view_titles.remove(old) {
+            self.extension_view_titles.insert(new.clone(), value);
+        }
+        if self.shell.hidden_view_types.remove(old) {
+            self.shell.hidden_view_types.insert(new.clone());
+        }
+        self.shell.unregistered_view_types.remove(old);
+        self.shell.unregistered_view_types.remove(new);
+        self.synchronize_view_instances(cx);
+        self.refresh_feature_activation(cx);
+        cx.notify();
+        true
+    }
     /// 拡張の表示だけを隠す。Layout の保存値と他の非表示条件は変えない。
     pub(crate) fn set_view_hidden(&mut self, view: ViewId, hidden: bool, cx: &mut Context<Self>) {
         let changed = if hidden {

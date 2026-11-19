@@ -288,6 +288,68 @@ mod tests {
     }
 
     #[gpui::test]
+    fn declared_view_rekeys_existing_instance_and_preserves_resource(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx);
+            let lifecycle = Rc::new(RefCell::new(RecordingLifecycle::default()));
+            let document = cx.new(|_| Empty);
+            let shell = cx.new(|cx| {
+                let mut shell = Shell::new(document.into(), HashMap::new(), cx);
+                shell.configure_view_lifecycles(
+                    lifecycle.clone(),
+                    ViewId::new(id::VIEW_TERMINAL),
+                    cx,
+                );
+                shell
+            });
+            shell.update(cx, |shell, cx| {
+                let old = ViewId::new(id::VIEW_TERMINAL);
+                let new = ViewId::new("example.extension.view");
+                shell.open_view_in_zone(ZonePosition::Bottom, old.clone(), cx);
+                let tab = shell
+                    .shell
+                    .layout
+                    .placements()
+                    .into_iter()
+                    .find(|(tab, _)| tab.view_id() == Some(&old))
+                    .unwrap()
+                    .0;
+                let instance = tab.instance_id();
+                shell.rebind_tab_resource(&instance, Some("session".into()));
+                let tab = shell
+                    .shell
+                    .layout
+                    .placements()
+                    .into_iter()
+                    .find(|(tab, _)| tab.instance_id() == instance)
+                    .unwrap()
+                    .0;
+                shell.shell.layout.set_tab_pinned(&tab, true);
+                let created = lifecycle.borrow().created.len();
+                assert!(shell.rekey_extension_view(&old, &new, cx));
+                let tab = shell
+                    .shell
+                    .layout
+                    .placements()
+                    .into_iter()
+                    .find(|(tab, _)| tab.instance_id() == instance)
+                    .unwrap()
+                    .0;
+                assert_eq!(tab.view_id(), Some(&new));
+                assert_eq!(tab.resource(), Some("session"));
+                assert!(shell.shell.layout.tab_is_pinned(&tab));
+                assert_eq!(lifecycle.borrow().created.len(), created);
+                assert!(lifecycle.borrow().closed.is_empty());
+                assert_eq!(shell.feature_registry.resolve_view(&old), new);
+                assert!(!shell.rekey_extension_view(&new, &ViewId::new(id::VIEW_FILES), cx));
+                assert_eq!(tab.view_id(), Some(&new));
+            });
+        });
+    }
+
+    #[gpui::test]
     fn declared_command_opens_tabs_only_while_view_is_available(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx)

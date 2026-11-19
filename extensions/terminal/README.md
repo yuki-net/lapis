@@ -54,7 +54,7 @@ Desktop と Web は拡張の `terminal.v1.*` 操作を汎用の `host.extensions
 Terminal の Client UI は、共通 Layout の宣言と内部レジストリを通して載ります。
 
 - 拡張は `views.json` で表示名、配置、複数個体、オープン用コマンドを宣言します。
-- 現在の Client は宣言の表示名、既定配置、個体方針とオープン用コマンドを使用します。View ID は `clients/ui/src/features/terminal/mod.rs` の内蔵 descriptor と `root.rs` に固定されており、宣言のみからの登録は未完了です。
+- 現在の Client は宣言の View ID、表示名、既定配置、個体方針とオープン用コマンドを使用します。Client は `lapis.terminal` の `lapis.content.terminal-grid.v1` 宣言を既存のネイティブ描画器に結び付けます。他の提供元やコンテンツ種別の動的な描画器登録は未実装です。
 - `clients/ui/src/features/terminal/lifecycle.rs` が `ViewLifecycle` を実装し、タブごとの Session を管理します。表示器は Desktop と Web の Client 内で動きます。
 - 設定への候補供給（フォント・既定 profile）は `SettingsSourceProvider` として登録します。設定画面は Terminal Feature の型を読まず、登録された供給元をキーで引きます。
 

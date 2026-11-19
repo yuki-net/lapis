@@ -77,6 +77,18 @@ impl TabDragState {
 }
 
 impl PanelTab {
+    pub(crate) fn with_view(&self, new_view: ViewId) -> Self {
+        match self {
+            Self::Tool {
+                instance, resource, ..
+            } => Self::Tool {
+                view: new_view,
+                instance: instance.clone(),
+                resource: resource.clone(),
+            },
+            Self::Document(_) => self.clone(),
+        }
+    }
     pub(crate) fn tool(view: impl Into<ViewId>) -> Self {
         let view = view.into();
         Self::Tool {
