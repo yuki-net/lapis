@@ -110,6 +110,7 @@ pub struct FeatureRegistry {
     started: HashSet<ViewId>,
     instances: HashMap<ViewInstanceId, (ViewId, AnyView)>,
     unavailable_views: HashSet<ViewId>,
+    view_open_commands: HashMap<ViewId, CommandId>,
     workspace_open: bool,
     capabilities: HashSet<WorkspaceCapabilityId>,
     active_commands: HashSet<CommandId>,
@@ -130,6 +131,65 @@ fn is_visible(
 }
 
 impl FeatureRegistry {
+    pub(crate) fn set_view_default_zone(&mut self, view: &ViewId, zone: ZonePosition) {
+        if let Some(contribution) = self
+            .descriptors
+            .values_mut()
+            .flat_map(|feature| &mut feature.contributions)
+            .find(|contribution| contribution.view.as_ref() == Some(view))
+        {
+            contribution.default_zone = Some(zone);
+        }
+    }
+
+    /// View を開く公開コマンドを、その描画器が登録された View に結び付ける。
+    pub(crate) fn set_view_open_command(
+        &mut self,
+        view: ViewId,
+        command: Option<CommandId>,
+    ) -> bool {
+        if let Some(command) = command.as_ref() {
+            let conflicts = self
+                .descriptors
+                .values()
+                .flat_map(|feature| &feature.contributions)
+                .any(|contribution| contribution.command.as_ref() == Some(command))
+                || self
+                    .view_open_commands
+                    .iter()
+                    .any(|(other, existing)| *other != view && existing == command);
+            if conflicts {
+                self.view_open_commands.remove(&view);
+                return false;
+            }
+        }
+        if let Some(command) = command {
+            self.view_open_commands.insert(view, command);
+        } else {
+            self.view_open_commands.remove(&view);
+        }
+        true
+    }
+
+    pub(crate) fn view_open_commands(&self) -> Vec<(&ViewId, &CommandId)> {
+        let mut commands = self
+            .view_open_commands
+            .iter()
+            .filter(|(view, _)| {
+                self.declaration(view).is_some_and(|declaration| {
+                    self.can_create_view(view, declaration.instance_policy)
+                })
+            })
+            .collect::<Vec<_>>();
+        commands.sort_by(|a, b| a.1.as_str().cmp(b.1.as_str()));
+        commands
+    }
+
+    pub(crate) fn view_for_open_command(&self, command: &CommandId) -> Option<ViewId> {
+        self.view_open_commands()
+            .into_iter()
+            .find_map(|(view, candidate)| (candidate == command).then(|| view.clone()))
+    }
     pub(crate) fn register_shared_view(&mut self, view: ViewId, entity: AnyView) {
         self.shared_views.insert(view, entity);
     }
@@ -522,6 +582,36 @@ mod tests {
             self.created.push(entity.clone());
             Some(entity.into())
         }
+    }
+
+    #[test]
+    fn declared_open_command_tracks_availability_and_rejects_collisions() {
+        let mut registry = FeatureRegistry::default();
+        let view = ViewId::new("example.view");
+        registry
+            .register(
+                FeatureDescriptor::core("example").contributes(
+                    UiContribution::view(view.clone(), UiSlot::BottomDock, "title", "icon", 0)
+                        .multiple_instances(),
+                ),
+            )
+            .unwrap();
+        registry.register_view_lifecycle(
+            view.clone(),
+            Rc::new(RefCell::new(CounterLifecycle::default())),
+        );
+        let command = CommandId::new("example.open");
+        assert!(registry.set_view_open_command(view.clone(), Some(command.clone())));
+        assert_eq!(registry.view_for_open_command(&command), Some(view.clone()));
+        registry.set_view_available(view.clone(), false);
+        assert_eq!(registry.view_for_open_command(&command), None);
+        registry.set_view_available(view.clone(), true);
+        assert_eq!(registry.view_for_open_command(&command), Some(view.clone()));
+        let other = ViewId::new("other.view");
+        assert!(!registry.set_view_open_command(other, Some(command.clone())));
+        assert_eq!(registry.view_for_open_command(&command), Some(view.clone()));
+        assert!(registry.set_view_open_command(view, None));
+        assert_eq!(registry.view_for_open_command(&command), None);
     }
 
     #[gpui::test]

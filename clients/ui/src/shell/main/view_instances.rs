@@ -159,7 +159,7 @@ impl Shell {
     /// 同じ View のタブを、現在のパネルと同じ位置に1つ増やす。
     ///
     /// 個体化する View はタブごとに独立した実体を持つため、2つ目は新しい個体になる。
-    fn open_new_tab_for_view(&mut self, view: ViewId, cx: &mut Context<Self>) {
+    pub(super) fn open_new_tab_for_view(&mut self, view: ViewId, cx: &mut Context<Self>) {
         let Some(declaration) = self.feature_registry.declaration(&view) else {
             return;
         };
@@ -169,17 +169,24 @@ impl Shell {
         {
             return;
         }
+        let policy = declaration.instance_policy;
+        let default_zone = declaration.default_zone.unwrap_or(ZonePosition::Bottom);
         let position = self
             .shell
             .focused_panel
             .as_ref()
             .and_then(|panel| self.shell.layout.zone_for_panel(panel))
             .filter(|position| *position != ZonePosition::Main)
-            .unwrap_or(ZonePosition::Bottom);
-        let Ok(instance) = self.shell.next_tool_instance(&view) else {
-            return;
+            .unwrap_or(default_zone);
+        let tab = match policy {
+            extension_ui_contract::ToolInstancePolicy::Shared => PanelTab::tool(view.clone()),
+            extension_ui_contract::ToolInstancePolicy::Multiple => {
+                let Ok(instance) = self.shell.next_tool_instance(&view) else {
+                    return;
+                };
+                self.new_tab_for(&view, instance, None)
+            }
         };
-        let tab = self.new_tab_for(&view, instance, None);
         if let Ok(panel) = self.shell.layout.open_tab(position, tab) {
             self.shell.layout.set_panel_open(&panel, true);
             self.shell.layout.set_zone_open(position, true);
@@ -263,6 +270,71 @@ mod tests {
         fn requires_close_confirmation(&self, _: &ViewInstanceId, _: &App) -> bool {
             self.requires_confirmation
         }
+    }
+
+    #[gpui::test]
+    fn declared_command_opens_tabs_only_while_view_is_available(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx)
+        });
+        let lifecycle = Rc::new(RefCell::new(RecordingLifecycle::default()));
+        let window = cx.add_window(|_, cx| {
+            let document = cx.new(|_| Empty);
+            let mut shell = Shell::new(document.into(), HashMap::new(), cx);
+            shell.configure_view_lifecycles(lifecycle.clone(), ViewId::new(id::VIEW_TERMINAL), cx);
+            shell.set_extension_view_command(
+                ViewId::new(id::VIEW_TERMINAL),
+                Some("lapis.terminal.open".into()),
+                ZonePosition::Right,
+                cx,
+            );
+            shell
+        });
+        window
+            .update(cx, |shell, window, cx| {
+                shell.execute_command("lapis.terminal.open".into(), window, cx);
+                shell.execute_command("lapis.terminal.open".into(), window, cx);
+                let count = || {
+                    shell
+                        .shell
+                        .layout
+                        .placements()
+                        .iter()
+                        .filter(|(tab, _)| {
+                            tab.view_id()
+                                .is_some_and(|v| v.as_str() == id::VIEW_TERMINAL)
+                        })
+                        .count()
+                };
+                assert_eq!(count(), 2);
+                assert!(
+                    shell
+                        .shell
+                        .layout
+                        .placements()
+                        .iter()
+                        .filter(|(tab, _)| tab
+                            .view_id()
+                            .is_some_and(|v| v.as_str() == id::VIEW_TERMINAL))
+                        .all(|(_, panel)| shell.shell.layout.zone_for_panel(panel)
+                            == Some(ZonePosition::Right))
+                );
+                shell.set_view_available(ViewId::new(id::VIEW_TERMINAL), false, cx);
+                shell.execute_command("lapis.terminal.open".into(), window, cx);
+                assert_eq!(
+                    shell
+                        .shell
+                        .layout
+                        .placements()
+                        .iter()
+                        .filter(|(tab, _)| tab
+                            .view_id()
+                            .is_some_and(|v| v.as_str() == id::VIEW_TERMINAL))
+                        .count(),
+                    2
+                );
+            })
+            .unwrap();
     }
 
     #[gpui::test]

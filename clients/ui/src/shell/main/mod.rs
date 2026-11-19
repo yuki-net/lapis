@@ -512,6 +512,21 @@ impl Shell {
         cx.notify();
     }
 
+    pub(crate) fn set_extension_view_command(
+        &mut self,
+        view: ViewId,
+        command: Option<extension_ui_contract::CommandId>,
+        default_zone: ZonePosition,
+        cx: &mut Context<Self>,
+    ) {
+        self.feature_registry
+            .set_view_default_zone(&view, default_zone);
+        if !self.feature_registry.set_view_open_command(view, command) {
+            tracing::warn!("拡張の View コマンドが重複しています");
+        }
+        cx.notify();
+    }
+
     fn contribution_title(&self, contribution: &extension_ui_contract::UiContribution) -> String {
         contribution
             .view

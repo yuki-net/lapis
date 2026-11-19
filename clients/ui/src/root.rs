@@ -763,6 +763,12 @@ impl DesktopRoot {
                                         shell.update(cx, |shell, cx| {
                                             shell.set_view_available(ViewId::new(id::VIEW_TERMINAL), available, cx);
                                             if let (Some(snapshot), Some(view)) = (snapshot.as_ref(), declaration) {
+                                                shell.set_extension_view_command(
+                                                    ViewId::new(id::VIEW_TERMINAL),
+                                                    view.open_command.clone().map(Into::into),
+                                                    contributed_zone(view.default_zone),
+                                                    cx,
+                                                );
                                                 shell.set_extension_view_title(
                                                     ViewId::new(id::VIEW_TERMINAL),
                                                     snapshot.clone(),
