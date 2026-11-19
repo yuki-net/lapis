@@ -41,20 +41,30 @@ pub(crate) fn apply_view_state(
                 // 外部 Resource を参照するタブは、Resource の実在確認を再アタッチ時に任せ、
                 // 参照 ID だけで復元する。どの View が参照するかは宣言から決まる。
                 PanelTab::Tool { resource, .. } if resource.is_some() => true,
-                PanelTab::Tool { view, .. } => [
-                    ZonePosition::Main,
-                    ZonePosition::Left,
-                    ZonePosition::Bottom,
-                    ZonePosition::Right,
-                ]
-                .into_iter()
-                .flat_map(|position| registry.zone_contributions(position))
-                .any(|contribution| contribution.view.as_ref() == Some(view)),
+                PanelTab::Tool { view, .. } => {
+                    [
+                        ZonePosition::Main,
+                        ZonePosition::Left,
+                        ZonePosition::Bottom,
+                        ZonePosition::Right,
+                    ]
+                    .into_iter()
+                    .flat_map(|position| registry.zone_contributions(position))
+                    .any(|contribution| contribution.view.as_ref() == Some(view))
+                        || matches!(reference, TabRef::View { view: Some(_), .. })
+                }
             }
             .then_some(tab)
         })
     });
     shell.layout = restored.unwrap_or_default();
+    shell.unregistered_view_types = shell
+        .layout
+        .placements()
+        .into_iter()
+        .filter_map(|(tab, _)| tab.view_id().cloned())
+        .filter(|view| registry.declaration(view).is_none())
+        .collect();
     shell.show_panel_controls = view.show_panel_controls;
     shell.synchronize_documents(documents);
 }
@@ -151,6 +161,57 @@ mod tests {
                 .as_str(),
             "example.view"
         );
+    }
+
+    #[test]
+    fn pending_extension_tabs_survive_until_the_view_is_registered() {
+        use extension_ui_contract::{FeatureDescriptor, UiContribution, UiSlot};
+        let mut registry = crate::features::bundled_registry();
+        let pending = PanelTab::tool_instance("example.later.view", "opaque-id");
+        let resource = PanelTab::external("example.later.view", "other-id", Some("session".into()));
+        let mut original = ShellState::default();
+        original.layout_profile.set(LayoutProfile::Wide);
+        original
+            .layout
+            .open_tab(ZonePosition::Bottom, pending.clone())
+            .unwrap();
+        original
+            .layout
+            .open_tab(ZonePosition::Bottom, resource.clone())
+            .unwrap();
+        let saved = capture_view_state(&original);
+        let mut restored = ShellState::default();
+        restored.layout_profile.set(LayoutProfile::Wide);
+        apply_view_state(saved, &mut restored, &[], &registry);
+        assert!(restored.layout.find_tab(&pending).is_some());
+        let restored_resource = restored
+            .layout
+            .placements()
+            .into_iter()
+            .map(|(tab, _)| tab)
+            .find(|tab| tab.resource() == Some("session"))
+            .unwrap();
+        assert!(!restored.view_visible(&pending));
+        assert!(!restored.view_visible(&restored_resource));
+        let persisted = capture_view_state(&restored);
+        registry
+            .register(
+                FeatureDescriptor::core("example.later").contributes(
+                    UiContribution::view(
+                        "example.later.view",
+                        UiSlot::BottomDock,
+                        "Example",
+                        "example",
+                        0,
+                    )
+                    .multiple_instances(),
+                ),
+            )
+            .unwrap();
+        apply_view_state(persisted, &mut restored, &[], &registry);
+        assert!(restored.layout.find_tab(&pending).is_some());
+        assert!(restored.view_visible(&pending));
+        assert!(restored.view_visible(&restored_resource));
     }
 
     #[test]

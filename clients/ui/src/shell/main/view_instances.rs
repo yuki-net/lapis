@@ -34,6 +34,9 @@ impl Shell {
     ) {
         self.feature_registry
             .register_view_lifecycle(view.clone(), lifecycle);
+        if self.feature_registry.declaration(&view).is_some() {
+            self.shell.unregistered_view_types.remove(&view);
+        }
         // 機能の外部変更通知を、Shell の再同期へ繋ぐ。変更は画面全体ではなく
         // 該当 View の個体だけに配る。
         let shell = cx.entity().downgrade();

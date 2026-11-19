@@ -151,7 +151,7 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 - `ZonePolicy`はZoneの開閉・Panel数・成長方向・サイズ制約を定義する。Mainは常に開き、削除不能な一つのPanelを持つ。Zone内部の順序と比率は`PanelLayout`で表し、初期状態もPanel追加後も同じRendererを使う。空ZoneはTool Pickerから初回Panelを作成する。
 - `DockGeometry`はViewportとLayoutからFrame・Zone・Panel・境界を計算し、描画と操作に使用する。RootとDetachedは同じFrameを使う。Zone操作は共通Commandを経由する。
 - `ViewId`は種類、`ViewInstanceId`は個体を識別する。Layoutの保存値はZone・Panel・Tab参照だけを含む。Resource未確定のView参照には両方のIDを保存し、View IDのない旧参照は個体IDから復元する。旧Clientが同じ個体を更新する場合、Hostは同じLayout内で一意に特定できるView IDを引き継ぐ。旧Layout形式は復元せず、Task・未保存Documentなど別の保存値は保持する。
-- 復元時はZone・Panel IDとTab個体の一意性、所属、比率、有限サイズを検証し、不正なLayoutは既定配置へ戻す。利用できないTabは除外する。
+- 復元時はZone・Panel IDとTab個体の一意性、所属、比率、有限サイズを検証し、不正なLayoutは既定配置へ戻す。利用できないDocumentと旧形式の不明なViewは除外する。明示的なView IDを持つ未登録の拡張Tabは、宣言を再取得できるまで非表示で保持する。
 - Zoneの開閉とPanel個別の表示状態は別に保存する。最後のTabが移動したSide Panelは閉鎖中の状態を経て除去する。空のSide Zoneも再び開くことができる。
 - Viewport幅の境界は `LayoutProfile` が決める。Wide は 960px 以上、Compact は 960px 未満とし、境界付近の往復を抑えるため Compact から Wide へは 960px、Wide から Compact へは 928px（960px − 32px のヒステリシス）で切り替える。
 - `InteractionPolicy` は Profile と入力方式（Mouse / Touch）から操作の可否を決める。Compact では Panel の drag / resize / tab detach を無効化し、Context Menu は Mouse なら右クリック、Touch なら長押しとする。

@@ -153,6 +153,8 @@ pub(crate) struct ShellState {
     pub(crate) hidden_views: std::collections::HashSet<ViewInstanceId>,
     /// 利用できない拡張の View 種別。Task 単位の非表示とは別に保持する。
     pub(crate) hidden_view_types: std::collections::HashSet<extension_ui_contract::ViewId>,
+    /// 宣言をまだ受け取れていない View。配置は保持して表示だけを待つ。
+    pub(crate) unregistered_view_types: std::collections::HashSet<extension_ui_contract::ViewId>,
     pub layout: DockLayout,
     pub bottom_span_left_transition: Option<PanelSpanTransition>,
     pub bottom_span_right_transition: Option<PanelSpanTransition>,
@@ -182,6 +184,7 @@ impl Default for ShellState {
             focused_panel: None,
             hidden_views: Default::default(),
             hidden_view_types: Default::default(),
+            unregistered_view_types: Default::default(),
             layout: DockLayout::default(),
             bottom_span_left_transition: None,
             bottom_span_right_transition: None,
@@ -208,9 +211,10 @@ impl Default for ShellState {
 impl ShellState {
     pub(crate) fn view_visible(&self, tab: &PanelTab) -> bool {
         !self.hidden_views.contains(&tab.instance_id())
-            && tab
-                .view_id()
-                .is_none_or(|view| !self.hidden_view_types.contains(view))
+            && tab.view_id().is_none_or(|view| {
+                !self.hidden_view_types.contains(view)
+                    && !self.unregistered_view_types.contains(view)
+            })
     }
 
     /// ターミナルタブが実際に画面へ出ているか。自動起動の判定に使う。
