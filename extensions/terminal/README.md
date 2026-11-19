@@ -9,7 +9,6 @@ Terminal の契約・Host 側状態・PTY 実装を配置する領域です。Cl
 - `native/`: 公開 native ABI v1 を使って同じロジックを接続する。Windows x86_64 の配布入力では、このライブラリと共通の設定・表示宣言を package に含める。通常の Client 経路への切り替えは未完了。
 - `api/`: component とクライアントが共有するセッション操作の v1 DTO。操作名も `terminal.v1.*` で版を持つ。Host 内部型には依存しない。
 - `contract/`（crate `terminal-contract`、参照名 `terminal`）: Terminal の型・wire DTO・`TerminalBackend` port の正本。
-- `host/`（crate `terminal-state`）: Host 側の正規状態、画面差分、接続 Session。`TerminalRegistry` がこれを持つ。
 - `adapter/`（crate `local-terminal`）: OS の PTY を使う `TerminalBackend` 実装。
 - `renderer/`（crate `terminal-renderer`）: VT/ANSI の画面状態と入力変換。PTY の所有と分けたネイティブ描画器で、現在の実装は Wasm に未対応。
 - `portable-renderer/`（crate `terminal-portable-renderer`）: Web と Wasm でもビルドできる画面モデル。ターミナル画面を Wasm で描画するものではない。
@@ -24,24 +23,19 @@ workspace 設定なしでビルドできることを検証する。
 役割ディレクトリで分けます。機能ごとの `src/` を平坦に並べると、契約と OS 依存実装と Host 状態のどれが正本か読み取れなくなるためです。
 
 - `contract/` は `contracts/` と同じ「models」層として依存検査します。Client と Host の両方から参照するためです。
-- `host/` は `host/runtime` と同じ「runtime」層として扱います。正規状態と操作判断を持ち、UI を持たないためです。
 - `logic/` もセッション状態と操作判断を持つため「runtime」層として扱います。Host の能力は port 経由で利用します。
 - `native/` は ABI とロジックを接続する「infrastructure」層として扱います。
 - `adapter/` は `host/adapters/*` と同じ「infrastructure」層として扱います。OS API と外部プロセスに触れるためです。
 - `renderer/` は PTY や Host を参照しない画面モデルとして扱います。
 - 固定データを配布する必要が出たら `assets/` を追加します。現時点で Terminal は配布する固定データを持たないため作りません。
 
-拡張の中にあっても層の意味は変えません。`scripts/check_architecture.py` は `extensions/<機能>/{contract,host,adapter}` をこの対応で分類します。
+拡張の中にあっても層の意味は変えません。`scripts/check_architecture.py` は `extensions/<機能>/{contract,adapter}` をこの対応で分類します。
 
 ## 配線
 
-Host は build 時にこの拡張をリンクして注入します。
 
-- `host/runtime`（`backend-state`）は `terminal-state` を path 依存で参照します。
-- `host/app` は移行途中の旧経路で `local-terminal` を直接参照し、`LocalTerminalBackend` と既定 profile を組み立てます。汎用の `host/adapters/local` は Terminal を参照しません。
-- `host/adapters/terminal` と `host/terminal` は削除済みです。旧位置に re-export を残すと「どちらが正本か」が読めなくなるためです。
 
-workspace は `Cargo.toml` の `extensions/*/*` glob で `contract` / `host` / `adapter` / `renderer` を拾います。
+workspace は `Cargo.toml` の `extensions/*/*` glob で `contract` / `adapter` / `renderer` を拾います。
 
 ## 挙動
 
@@ -65,6 +59,6 @@ Terminal の Client UI は、共通 Layout の宣言と内部レジストリを�
 
 ## 検証
 
-- `cargo test -p terminal-contract -p terminal-state -p terminal-renderer -p local-terminal`
+- `cargo test -p terminal-contract -p terminal-renderer -p local-terminal`
 - `python scripts/check_architecture.py`
 - `python -m unittest scripts.ci.test_paths`

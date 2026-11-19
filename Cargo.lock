@@ -9174,17 +9174,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "terminal-state"
-version = "0.1.0"
-dependencies = [
- "client-api",
- "editor-core",
- "futures-channel",
- "process",
- "terminal-contract",
-]
-
-[[package]]
 name = "terminfo"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

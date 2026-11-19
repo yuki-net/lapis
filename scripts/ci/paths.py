@@ -61,7 +61,7 @@ PATH_RULES = [
     # Terminal 拡張は役割ごとに影響する surface が異なるため、契約と実装を分ける。
     # （実装は PTY を含み wasm でビルドしない）
     (["extensions/terminal/contract/"], {"rust_core", "host", "desktop", "web"}),
-    (["extensions/terminal/host/", "extensions/terminal/adapter/", "extensions/terminal/README.md"], {"rust_core", "host", "desktop"}),
+    (["extensions/terminal/adapter/", "extensions/terminal/README.md"], {"rust_core", "host", "desktop"}),
     # 未登録の拡張・宣言・アセットも Client へ影響し得るため、既知の Host 専用箇所以外は広く検証する。
     (["extensions/"], {"repository", "rust_core", "host", "desktop", "web"}),
     
