@@ -467,7 +467,13 @@ pub fn run_managed_host(root: &Path, directory: &Path) -> Result<(), Error> {
     // Host自身が終了まで所有する。PIDが他ユーザーへ再利用されても、このleaseはOSが解放する。
     let _lease = HostLease::acquire(directory)?;
     let root = root.canonicalize()?;
-    let host = BackendHost::start_with_state_directory(directory.to_owned())?;
+    let host = if std::env::var_os("LAPIS_DEV_BUNDLED_REFRESH").as_deref()
+        == Some(std::ffi::OsStr::new("1"))
+    {
+        BackendHost::start_with_development_bundles(directory.to_owned())?
+    } else {
+        BackendHost::start_with_state_directory(directory.to_owned())?
+    };
     let workspace = host.register_workspace(&root)?;
     let host_id = host.host_id();
     let identity = crate::identity::HostIdentity::load_or_create(Some(directory))?;

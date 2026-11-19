@@ -142,23 +142,29 @@ impl BackendHost {
         BackendClient::from(self.clone()).session_view()
     }
     pub fn start() -> Result<Self, BackendServiceError> {
-        Self::start_inner(None, false)
+        Self::start_inner(None, false, false)
     }
 
     pub fn start_with_state_directory(directory: PathBuf) -> Result<Self, BackendServiceError> {
-        Self::start_inner(Some(directory), false)
+        Self::start_inner(Some(directory), false, false)
     }
 
     /// ローカル開発に限り、署名のない拡張 package の導入と実行を許可する。
     pub fn start_development_with_state_directory(
         directory: PathBuf,
     ) -> Result<Self, BackendServiceError> {
-        Self::start_inner(Some(directory), true)
+        Self::start_inner(Some(directory), true, false)
+    }
+
+    /// 署名済み同梱物に限り、開発中の同一版更新を反映する。
+    pub fn start_with_development_bundles(directory: PathBuf) -> Result<Self, BackendServiceError> {
+        Self::start_inner(Some(directory), false, true)
     }
 
     fn start_inner(
         state_directory: Option<PathBuf>,
         development: bool,
+        development_refresh: bool,
     ) -> Result<Self, BackendServiceError> {
         let state = BackendState::new([]).map_err(BackendServiceError::State)?;
         let store = match &state_directory {
@@ -185,7 +191,14 @@ impl BackendHost {
                 .ok()
                 .and_then(|exe| {
                     exe.parent().map(|parent| {
-                        extensions.install_bundled(&parent.join("bundled-extensions"))
+                        if development_refresh {
+                            extensions.install_bundled_with_refresh(
+                                &parent.join("bundled-extensions"),
+                                true,
+                            )
+                        } else {
+                            extensions.install_bundled(&parent.join("bundled-extensions"))
+                        }
                     })
                 })
                 .and_then(Result::err)

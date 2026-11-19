@@ -143,6 +143,69 @@ fn bundled_upgrade_preserves_user_state_and_requires_same_signer_and_newer_versi
 }
 
 #[test]
+fn development_refresh_replaces_same_version_only_for_the_same_signer() {
+    let root = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(root.path().join("extensions")).unwrap();
+    let version = host_version();
+    let requires = &[(EXTENSION_CONTRACT, version.as_str(), version.as_str())];
+    let old_files: &[(&str, &[u8])] = &[("extension.wasm", b"old")];
+    let new_files: &[(&str, &[u8])] = &[("extension.wasm", b"new")];
+    let old = signed_manifest(
+        "extension",
+        "dev.example.refresh",
+        requires,
+        old_files,
+        |_| {},
+    );
+    let new = signed_manifest(
+        "extension",
+        "dev.example.refresh",
+        requires,
+        new_files,
+        |_| {},
+    );
+    let old = write_package(root.path(), "old.lapis", &old, old_files);
+    let new = write_package(root.path(), "new.lapis", &new, new_files);
+    let loader = loader();
+    let id = id("dev.example.refresh");
+    loader
+        .install_or_upgrade_bundled(&mut catalog, &old, true)
+        .unwrap();
+    loader.set_enabled(&mut catalog, &id, false).unwrap();
+    assert!(
+        loader
+            .install_or_upgrade_bundled(&mut catalog, &new, true)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        loader
+            .refresh_development_bundled(&mut catalog, &new, true)
+            .unwrap()
+            .is_some()
+    );
+    assert!(!catalog.get(&id).unwrap().state.is_enabled());
+    assert_eq!(
+        loader.load_installed(&mut catalog, &id).unwrap().files["extension.wasm"],
+        b"new"
+    );
+    assert!(
+        loader
+            .refresh_development_bundled(&mut catalog, &new, true)
+            .unwrap()
+            .is_none()
+    );
+    loader.remove(&mut catalog, &id).unwrap();
+    assert!(
+        loader
+            .refresh_development_bundled(&mut catalog, &old, true)
+            .unwrap()
+            .is_none()
+    );
+    assert!(!catalog.get(&id).unwrap().state.is_installed());
+}
+
+#[test]
 fn bundled_upgrade_does_not_replace_another_signer_or_incompatible_package() {
     let root = tempfile::tempdir().unwrap();
     let mut catalog = ExtensionCatalog::open(root.path().join("extensions")).unwrap();
@@ -173,6 +236,12 @@ fn bundled_upgrade_does_not_replace_another_signer_or_incompatible_package() {
     assert!(
         loader
             .install_or_upgrade_bundled(&mut catalog, &path, true)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        loader
+            .refresh_development_bundled(&mut catalog, &path, true)
             .unwrap()
             .is_none()
     );
@@ -256,6 +325,11 @@ fn unsigned_packages_require_explicit_development_mode() {
     );
     assert!(loader().install(&mut catalog, &package, true).is_err());
     let development = loader().allow_unsigned_local_development();
+    assert!(
+        development
+            .refresh_development_bundled(&mut catalog, &package, true)
+            .is_err()
+    );
     assert!(
         development
             .install(&mut catalog, &package, true)
@@ -602,7 +676,12 @@ fn capability_approval_is_scoped_to_signed_package_and_persists() {
         },
     );
     let updated_path = write_package(root.path(), "updated.lapis", &updated, files);
-    loader.install(&mut catalog, &updated_path, true).unwrap();
+    assert!(
+        loader
+            .refresh_development_bundled(&mut catalog, &updated_path, true)
+            .unwrap()
+            .is_some()
+    );
     let updated_package = loader
         .load_installed(&mut catalog, &id("dev.example.terminal"))
         .unwrap();

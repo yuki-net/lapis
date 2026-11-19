@@ -119,6 +119,7 @@ enum InstallPolicy {
     Explicit,
     Missing,
     BundledUpgrade,
+    DevelopmentRefresh,
 }
 
 impl VerifiedPackage {
@@ -418,6 +419,16 @@ impl ExtensionLoader {
         self.install_inner(catalog, package, enabled, InstallPolicy::BundledUpgrade)
     }
 
+    /// 開発時のみ、同じ署名者による同一版の変更も再導入する。
+    pub fn refresh_development_bundled(
+        &self,
+        catalog: &mut ExtensionCatalog,
+        package: &Path,
+        enabled: bool,
+    ) -> Result<Option<InstallOutcome>, PackageError> {
+        self.install_inner(catalog, package, enabled, InstallPolicy::DevelopmentRefresh)
+    }
+
     fn install_inner(
         &self,
         catalog: &mut ExtensionCatalog,
@@ -430,6 +441,16 @@ impl ExtensionLoader {
             .get(MANIFEST_NAME)
             .ok_or_else(|| PackageError::Malformed(format!("{MANIFEST_NAME} がない")))?;
         let manifest = parse_manifest(manifest_value, &self.keys, self.allow_unsigned_development)?;
+        if matches!(policy, InstallPolicy::DevelopmentRefresh)
+            && serde_json::from_slice::<Value>(manifest_value)
+                .map_err(|error| PackageError::Malformed(error.to_string()))?
+                .get("key_id")
+                .is_none()
+        {
+            return Err(PackageError::Malformed(
+                "開発用同梱物には署名が必要です".into(),
+            ));
+        }
         if manifest.kind != PackageKind::Extension {
             return Err(PackageError::NotAnExtension(manifest.kind));
         }
@@ -445,7 +466,7 @@ impl ExtensionLoader {
             match policy {
                 InstallPolicy::Explicit => {}
                 InstallPolicy::Missing => return Ok(None),
-                InstallPolicy::BundledUpgrade => {
+                InstallPolicy::BundledUpgrade | InstallPolicy::DevelopmentRefresh => {
                     if !entry.state.is_installed() {
                         return Ok(None);
                     }
@@ -455,7 +476,10 @@ impl ExtensionLoader {
                     ) else {
                         return Ok(None);
                     };
-                    if !old.cmp_precedence(&new).is_lt() {
+                    let order = old.cmp_precedence(&new);
+                    if order.is_gt()
+                        || (order.is_eq() && matches!(policy, InstallPolicy::BundledUpgrade))
+                    {
                         return Ok(None);
                     }
                     let directory = catalog.installed_directory(&manifest.id)?;
@@ -480,6 +504,9 @@ impl ExtensionLoader {
                         return Err(PackageError::Malformed(
                             "目録と導入済み manifest が一致しません".into(),
                         ));
+                    }
+                    if order.is_eq() && old_raw == *manifest_value {
+                        return Ok(None);
                     }
                     enabled = entry.state.is_enabled();
                 }

@@ -81,6 +81,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
             session.file_name().unwrap().to_string_lossy()
         );
         let mut command = Command::new(desktop);
+        command.env("LAPIS_DEV_BUNDLED_REFRESH", "1");
         if env::var_os("LAPIS_WEB_DIST").is_none() {
             command.env("LAPIS_WEB_DIST", root.join("clients/web/dist"));
         }
@@ -297,6 +298,7 @@ fn hot_reload(root: &Path, arguments: &[OsString]) -> Result<i32, Box<dyn std::e
             session.file_name().unwrap().to_string_lossy()
         );
         let mut command = Command::new(&dx);
+        command.env("LAPIS_DEV_BUNDLED_REFRESH", "1");
         if env::var_os("LAPIS_WEB_DIST").is_none() {
             command.env("LAPIS_WEB_DIST", root.join("clients/web/dist"));
         }

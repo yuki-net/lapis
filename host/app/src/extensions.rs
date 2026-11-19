@@ -105,6 +105,14 @@ fn trusted_keys(directory: Option<&std::path::Path>) -> Result<TrustedKeys, Stri
 impl HostExtensions {
     /// 同梱物を署名・互換性検証し、同じ署名者による新しい版へ更新する。
     pub(crate) fn install_bundled(&self, directory: &std::path::Path) -> Result<(), String> {
+        self.install_bundled_with_refresh(directory, false)
+    }
+
+    pub(crate) fn install_bundled_with_refresh(
+        &self,
+        directory: &std::path::Path,
+        development_refresh: bool,
+    ) -> Result<(), String> {
         let entries = match std::fs::read_dir(directory) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -129,7 +137,12 @@ impl HostExtensions {
         let mut catalog = self.catalog_mut()?;
         let mut failures = Vec::new();
         for path in paths {
-            if let Err(error) = loader.install_or_upgrade_bundled(&mut catalog, &path, true) {
+            let result = if development_refresh {
+                loader.refresh_development_bundled(&mut catalog, &path, true)
+            } else {
+                loader.install_or_upgrade_bundled(&mut catalog, &path, true)
+            };
+            if let Err(error) = result {
                 self.record_recovery_failure(&error);
                 if error.leaves_inconsistent_state() {
                     return Err(error.to_string());
