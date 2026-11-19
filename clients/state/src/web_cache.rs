@@ -264,7 +264,6 @@ mod tests {
                 name: "Workspace A".to_owned(),
             },
             documents,
-            terminals: Vec::new(),
             git_repositories: Vec::new(),
         }
     }

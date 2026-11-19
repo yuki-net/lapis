@@ -758,7 +758,6 @@ impl BackendState {
                     event_watermark: workspace.events.watermark(),
                     workspace: workspace.summary.clone(),
                     documents,
-                    terminals: Vec::new(),
                     git_repositories: workspace.git.statuses().cloned().collect(),
                 },
             }),
