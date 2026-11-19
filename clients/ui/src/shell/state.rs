@@ -683,7 +683,7 @@ mod tests {
         let saved = original.layout.capture();
         let mut restored = ShellState {
             layout: DockLayout::restore(&saved, |raw| {
-                let desktop_client::TabRef::View { id } = raw else {
+                let desktop_client::TabRef::View { id, .. } = raw else {
                     return None;
                 };
                 let view = id

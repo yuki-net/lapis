@@ -29,6 +29,7 @@ pub(crate) fn serialize_tab(tab: &PanelTab) -> desktop_client::TabRef {
             },
             None => desktop_client::TabRef::View {
                 id: instance.as_str().to_owned(),
+                view: tab.view_id().map(|view| view.as_str().to_owned()),
             },
         },
     }
@@ -41,11 +42,17 @@ pub(crate) fn serialize_tab(tab: &PanelTab) -> desktop_client::TabRef {
 pub(crate) fn tab_refers_to(reference: &desktop_client::TabRef, tab: &PanelTab) -> bool {
     match (reference, tab) {
         (desktop_client::TabRef::Document { id }, PanelTab::Document(tab_id)) => id == tab_id,
-        (desktop_client::TabRef::Resource { id, .. }, PanelTab::Tool { .. }) => {
+        (desktop_client::TabRef::Resource { id, view }, PanelTab::Tool { .. }) => {
             tab.resource() == Some(id.as_str())
+                && view
+                    .as_ref()
+                    .is_none_or(|view| tab.view_id().is_some_and(|id| id.as_str() == view))
         }
-        (desktop_client::TabRef::View { id }, PanelTab::Tool { .. }) => {
+        (desktop_client::TabRef::View { id, view }, PanelTab::Tool { .. }) => {
             tab.instance_id().as_str() == id
+                && view
+                    .as_ref()
+                    .is_none_or(|view| tab.view_id().is_some_and(|id| id.as_str() == view))
         }
         _ => false,
     }
@@ -759,6 +766,17 @@ impl DockLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn references_match_the_view_as_well_as_the_resource_or_instance() {
+        let first = PanelTab::external("example.first", "opaque", Some("same-resource".into()));
+        let other = PanelTab::external("example.other", "other", Some("same-resource".into()));
+        assert!(tab_refers_to(&serialize_tab(&first), &first));
+        assert!(!tab_refers_to(&serialize_tab(&first), &other));
+        let first = first.with_resource(None);
+        let other = PanelTab::tool_instance("example.other", "opaque");
+        assert!(!tab_refers_to(&serialize_tab(&first), &other));
+    }
 
     #[test]
     fn saved_zone_names_are_the_current_zone_contract() {
@@ -1539,7 +1557,7 @@ mod tests {
         zone.panels[0].id = "panel-999".into();
         assert!(
             DockLayout::restore(&saved, |raw| {
-                matches!(raw, desktop_client::TabRef::View { id } if id.contains(crate::features::id::VIEW_FILES))
+                matches!(raw, desktop_client::TabRef::View { id, .. } if id.contains(crate::features::id::VIEW_FILES))
                     .then(|| PanelTab::tool(crate::features::id::VIEW_FILES))
             })
             .is_none()
@@ -1567,7 +1585,7 @@ mod tests {
             DockLayout::restore(&saved, |raw| {
                 if matches!(
                     raw,
-                    desktop_client::TabRef::View { id } if id.contains("shared:same")
+                    desktop_client::TabRef::View { id, .. } if id.contains("shared:same")
                 ) {
                     Some(tab.clone())
                 } else {

@@ -300,6 +300,8 @@ pub enum TabRef {
     /// ViewInstanceId。同じViewを複数開いても個体を区別できる。
     View {
         id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        view: Option<String>,
     },
 }
 
@@ -314,6 +316,7 @@ impl TabRef {
         let (_, instance) = value.strip_prefix("tool:")?.split_once(':')?;
         (!instance.is_empty()).then(|| Self::View {
             id: instance.to_owned(),
+            view: None,
         })
     }
 
@@ -354,7 +357,9 @@ impl<'de> Deserialize<'de> for TabRef {
                 // 旧形式の terminal タブは View 未指定の外部 Resource として読む。
                 "terminal" if !id.is_empty() => Ok(Self::Resource { view: None, id }),
                 "resource" if !id.is_empty() => Ok(Self::Resource { view, id }),
-                "view" if !id.is_empty() => Ok(Self::View { id }),
+                "view" if !id.is_empty() && view.as_ref().is_none_or(|view| !view.is_empty()) => {
+                    Ok(Self::View { id, view })
+                }
                 _ => Err(serde::de::Error::custom("不正なタブ参照")),
             },
         }
@@ -435,7 +440,8 @@ mod tests {
                     id: DocumentId::new("doc-a")
                 },
                 TabRef::View {
-                    id: "lapis.view.terminal:token".into()
+                    id: "lapis.view.terminal:token".into(),
+                    view: None,
                 }
             ]
         );
