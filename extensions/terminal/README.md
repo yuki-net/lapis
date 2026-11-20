@@ -10,8 +10,8 @@ Terminal のセッション操作、公開 DTO、Client の画面モデルを配
 - `api/`: component とクライアントが共有するセッション操作の v1 DTO。操作名も `terminal.v1.*` で版を持つ。Host 内部型には依存しない。
 - `contract/`（crate `terminal-contract`、参照名 `terminal`）: Terminal の型・wire DTO・`TerminalBackend` port の正本。
 - `adapter/`（crate `local-terminal`）: 旧 `TerminalBackend` の PTY 実装。現行 Host は参照せず、一部の非 Windows テストで使う。
-- `renderer/`（crate `terminal-renderer`）: VT/ANSI の画面状態と入力変換。PTY の所有と分けたネイティブ描画器で、現在の実装は Wasm に未対応。
-- `portable-renderer/`（crate `terminal-portable-renderer`）: Web と Wasm でもビルドできる画面モデル。ターミナル画面を Wasm で描画するものではない。
+- `renderer/`（crate `terminal-renderer`）: Desktop のネイティブ描画器。VT/ANSI の画面状態と入力変換を担い、PTY を所有しない。
+- `portable-renderer/`（crate `terminal-portable-renderer`）: Web と Wasm でもビルドできる画面モデル。ターミナル画面を Wasm で描画するものではない。Web はこのモデルをクライアント側で描画し、拡張ロジックだけが Wasm で動く。
 
 `component/`、`logic/`、`api/` は同じ親ディレクトリに置けば本体の Cargo workspace 外でも
 ビルドできる。`python -m scripts.extensions.smoke_terminal` はその状態をコピーで再現し、

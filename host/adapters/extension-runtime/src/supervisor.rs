@@ -690,18 +690,6 @@ impl Worker {
     }
 
     fn terminate(&mut self) {
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            use std::process::{Command, Stdio};
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            let _ = Command::new("taskkill")
-                .args(["/F", "/T", "/PID", &self.child.id().to_string()])
-                .creation_flags(CREATE_NO_WINDOW)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-        }
         let _ = self.child.kill();
         let deadline = Instant::now() + TERMINATION_TIMEOUT;
         loop {

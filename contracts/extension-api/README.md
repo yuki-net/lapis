@@ -5,9 +5,10 @@
 Host 能力の引数・応答は UTF-8 の JSON とする。入力領域は呼び出し中だけ有効で、
 応答領域は確保した側の `release` で解放する。Host の context は不透明な値であり、
 拡張は参照しない。互換性を壊す版は別の entry symbol と型を追加する。
-この ABI の package 読み込み・署名照合・権限管理への接続は未実装。
-ネイティブコードは ABI だけでは OS アクセスを制限できず、既存の Wasm 実行とは
-隔離の性質が異なる。
+package の署名照合・互換性検証は Host が行い、検証済み image だけを独立した拡張ホストへ
+渡す。ネイティブコードは ABI だけでは OS アクセスを制限できず、既存の Wasm 実行とは
+隔離の性質が異なる。通常導入では署名を必須とし、明示的な開発モードだけ未署名 package を
+許可する。
 
 拡張開発者と拡張ホストが共通に使う WIT の正本。`wit/v1` はライフサイクル、
 `wit/pty-v1` は汎用 PTY セッションの契約である。PTY を使う package は `requires` に
@@ -36,4 +37,5 @@ Workspace 間の拡張状態はまだ分離されていないため、Host 全�
 `lapis.extension.contributions` とは独立して版を持つ。型の正本は
 `contracts/domain/extension-ui` の `StaticViews`。ID と command は提供元の名前空間に
 属し、title は同じ package の既定言語に存在しなければならない。Host は検証した宣言を
-Client に再配布する。描画器への接続とアイコン配布はまだ実装されていない。
+Client に再配布する。Desktop と Web は `content_type` をネイティブ描画器へ接続する。
+アイコン配布はまだ実装されていない。

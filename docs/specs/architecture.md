@@ -13,7 +13,7 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 | `contracts/protocol/` | request/response/event、revision、認可可能な操作契約 | OS 実装、Client の画面構成 |
 | `contracts/transport/wire/` | Transport 固有の wire DTO | domain の規則、Client の画面構成 |
 | `extensions/git/contract/` | Git 拡張の wire 契約（domain git の DTO を再エクスポート） | 拡張の実装、Client の画面構成 |
-| `extensions/terminal/` | Terminal の `contract/` は型・wire DTO・`TerminalBackend` port の正本、`host/` は Host の正規状態、`adapter/` は PTY 実装 | Client の画面構成。Terminal 固有の配線を拡張境界へ移す作業は未完了 |
+| `extensions/terminal/` | Terminal の `contract/` は型・wire DTO・`TerminalBackend` port の正本、`component/` は公開 Wasm 契約のアダプター、`logic/` はセッション判断、`native/` は native ABI のアダプター、`renderer/` と `portable-renderer/` はクライアント側の画面モデル | Client の Window・Panel・Tab の正規状態 |
 | `clients/transport/` | Client共通の非同期要求・応答照合と接続世代 | UI、具体的な通信経路 |
 | `host/application/` | 操作と判断、port による外部連携 | GPUI、OS 固有 API |
 | `host/runtime/` | 正規状態、操作の直列化、購読・revision・実行資源の寿命 | Window、Panel、focus |

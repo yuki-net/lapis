@@ -225,22 +225,8 @@ impl Process {
         if self.refresh_exit()?.is_some() {
             return Ok(());
         }
-        // Windows の ConPTY は master が残っている間、reader を EOF にしない。
-        // 子プロセスを止める前に閉じ、reader が process mutex を再取得する前に
-        // try_wait できるよう lock 順を断ち切る。
-        drop(self.master.take());
-        #[cfg(windows)]
-        if let Some(pid) = self.child.process_id() {
-            use std::os::windows::process::CommandExt;
-            use std::process::{Command, Stdio};
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            let _ = Command::new("taskkill")
-                .args(["/F", "/T", "/PID", &pid.to_string()])
-                .creation_flags(CREATE_NO_WINDOW)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-        }
+        // ClosePseudoConsole は子プロセスの離脱を待つため、先に master を閉じると
+        // kill より先に停止し得る。先に停止要求を出し、終了確認で master を解放する。
         if let Err(problem) = self.child.kill()
             && self.refresh_exit()?.is_none()
         {
