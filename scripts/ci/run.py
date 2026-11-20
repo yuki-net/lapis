@@ -85,15 +85,21 @@ def missing_prerequisites(route) -> list[str]:
 def run_step(route, step, log: report.LocalLog | None) -> dict:
     """1 step を実行し、結果を返す。失敗は例外にせず結果に落とす。
 
-    出力はパイプではなくファイルへ直接書かせる。パイプだと、cargo やテストが
-    起動した孫プロセスが書き込み端を掴んだままになり、直接の子が終了しても
-    `communicate()` が EOF を待ち続けて step がハングする（実際に CI の
-    `Test desktop terminal pty` が 18 分止まった）。
+    出力はパイプではなく実ファイルへ書かせ、待ちながら追記分を表示する。
+
+    - パイプだと、cargo やテストが起動した孫プロセスが書き込み端を掴んだまま
+      になり、直接の子が終了しても EOF を待ち続ける（CI で 18 分ハングした）
+    - 終了までバッファすると、ハングしたときに何も分からない（同じ step が
+      2 回 25 分止まって原因不明だった）
+
+    追記読み出しなので、長い step でも進行が見え、ハング箇所も特定できる。
+    step に個別の上限が無い場合は route の上限を使い、job 予算を食い潰さない。
     """
     directory = ROOT / (route.working_directory or "") / (step.directory or "")
     command = [substitute(part) for part in step.command]
     environment = dict(os.environ)
     environment.update({key: substitute(value) for key, value in step.env.items()})
+    limit = (step.timeout_minutes or route.timeout_minutes) * 60
     if log is not None:
         log.begin(route.key, step.name)
 
@@ -104,41 +110,9 @@ def run_step(route, step, log: report.LocalLog | None) -> dict:
     for attempt in range(1, attempts + 1):
         report.group(step.name)
         started = time.perf_counter()
-        with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as capture:
-            process = subprocess.Popen(
-                command,
-                cwd=directory,
-                env=environment,
-                stdin=subprocess.DEVNULL,
-                stdout=capture,
-                stderr=subprocess.STDOUT,
-                # タイムアウト時に子孫まで止められるよう、独立した
-                # プロセスグループ / セッションで起動する。
-                start_new_session=(os.name != "nt"),
-                creationflags=(
-                    subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
-                ),
-            )
-            try:
-                process.wait(timeout=(step.timeout_minutes * 60) if step.timeout_minutes else None)
-                timed_out = False
-            except subprocess.TimeoutExpired:
-                terminate_tree(process)
-                timed_out = True
-            ok = not timed_out and process.returncode == 0
-
-            capture.seek(0)
-            output = capture.read()
+        output, ok = execute_step(command, directory, environment, limit)
         report.endgroup()
 
-        if timed_out:
-            output += f"\nstep exceeded {step.timeout_minutes} minutes\n"
-
-        # GitHub は step 単位でログを畳んで見せるため全行を出す。
-        # ローカルは失敗した step だけ抜粋し、成功 step の出力は捨てる。
-        if report.on_github() or not ok:
-            for line in output.splitlines():
-                print(line, flush=True)
         if log is not None:
             log.write(output)
 
@@ -157,13 +131,78 @@ def run_step(route, step, log: report.LocalLog | None) -> dict:
     }
 
 
-def terminate_tree(process: subprocess.Popen) -> None:
-    """タイムアウトした step の子孫プロセスも含めて止める。
+def execute_step(
+    command: list[str], directory: Path, environment: dict[str, str], limit: float | None
+) -> tuple[str, bool]:
+    """コマンドを実行し、(出力, 成功したか) を返す。
 
-    `subprocess.run(timeout=...)` は直接の子だけを kill するため、cargo や
-    テストが起動した孫が stdout を掴んだまま残り、待ち続けることがある。
-    Windows は `taskkill /T`、POSIX はセッションへの SIGKILL を使う。
+    出力は一時ファイルへ書き、待っている間に追記分を stdout へ流す。
+    タイムアウト時は子孫プロセスも含めて止める。
     """
+    capture = tempfile.NamedTemporaryFile(suffix=".log", delete=False)
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=directory,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=capture,
+            stderr=subprocess.STDOUT,
+            # タイムアウト時に子孫まで止められるよう、独立したプロセス
+            # グループ / セッションで起動する。
+            start_new_session=(os.name != "nt"),
+            creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0),
+        )
+        capture.close()
+
+        deadline = (time.perf_counter() + limit) if limit else None
+        timed_out = False
+        position = 0
+        while True:
+            try:
+                process.wait(timeout=0.5)
+                break
+            except subprocess.TimeoutExpired:
+                pass
+            position = pump_output(capture.name, position)
+            if deadline is not None and time.perf_counter() > deadline:
+                terminate_tree(process)
+                timed_out = True
+                break
+
+        position = pump_output(capture.name, position)
+        output = Path(capture.name).read_text(encoding="utf-8", errors="replace")
+        if timed_out:
+            output += f"\nstep exceeded {limit / 60:g} minutes\n"
+            report.error("step timed out; terminated the process tree")
+            return output, False
+        return output, process.returncode == 0
+    finally:
+        capture.close()
+        try:
+            Path(capture.name).unlink(missing_ok=True)
+        except PermissionError:
+            # 孫プロセスがまだ掴んでいる場合は消せない。OS の一時領域に任せる。
+            pass
+
+
+def pump_output(path: str, position: int) -> int:
+    """出力ファイルの position 以降を読み、GitHub では即座に表示する。"""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            handle.seek(position)
+            chunk = handle.read()
+    except FileNotFoundError:
+        return position
+    if chunk and report.on_github():
+        # step の進行が CI ログから見えるようにする。ハング箇所の特定に要る。
+        for line in chunk.splitlines():
+            print(line, flush=True)
+    return position + len(chunk)
+
+
+def terminate_tree(process: subprocess.Popen) -> None:
+    """タイムアウトした step の子孫プロセスも含めて止める。"""
     if process.poll() is not None:
         return
     if os.name == "nt":
