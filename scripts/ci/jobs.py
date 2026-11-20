@@ -139,10 +139,6 @@ _HOST_PTY_STEPS = (
         "Test terminal component pty",
         ["cargo", "test", "--locked", "-p", "host", "terminal_component_uses_approved_host_pty", "--", "--ignored"],
     ),
-    Step(
-        "Test desktop terminal pty",
-        ["cargo", "test", "--locked", "-p", "lapis", "desktop_terminal_runs_real_extension_pty", "--", "--ignored"],
-    ),
 )
 
 # Rust Core の外部拡張 component 検証。
@@ -284,6 +280,13 @@ ROUTES: dict[str, Route] = {
             ),
             Step("Build lapis-terminal-native", ["cargo", "build", "--locked", "-p", "lapis-terminal-native"]),
             Step("Test Desktop", py("scripts/check.py", "desktop", "test"), timeout_minutes=20),
+            # Desktop を丸ごとビルドする必要があるテストは、Desktop のビルド済み
+            # 環境でだけ実行する。Host ジョブで走らせると lapis のビルドが
+            # 間に合わず job の上限まで張り付く（旧 CI も Desktop 側で実行していた）。
+            Step(
+                "Test desktop terminal pty",
+                ["cargo", "test", "--locked", "-p", "lapis", "desktop_terminal_runs_real_extension_pty", "--", "--ignored"],
+            ),
             Step("Lint Desktop", py("scripts/check.py", "desktop", "lint")),
             Step("Build Desktop", py("scripts/check.py", "desktop", "build")),
             Step(
