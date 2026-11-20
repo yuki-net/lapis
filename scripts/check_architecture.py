@@ -99,16 +99,17 @@ ALLOWED = {
 
 def layer(manifest, root):
     relative = Path(manifest).resolve().relative_to(root.resolve()).as_posix()
-    # 拡張は役割ディレクトリで構成する（`contract` / `host` / `adapter`）。
+    # 拡張は役割ディレクトリで構成する（`contract` / `logic` / `host` / `adapter` / `renderer`）。
     # Host 状態サービスは runtime、OS に触れる実装は infrastructure として扱い、
     # 拡張の中にあっても層の意味を変えない。
     parts = relative.split("/")
     if len(parts) >= 3 and parts[0] == "extensions":
-        roles = {"contract": "models", "host": "runtime", "adapter": "infrastructure"}
+        roles = {"contract": "models", "renderer": "models", "logic": "runtime", "host": "runtime", "adapter": "infrastructure", "native": "infrastructure"}
         if parts[2] in roles:
             return roles[parts[2]]
     for prefix, value in [
         ("extensions/", "models"),
+        ("contracts/extension-api/", "models"),
         ("contracts/domain/", "models"), ("contracts/transport/", "models"),
         ("contracts/protocol/", "protocol"), ("clients/transport/", "client_core"),
         ("host/application/", "application"), ("host/runtime/", "runtime"),
@@ -136,8 +137,6 @@ def layer(manifest, root):
 DUPLICATE_TYPE_ALLOWLIST = {
     "OidcConfig": {"remote", "web-bridge"},
     "OidcError": {"remote", "web-bridge"},
-    "TerminalSnapshot": {"client-api", "terminal-contract"},
-    "TerminalStatus": {"client-api", "terminal-contract"},
 }
 
 PUBLIC_TYPE = re.compile(r"^pub (?:struct|enum|trait) ([A-Za-z_][A-Za-z0-9_]*)", re.M)
@@ -215,6 +214,22 @@ def check(metadata, exceptions, root=ROOT):
                     used.add(edge)
                 else:
                     errors.append(f"{edge}: {layers[name]} から {layers[target]} への禁止依存")
+    seen = set()
+    pending = ["host"] if "host" in packages else []
+    while pending:
+        name = pending.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        for dependency in packages[name]["dependencies"]:
+            target = dependency["name"]
+            if dependency.get("kind") == "dev" or target not in packages:
+                continue
+            manifest = Path(packages[target]["manifest_path"]).as_posix()
+            if "/extensions/terminal/" in manifest:
+                errors.append(f"host -> {target}: terminal extension dependency")
+            else:
+                pending.append(target)
     for edge in set(exceptions) - used:
         errors.append(f"不要または無効な例外: {edge}")
     return errors

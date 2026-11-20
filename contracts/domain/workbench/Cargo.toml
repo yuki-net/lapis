@@ -7,7 +7,6 @@ license.workspace = true
 
 [dependencies]
 editor-core = { path = "../editor-core" }
-terminal = { package = "terminal-contract", path = "../../../extensions/terminal/contract" }
 workspace = { path = "../workspace" }
 serde.workspace = true
 

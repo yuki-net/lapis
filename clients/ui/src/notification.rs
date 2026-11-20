@@ -182,6 +182,16 @@ pub(crate) struct Center {
 }
 
 impl Center {
+    pub(crate) fn set_locale_packs(
+        &mut self,
+        packs: &[localization::LocalePack],
+        locale: &localization::LocaleId,
+        cx: &mut GpuiContext<Self>,
+    ) {
+        let _ = self.locale.replace_external(packs);
+        let _ = self.locale.set_active(locale);
+        cx.notify();
+    }
     pub(crate) fn new(execute: CommandExecutor, cx: &mut GpuiContext<Self>) -> Self {
         cx.default_global::<Store>();
         Self {

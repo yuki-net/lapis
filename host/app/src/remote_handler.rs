@@ -54,6 +54,10 @@ impl RemoteRequestHandler for HostRemoteHandler {
                 | RequestBody::HostWebStart(_)
                 | RequestBody::HostWebStop(_)
                 | RequestBody::HostExtensions(_)
+                | RequestBody::HostExtensionSetEnabled(_)
+                | RequestBody::HostExtensionCapabilities(_)
+                | RequestBody::HostExtensionSetCapability(_)
+                | RequestBody::HostExtensionDispatch(_)
                 | RequestBody::DocumentRelocate(_)
         ) {
             return self.inner.handle(grant, request);
@@ -65,11 +69,32 @@ impl RemoteRequestHandler for HostRemoteHandler {
             let id = request.request_id.clone();
             // 拡張の宣言は通常の Client が表示に使う。`host.manage` は要求せず、
             // 読み取り専用の capability だけで許可する。
-            let allowed = if matches!(request.body, RequestBody::HostExtensions(_)) {
+            let allowed = if matches!(
+                request.body,
+                RequestBody::HostExtensions(_) | RequestBody::HostExtensionCapabilities(_)
+            ) {
                 grant
                     .capabilities()
                     .iter()
                     .any(|capability| capability.as_str() == capability::EXTENSIONS_READ)
+            } else if matches!(request.body, RequestBody::HostExtensionDispatch(_)) {
+                grant.capabilities().iter().any(|capability| {
+                    matches!(
+                        capability.as_str(),
+                        capability::EXTENSIONS_EXECUTE | capability::HOST_MANAGE
+                    )
+                })
+            } else if matches!(
+                request.body,
+                RequestBody::HostExtensionSetEnabled(_)
+                    | RequestBody::HostExtensionSetCapability(_)
+            ) {
+                grant.capabilities().iter().any(|capability| {
+                    matches!(
+                        capability.as_str(),
+                        capability::EXTENSIONS_MANAGE | capability::HOST_MANAGE
+                    )
+                })
             } else {
                 let owner = grant
                     .capabilities()
@@ -199,6 +224,43 @@ impl RemoteRequestHandler for HostRemoteHandler {
                         Ok(list) => ResponseBody::HostExtensions(list),
                         Err(message) => web_error(message),
                     },
+                    RequestBody::HostExtensionCapabilities(request) => {
+                        match host.extension_capabilities(&request.id) {
+                            Ok(response) => ResponseBody::HostExtensionCapabilities(response),
+                            Err(message) => web_error(message),
+                        }
+                    }
+                    RequestBody::HostExtensionSetCapability(request) => {
+                        match host.set_extension_capability(&request) {
+                            Ok(response) => ResponseBody::HostExtensionSetCapability(response),
+                            Err(message) => web_error(message),
+                        }
+                    }
+                    RequestBody::HostExtensionDispatch(request) => {
+                        match host.dispatch_extension(
+                            &request,
+                            grant.session_id(),
+                            grant.workspace_id(),
+                        ) {
+                            Ok(response) => ResponseBody::HostExtensionDispatch(response),
+                            Err(message) => web_error(message),
+                        }
+                    }
+                    RequestBody::HostExtensionSetEnabled(request) => {
+                        if extensions_entry::ExtensionPackageId::try_new(&request.id).is_err() {
+                            return error(INVALID_REQUEST);
+                        }
+                        match host.set_extension_enabled(&request.id, request.enabled) {
+                            Ok(Some(_)) => ResponseBody::HostExtensionSetEnabled(
+                                HostExtensionSetEnabledResponse {
+                                    id: request.id,
+                                    enabled: request.enabled,
+                                },
+                            ),
+                            Ok(None) => error(NOT_FOUND),
+                            Err(message) => web_error(message),
+                        }
+                    }
                     RequestBody::HostWorktree(worktree) => {
                         match host
                             .service()
@@ -279,6 +341,8 @@ impl RemoteRequestHandler for HostRemoteHandler {
         self.inner.subscribe(grant)
     }
     fn disconnect(&self, grant: &SessionGrant) {
+        self.host
+            .extension_session_disconnected(grant.session_id(), grant.workspace_id());
         self.inner.disconnect(grant);
     }
 }

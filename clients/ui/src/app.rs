@@ -90,6 +90,22 @@ pub struct ConnectionIdentity {
 pub type WebAccessSource =
     std::sync::Arc<dyn Fn() -> Option<desktop_client::WebAccess> + Send + Sync>;
 
+#[cfg(not(target_family = "wasm"))]
+pub type ExtensionManager = std::sync::Arc<
+    dyn Fn(editor_core::WorkspaceId, String, bool) -> Result<(), String> + Send + Sync,
+>;
+
+#[cfg(not(target_family = "wasm"))]
+pub type ExtensionCapabilityManager = std::sync::Arc<
+    dyn Fn(
+            editor_core::WorkspaceId,
+            String,
+            Option<desktop_client::HostExtensionSetCapabilityRequest>,
+        ) -> Result<desktop_client::HostExtensionCapabilitiesResponse, String>
+        + Send
+        + Sync,
+>;
+
 pub struct DesktopServices {
     pub(crate) connect_host: Option<std::sync::Arc<dyn Fn() -> Result<(), String> + Send + Sync>>,
     pub(crate) connection: Option<ConnectionIdentity>,
@@ -98,6 +114,7 @@ pub struct DesktopServices {
     pub(crate) git: GitSession,
     pub(crate) lsp: LspSession,
     pub(crate) terminal: TerminalSession,
+    pub(crate) extension_terminal: bool,
     pub(crate) search: WorkspaceSearchSession,
     pub(crate) conversation: ConversationSession,
     pub(crate) settings: SettingsSession,
@@ -111,6 +128,12 @@ pub struct DesktopServices {
     pub(crate) updater: Option<UpdaterHandle>,
     /// Workspace の view state 共有。Web は接続側の watch をそのまま渡す。
     pub(crate) session_view: Option<SessionViewHandle>,
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) extension_loader: Option<crate::extension_loading::Loader>,
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) extension_manager: Option<ExtensionManager>,
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) extension_capability_manager: Option<ExtensionCapabilityManager>,
 }
 
 /// 更新処理の共有 handle。UI は Controller だけを呼び、状態は Watch を購読する。
@@ -168,6 +191,7 @@ impl DesktopServices {
             git,
             lsp,
             terminal,
+            extension_terminal: false,
             search,
             conversation,
             settings,
@@ -177,6 +201,12 @@ impl DesktopServices {
             workbench_watch: None,
             updater: None,
             session_view: None,
+            #[cfg(not(target_family = "wasm"))]
+            extension_loader: None,
+            #[cfg(not(target_family = "wasm"))]
+            extension_manager: None,
+            #[cfg(not(target_family = "wasm"))]
+            extension_capability_manager: None,
         }
     }
     pub fn with_web_access_control(
@@ -184,6 +214,11 @@ impl DesktopServices {
         web: std::sync::Arc<dyn desktop_client::WebAccessControl>,
     ) -> Self {
         self.web_access_control = Some(web);
+        self
+    }
+    /// 拡張版 Terminal を使用する構成では Host の宣言で利用可否を決める。
+    pub fn with_extension_terminal(mut self, enabled: bool) -> Self {
+        self.extension_terminal = enabled;
         self
     }
     pub fn with_connection_identity(mut self, connection: ConnectionIdentity) -> Self {
@@ -218,6 +253,48 @@ impl DesktopServices {
     /// Workspace の view state 共有を有効にする。
     pub fn with_session_view(mut self, sync: SessionViewHandle) -> Self {
         self.session_view = Some(sync);
+        self
+    }
+    /// 拡張宣言の非同期取得を接続ごとに開始する。
+    #[cfg(not(target_family = "wasm"))]
+    pub fn with_extension_loader(
+        mut self,
+        loader: impl Fn(
+            editor_core::WorkspaceId,
+            u64,
+            desktop_client::ExtensionContributionSession,
+            std::sync::mpsc::Receiver<()>,
+        ) + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        self.extension_loader = Some(std::sync::Arc::new(loader));
+        self
+    }
+    #[cfg(not(target_family = "wasm"))]
+    pub fn with_extension_manager(
+        mut self,
+        manager: impl Fn(editor_core::WorkspaceId, String, bool) -> Result<(), String>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        self.extension_manager = Some(std::sync::Arc::new(manager));
+        self
+    }
+    #[cfg(not(target_family = "wasm"))]
+    pub fn with_extension_capability_manager(
+        mut self,
+        manager: impl Fn(
+            editor_core::WorkspaceId,
+            String,
+            Option<desktop_client::HostExtensionSetCapabilityRequest>,
+        ) -> Result<desktop_client::HostExtensionCapabilitiesResponse, String>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        self.extension_capability_manager = Some(std::sync::Arc::new(manager));
         self
     }
     pub fn session_view(&self) -> Option<&SessionViewHandle> {
@@ -272,6 +349,7 @@ pub(crate) struct WindowFactory {
     git: std::sync::Arc<dyn git::GitConnection>,
     lsp: std::sync::Arc<dyn lsp::LanguageServerBackend>,
     terminal: std::sync::Arc<dyn terminal::TerminalBackend>,
+    extension_terminal: bool,
     search: std::sync::Arc<dyn workspace::WorkspaceSearchBackend>,
     conversation: std::sync::Arc<dyn desktop_client::ConversationRepository>,
     settings: SettingsSession,
@@ -280,6 +358,12 @@ pub(crate) struct WindowFactory {
     web_access: Option<WebAccessSource>,
     web_access_control: Option<std::sync::Arc<dyn desktop_client::WebAccessControl>>,
     session_view: Option<SessionViewHandle>,
+    #[cfg(not(target_family = "wasm"))]
+    extension_loader: Option<crate::extension_loading::Loader>,
+    #[cfg(not(target_family = "wasm"))]
+    extension_manager: Option<ExtensionManager>,
+    #[cfg(not(target_family = "wasm"))]
+    extension_capability_manager: Option<ExtensionCapabilityManager>,
 }
 impl WindowFactory {
     pub(crate) fn path_scope(&self) -> Option<std::path::PathBuf> {
@@ -297,6 +381,7 @@ impl WindowFactory {
             git: services.git.backend(),
             lsp: services.lsp.backend(),
             terminal: services.terminal.backend(),
+            extension_terminal: services.extension_terminal,
             search: services.search.backend(),
             conversation: services.conversation.repository(),
             settings: services.settings.clone(),
@@ -305,6 +390,12 @@ impl WindowFactory {
             web_access: services.web_access.clone(),
             web_access_control: services.web_access_control.clone(),
             session_view: services.session_view.clone(),
+            #[cfg(not(target_family = "wasm"))]
+            extension_loader: services.extension_loader.clone(),
+            #[cfg(not(target_family = "wasm"))]
+            extension_manager: services.extension_manager.clone(),
+            #[cfg(not(target_family = "wasm"))]
+            extension_capability_manager: services.extension_capability_manager.clone(),
         }
     }
     pub(crate) fn build(self) -> (EditorSession, DesktopServices) {
@@ -321,12 +412,19 @@ impl WindowFactory {
             self.settings,
         );
         services.connect_host = self.connect_host;
+        services.extension_terminal = self.extension_terminal;
         services.connection = self.connection;
         services.process = self.process;
         services.updater = self.updater;
         services.web_access = self.web_access;
         services.web_access_control = self.web_access_control;
         services.session_view = self.session_view;
+        #[cfg(not(target_family = "wasm"))]
+        {
+            services.extension_loader = self.extension_loader;
+            services.extension_manager = self.extension_manager;
+            services.extension_capability_manager = self.extension_capability_manager;
+        }
         (editor, services)
     }
     pub(crate) fn open_host(self) -> Result<(), String> {

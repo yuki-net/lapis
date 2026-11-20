@@ -8,6 +8,8 @@ mod activation;
 mod contribution;
 mod feature;
 mod ids;
+mod static_contributions;
+mod static_views;
 
 pub use activation::ActivationCondition;
 pub use contribution::{
@@ -20,3 +22,10 @@ pub use ids::{
     WorkspaceCapabilityId,
 };
 pub use localization::MessageId;
+pub use static_contributions::{
+    ContributedSetting, ContributedTheme, ContributedTranslation, STATIC_CONTRIBUTIONS_CONTRACT,
+    STATIC_CONTRIBUTIONS_VERSION, StaticContributions,
+};
+pub use static_views::{
+    ContributedView, ContributedZone, STATIC_VIEWS_CONTRACT, STATIC_VIEWS_VERSION, StaticViews,
+};

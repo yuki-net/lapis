@@ -341,6 +341,34 @@ impl Shell {
             return;
         }
         let PanelTab::Document(document_id) = tab else {
+            if self.tool_close_requires_confirmation(&tab, cx) {
+                let answer = window.prompt(
+                    gpui::PromptLevel::Warning,
+                    &self.t("tab.close-resource.title"),
+                    Some(&self.t("tab.close-resource.message")),
+                    &[
+                        gpui::PromptButton::new(self.t("tab.close-resource.confirm")),
+                        gpui::PromptButton::cancel(self.t("tab.close-resource.cancel")),
+                    ],
+                    cx,
+                );
+                cx.spawn(async move |this, cx| {
+                    if matches!(answer.await, Ok(0)) {
+                        let _ = this.update(cx, |this, cx| {
+                            if this.tab_mutations_blocked || this.shell.layout.tab_is_pinned(&tab) {
+                                return;
+                            }
+                            if let Some(panel_id) = this.shell.layout.panel_for_tab(&tab) {
+                                this.close_tool_tab(&panel_id, &tab, cx);
+                                this.refresh_feature_activation(cx);
+                                cx.notify();
+                            }
+                        });
+                    }
+                })
+                .detach();
+                return;
+            }
             if let Some(panel_id) = self.shell.layout.panel_for_tab(&tab) {
                 self.close_tool_tab(&panel_id, &tab, cx);
             }
@@ -436,7 +464,7 @@ impl Shell {
         // 宣言に従ってタブを作る。個体化する View は新しい個体、外部 Resource を
         // 参照する View は Resource 未確定の新しいタブになる。
         let tab = match instance_policy {
-            extension_ui_contract::ToolInstancePolicy::Shared => PanelTab::tool(view.clone()),
+            extension_ui_contract::ToolInstancePolicy::Shared => self.shared_tab_for_view(&view),
             extension_ui_contract::ToolInstancePolicy::Multiple => {
                 let Ok(instance) = self.shell.next_tool_instance(&view) else {
                     return;
@@ -548,7 +576,7 @@ impl Shell {
         if query.is_empty() {
             return true;
         }
-        let title = self.locale.resolve(&contribution.title).to_lowercase();
+        let title = self.contribution_title(contribution).to_lowercase();
         let view = contribution
             .view
             .as_ref()

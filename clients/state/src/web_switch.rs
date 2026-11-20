@@ -3,7 +3,7 @@
 //! wasm とホスト側のテストの両方から使う。WebSocket の送信自体はここでは行わない。
 #![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 
-use std::path::PathBuf;
+use std::path::Path;
 
 use client_api::{
     RequestBody, ResponseBody, WorkspaceCloseRequest, WorkspaceConnectRequest,
@@ -11,7 +11,6 @@ use client_api::{
 };
 use editor_core::DocumentId;
 use futures_channel::oneshot;
-use terminal::{TerminalId, TerminalInput};
 use workbench::ConversationViewState;
 
 /// 送信待ちのCommand。
@@ -42,33 +41,6 @@ pub(crate) enum Command {
     Close {
         local: DocumentId,
     },
-    StartTerminal {
-        local: TerminalId,
-        cwd: Option<PathBuf>,
-        columns: u16,
-        rows: u16,
-        profile: Option<terminal::TerminalProfileId>,
-    },
-    TerminalInput {
-        local: TerminalId,
-        input: TerminalInput,
-    },
-    TerminalResize {
-        local: TerminalId,
-        columns: u16,
-        rows: u16,
-    },
-    TerminalTerminate {
-        local: TerminalId,
-    },
-    TerminalClaim {
-        local: TerminalId,
-    },
-    TerminalRelease {
-        local: TerminalId,
-    },
-    /// Terminal の取りこぼしを Host の snapshot から復旧する。
-    ResyncTerminals,
     SaveWorkbench {
         view: ConversationViewState,
     },
@@ -99,12 +71,6 @@ impl Command {
                 | Self::Reload { .. }
                 | Self::Discard { .. }
                 | Self::Close { .. }
-                | Self::StartTerminal { .. }
-                | Self::TerminalInput { .. }
-                | Self::TerminalResize { .. }
-                | Self::TerminalTerminate { .. }
-                | Self::TerminalClaim { .. }
-                | Self::TerminalRelease { .. }
                 | Self::SaveWorkbench { .. }
                 | Self::RetryWorkbenchLocal
                 | Self::PublishView { .. }
@@ -124,6 +90,45 @@ pub(crate) enum Operation {
 }
 
 pub(crate) const SWITCHING_MESSAGE: &str = "Workspace切替中です";
+
+/// Web の仮想 root 以下のパスだけを、拡張へ渡す相対パスに変換する。
+pub(crate) fn terminal_relative_cwd(path: &Path) -> Result<String, String> {
+    let relative = path
+        .strip_prefix(crate::web_replica::ROOT)
+        .map_err(|_| "Terminal の作業パスが不正です")?;
+    if relative.as_os_str().is_empty() {
+        return Ok(".".into());
+    }
+    client_api::WorkspaceRelativePath::from_path(relative)
+        .map(|path| path.as_str().to_owned())
+        .map_err(|_| "Terminal の作業パスが不正です".into())
+}
+
+/// Host の同名・巨大・範囲外 session を描画器へ渡さない。
+pub(crate) fn validate_terminal_sessions(
+    sessions: &[crate::terminal_extension::v1::Session],
+) -> Result<(), String> {
+    let mut ids = std::collections::BTreeSet::new();
+    if sessions.len() > 64
+        || sessions.iter().any(|session| {
+            session.id.is_empty()
+                || session.id.len() > 256
+                || session.columns == 0
+                || session.columns > 512
+                || session.rows == 0
+                || session.rows > 256
+                || !ids.insert(session.id.as_str())
+                || (session.working_directory != "."
+                    && client_api::WorkspaceRelativePath::from_path(Path::new(
+                        &session.working_directory,
+                    ))
+                    .is_err())
+        })
+    {
+        return Err("Terminal session 一覧が不正です".into());
+    }
+    Ok(())
+}
 
 /// 切替中は変更系だけを拒否する。読み取り系は従来どおり通す。
 pub(crate) fn ensure_allowed(switching: bool, operation: Operation) -> Result<(), &'static str> {
@@ -185,6 +190,32 @@ mod tests {
     use crate::web_replica::Replica;
     use editor_core::WorkspaceId;
 
+    #[test]
+    fn terminal_paths_stay_in_web_workspace() {
+        let root = Path::new(crate::web_replica::ROOT);
+        assert_eq!(terminal_relative_cwd(root).unwrap(), ".");
+        assert_eq!(terminal_relative_cwd(&root.join("src")).unwrap(), "src");
+        assert!(terminal_relative_cwd(&root.join("..").join("outside")).is_err());
+        assert!(terminal_relative_cwd(Path::new("/outside")).is_err());
+    }
+
+    #[test]
+    fn terminal_session_listing_rejects_duplicates_and_unsafe_metadata() {
+        use crate::terminal_extension::v1::Session;
+        let valid = Session {
+            id: "pty-1".into(),
+            columns: 80,
+            rows: 24,
+            working_directory: ".".into(),
+            owner: None,
+        };
+        assert!(validate_terminal_sessions(std::slice::from_ref(&valid)).is_ok());
+        assert!(validate_terminal_sessions(&[valid.clone(), valid.clone()]).is_err());
+        let mut invalid = valid;
+        invalid.working_directory = "../outside".into();
+        assert!(validate_terminal_sessions(&[invalid]).is_err());
+    }
+
     fn id(value: &str) -> ApiWorkspaceId {
         ApiWorkspaceId::try_new(value.to_owned()).unwrap()
     }
@@ -195,12 +226,7 @@ mod tests {
 
     fn cached(workspace: &str) -> CachedWorkspace {
         CachedWorkspace {
-            replica: Replica::new(
-                WorkspaceId::new(workspace),
-                Vec::new(),
-                None,
-                Default::default(),
-            ),
+            replica: Replica::new(WorkspaceId::new(workspace), Vec::new(), None),
         }
     }
 
@@ -232,12 +258,6 @@ mod tests {
     #[test]
     fn open_is_still_a_read() {
         assert!(!Command::Open { local: document() }.is_mutation());
-    }
-
-    #[test]
-    fn terminal_resync_is_a_read() {
-        // 切替中でも Host の snapshot 取得は止めない。
-        assert!(!Command::ResyncTerminals.is_mutation());
     }
 
     #[test]

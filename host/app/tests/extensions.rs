@@ -186,6 +186,32 @@ fn embedded_and_local_clients_read_the_same_declaration() {
 }
 
 #[test]
+fn embedded_client_saves_extension_state_for_next_restart() {
+    let state = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(state.path().join("extensions")).unwrap();
+    catalog.register(entry("dev.example.one", true)).unwrap();
+    drop(catalog);
+    let host = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    let workspace = host.register_workspace(root.path()).unwrap();
+    let client = BackendClient::from(host.clone());
+    let response = client
+        .set_extension_enabled(workspace.clone(), "dev.example.one".to_owned(), false)
+        .unwrap();
+    assert!(!response.enabled);
+    assert!(!host.extensions().unwrap().extensions[0].enabled);
+    assert!(
+        client
+            .set_extension_enabled(workspace, "dev.example.missing".to_owned(), false)
+            .is_err()
+    );
+    drop(client);
+    drop(host);
+    let restarted = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    assert!(!restarted.extensions().unwrap().extensions[0].enabled);
+}
+
+#[test]
 fn an_incompatible_extension_is_declared_apart_from_installed_ones() {
     let state = tempfile::tempdir().unwrap();
     let mut catalog = ExtensionCatalog::open(state.path().join("extensions")).unwrap();
@@ -282,5 +308,309 @@ fn a_package_without_a_trusted_signature_is_rejected_and_not_declared() {
             .join("installed")
             .join("dev.example.unsigned")
             .exists()
+    );
+}
+
+#[test]
+fn host_accepts_explicitly_trusted_external_publisher() {
+    use base64::Engine as _;
+    use ed25519_dalek::{Signer as _, SigningKey};
+    use sha2::Digest as _;
+    let state = tempfile::tempdir().unwrap();
+    let key = SigningKey::from_bytes(&[42; 32]);
+    let trusted = state.path().join("extensions");
+    std::fs::create_dir_all(&trusted).unwrap();
+    std::fs::write(
+        trusted.join("trusted-keys.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema": 1,
+            "keys": {"external": base64::engine::general_purpose::STANDARD.encode(key.verifying_key().to_bytes())}
+        })).unwrap(),
+    ).unwrap();
+    let bytes = br#"{"schema":1,"settings":[{"definition":{"name":"font-size","value_kind":"integer","scopes":["user"],"default":12,"allowed_values":null},"label":"terminal.font"}],"translations":[{"target":"dev.example.language","locale":"en-US","messages":{"terminal.font":"Font"}}]}"#;
+    let mut manifest = serde_json::json!({
+        "schema": 1,
+        "kind": "extension",
+        "id": "dev.example.language",
+        "version": "0.1.0",
+        "requires": [
+            {"contract": "lapis.extension", "minimum": "1.0.0", "maximum": "1.0.0"},
+            {"contract": "lapis.extension.contributions", "minimum": "1.0.0", "maximum": "1.0.0"}
+        ],
+        "files": [{"path": "contributions.json", "sha256": format!("{:x}", sha2::Sha256::digest(bytes))}],
+        "key_id": "external"
+    });
+    fn canonical(value: &serde_json::Value, out: &mut String) {
+        match value {
+            serde_json::Value::Object(object) => {
+                let mut keys: Vec<_> = object.keys().collect();
+                keys.sort_unstable();
+                out.push('{');
+                for (index, key) in keys.into_iter().enumerate() {
+                    if index != 0 {
+                        out.push(',');
+                    }
+                    out.push_str(&serde_json::to_string(key).unwrap());
+                    out.push(':');
+                    canonical(&object[key], out);
+                }
+                out.push('}');
+            }
+            serde_json::Value::Array(values) => {
+                out.push('[');
+                for (index, value) in values.iter().enumerate() {
+                    if index != 0 {
+                        out.push(',');
+                    }
+                    canonical(value, out);
+                }
+                out.push(']');
+            }
+            other => out.push_str(&serde_json::to_string(other).unwrap()),
+        }
+    }
+    let mut payload = String::new();
+    canonical(&manifest, &mut payload);
+    let signature = key.sign(payload.as_bytes());
+    manifest["signature"] =
+        serde_json::json!(base64::engine::general_purpose::STANDARD.encode(signature.to_bytes()));
+    let package = write_package(state.path(), &[("contributions.json", bytes)], &manifest);
+    let host = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    assert!(
+        host.install_extension(&package, true)
+            .unwrap()
+            .is_installed()
+    );
+    assert!(host.extensions().unwrap().contributions.is_empty());
+    assert_eq!(host.extensions().unwrap().extensions[0].active, Some(false));
+    drop(host);
+    let restarted = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    assert!(restarted.extension_startup_errors().is_empty());
+    assert_eq!(
+        restarted.extensions().unwrap().extensions[0].active,
+        Some(true)
+    );
+    assert_eq!(
+        restarted.extensions().unwrap().extensions[0].id,
+        "dev.example.language"
+    );
+    let contributions = restarted.extensions().unwrap().contributions;
+    assert_eq!(contributions.len(), 1);
+    assert_eq!(contributions[0].extension_id, "dev.example.language");
+    assert_eq!(
+        contributions[0].declaration.settings[0].label,
+        "terminal.font"
+    );
+    let root = tempfile::tempdir().unwrap();
+    let workspace = restarted.register_workspace(root.path()).unwrap();
+    assert_eq!(
+        BackendClient::from(restarted.clone())
+            .extensions(workspace)
+            .unwrap()
+            .contributions,
+        contributions
+    );
+    restarted
+        .set_extension_enabled("dev.example.language", false)
+        .unwrap();
+    assert_eq!(
+        restarted.extensions().unwrap().extensions[0].active,
+        Some(true)
+    );
+    assert!(!restarted.extensions().unwrap().extensions[0].enabled);
+    assert_eq!(restarted.extensions().unwrap().contributions, contributions);
+    drop(restarted);
+    let disabled = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    assert!(disabled.extensions().unwrap().contributions.is_empty());
+    assert_eq!(
+        disabled.extensions().unwrap().extensions[0].active,
+        Some(false)
+    );
+    disabled
+        .set_extension_enabled("dev.example.language", true)
+        .unwrap();
+    assert!(disabled.extensions().unwrap().contributions.is_empty());
+    drop(disabled);
+    let reenabled = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    assert_eq!(
+        reenabled.extensions().unwrap().extensions[0].active,
+        Some(true)
+    );
+    assert_eq!(reenabled.extensions().unwrap().contributions, contributions);
+    drop(reenabled);
+    let installed_contribution = trusted.join("installed/dev.example.language/contributions.json");
+    std::fs::write(&installed_contribution, b"{}").unwrap();
+    let tampered = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    assert!(tampered.extensions().unwrap().contributions.is_empty());
+    assert!(
+        tampered
+            .extension_startup_errors()
+            .contains_key("dev.example.language")
+    );
+    drop(tampered);
+    std::fs::write(&installed_contribution, bytes).unwrap();
+    std::fs::remove_file(trusted.join("trusted-keys.json")).unwrap();
+    let no_longer_trusted =
+        BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    assert!(
+        no_longer_trusted
+            .extension_startup_errors()
+            .contains_key("dev.example.language")
+    );
+    assert!(no_longer_trusted.extensions().unwrap().extensions[0].installed);
+    assert!(
+        no_longer_trusted
+            .extensions()
+            .unwrap()
+            .contributions
+            .is_empty()
+    );
+}
+
+#[test]
+fn unsigned_package_is_available_only_in_development_mode() {
+    use sha2::Digest as _;
+    let state = tempfile::tempdir().unwrap();
+    let bytes = b"language data";
+    let manifest = serde_json::json!({
+        "schema": 1,
+        "kind": "extension",
+        "id": "dev.example.unsigned",
+        "version": "0.1.0",
+        "requires": [{"contract": "lapis.extension", "minimum": "1.0.0", "maximum": "1.0.0"}],
+        "files": [{"path": "language.json", "sha256": format!("{:x}", sha2::Sha256::digest(bytes))}]
+    });
+    let package = write_package(state.path(), &[("language.json", bytes)], &manifest);
+    let production = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    assert!(production.install_extension(&package, true).is_err());
+    drop(production);
+    let development =
+        BackendHost::start_development_with_state_directory(state.path().to_owned()).unwrap();
+    assert!(
+        development
+            .install_extension(&package, true)
+            .unwrap()
+            .is_installed()
+    );
+    drop(development);
+    let production = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    assert!(
+        production
+            .extension_startup_errors()
+            .contains_key("dev.example.unsigned")
+    );
+    drop(production);
+    let development =
+        BackendHost::start_development_with_state_directory(state.path().to_owned()).unwrap();
+    assert!(development.extension_startup_errors().is_empty());
+}
+
+#[test]
+fn view_declarations_require_their_own_contract_and_are_published() {
+    use sha2::Digest as _;
+    let state = tempfile::tempdir().unwrap();
+    let host =
+        BackendHost::start_development_with_state_directory(state.path().to_owned()).unwrap();
+    for (id, declared) in [
+        ("dev.example.badview", false),
+        ("dev.example.goodview", true),
+    ] {
+        let data = serde_json::to_vec(&serde_json::json!({
+            "schema":1,
+            "translations":[{"target":id,"locale":"en-US","messages":{"title":"Example"}}]
+        }))
+        .unwrap();
+        let views = serde_json::to_vec(&serde_json::json!({
+            "schema":1,"views":[{"id":format!("{id}.view"),"content_type":"lapis.content.example.v1",
+            "title":"title","default_zone":"bottom"}]
+        })).unwrap();
+        let mut requires = vec![
+            serde_json::json!({"contract":"lapis.extension","minimum":"1.0.0","maximum":"1.0.0"}),
+            serde_json::json!({"contract":"lapis.extension.contributions","minimum":"1.0.0","maximum":"1.0.0"}),
+        ];
+        if declared {
+            requires.push(serde_json::json!({"contract":"lapis.extension.views","minimum":"1.0.0","maximum":"1.0.0"}));
+        }
+        let manifest = serde_json::json!({
+            "schema":1,"kind":"extension","id":id,"version":"1.0.0","requires":requires,
+            "files":[
+                {"path":"contributions.json","sha256":format!("{:x}",sha2::Sha256::digest(&data))},
+                {"path":"views.json","sha256":format!("{:x}",sha2::Sha256::digest(&views))}
+            ]
+        });
+        let package = write_package(
+            state.path(),
+            &[("contributions.json", &data), ("views.json", &views)],
+            &manifest,
+        );
+        host.install_extension(&package, true).unwrap();
+    }
+    drop(host);
+    let restarted =
+        BackendHost::start_development_with_state_directory(state.path().to_owned()).unwrap();
+    assert!(
+        restarted
+            .extension_startup_errors()
+            .contains_key("dev.example.badview")
+    );
+    let published = restarted.extensions().unwrap().contributions;
+    let good = published
+        .iter()
+        .find(|item| item.extension_id == "dev.example.goodview")
+        .unwrap();
+    assert_eq!(
+        good.views.as_ref().unwrap().views[0].id,
+        "dev.example.goodview.view"
+    );
+    assert!(
+        !published
+            .iter()
+            .any(|item| item.extension_id == "dev.example.badview")
+    );
+}
+
+#[test]
+fn contributions_without_versioned_contract_or_over_the_limit_are_not_published() {
+    use sha2::Digest as _;
+    let state = tempfile::tempdir().unwrap();
+    let host =
+        BackendHost::start_development_with_state_directory(state.path().to_owned()).unwrap();
+    let make_package = |id: &str, contents: &[u8], requires: serde_json::Value| {
+        let manifest = serde_json::json!({
+            "schema": 1, "kind": "extension", "id": id, "version": "0.1.0", "requires": requires,
+            "files": [{"path": "contributions.json", "sha256": format!("{:x}", sha2::Sha256::digest(contents))}]
+        });
+        write_package(state.path(), &[("contributions.json", contents)], &manifest)
+    };
+    let package = make_package(
+        "dev.example.no-contract",
+        br#"{"schema":1}"#,
+        serde_json::json!([
+            {"contract": "lapis.extension", "minimum": "1.0.0", "maximum": "1.0.0"}
+        ]),
+    );
+    host.install_extension(&package, true).unwrap();
+    let oversized = vec![b' '; 256 * 1024 + 1];
+    let package = make_package(
+        "dev.example.oversized",
+        &oversized,
+        serde_json::json!([
+            {"contract": "lapis.extension.contributions", "minimum": "1.0.0", "maximum": "1.0.0"}
+        ]),
+    );
+    host.install_extension(&package, true).unwrap();
+    drop(host);
+    let restarted =
+        BackendHost::start_development_with_state_directory(state.path().to_owned()).unwrap();
+    assert!(restarted.extensions().unwrap().contributions.is_empty());
+    assert!(
+        restarted
+            .extension_startup_errors()
+            .contains_key("dev.example.no-contract")
+    );
+    assert!(
+        restarted
+            .extension_startup_errors()
+            .contains_key("dev.example.oversized")
     );
 }

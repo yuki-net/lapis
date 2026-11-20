@@ -9,12 +9,11 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use extension_ui_contract::{ViewId, ViewInstanceId};
+use extension_ui_contract::ViewInstanceId;
 use gpui::{AnyView, App, Subscription};
 
 use super::{TerminalFeature, TerminalFeatureEvent, TerminalProfileCatalog};
 use crate::extension_ui::{ViewLifecycle, ViewNotifier, ViewRequest};
-use crate::features::id;
 
 /// ターミナルタブを作るときのコンテキスト。Task 切替で更新する。
 #[derive(Clone, Debug)]
@@ -34,6 +33,7 @@ pub(crate) struct TerminalTabSource {
     pub(crate) context: Rc<RefCell<TerminalContext>>,
     /// Host から取得した profile 一覧を設定の供給元へ公開するため。
     pub(crate) settings: Rc<RefCell<TerminalProfileCatalog>>,
+    pub(crate) extension_settings: Option<desktop_client::ExtensionContributionSession>,
 }
 
 /// Terminal Feature がタブ個体と Session を所有する実装。
@@ -85,7 +85,6 @@ impl TerminalLifecycle {
         let subscribed = instance.clone();
         let requests = self.requests.clone();
         let notify = self.notify.clone();
-        let view = ViewId::new(id::VIEW_TERMINAL);
         let subscription = cx.subscribe(entity, move |_, event: &TerminalFeatureEvent, cx| {
             let mut requests = requests.borrow_mut();
             match event {
@@ -96,7 +95,7 @@ impl TerminalLifecycle {
                     });
                 }
                 TerminalFeatureEvent::NewTabRequested => {
-                    requests.push(ViewRequest::OpenTab(view.clone()));
+                    requests.push(ViewRequest::OpenTab);
                 }
             }
             drop(requests);
@@ -140,12 +139,14 @@ impl ViewLifecycle for TerminalLifecycle {
         let context = self.source.context.borrow().clone();
         let settings = self.source.settings.clone();
         let backend = self.source.backend.clone();
+        let extension_settings = self.source.extension_settings.clone();
         let feature = cx.new(|cx| {
             TerminalFeature::new(
                 desktop_client::TerminalSession::new(backend),
                 context.root.clone(),
                 context.conversation.clone(),
                 settings,
+                extension_settings,
                 cx,
             )
         });
@@ -194,6 +195,12 @@ impl ViewLifecycle for TerminalLifecycle {
             view.update(cx, |tab, cx| tab.close_session(cx));
         }
         self.release(instance);
+    }
+
+    fn requires_close_confirmation(&self, instance: &ViewInstanceId, cx: &App) -> bool {
+        self.instances
+            .get(instance)
+            .is_some_and(|view| view.read(cx).requires_close_confirmation())
     }
 
     fn take_requests(&mut self) -> Vec<ViewRequest> {
@@ -287,6 +294,7 @@ mod tests {
                 conversation: editor_core::ConversationId::new("task-a"),
             })),
             settings: Rc::new(RefCell::new(TerminalProfileCatalog::default())),
+            extension_settings: None,
         })
     }
 
@@ -341,21 +349,23 @@ mod tests {
     /// 新しいタブの要求は Layout ではなく Shell が適用する。
     #[gpui::test]
     fn new_tab_event_becomes_a_request(cx: &mut gpui::TestAppContext) {
-        let (lifecycle, instance) = cx.update(|cx| {
+        let (mut registry, instance) = cx.update(|cx| {
             let lifecycle = lifecycle();
+            let mut registry = crate::extension_ui::FeatureRegistry::default();
+            registry.register_view_lifecycle("example.extension.view".into(), lifecycle.clone());
             let instance = ViewInstanceId::new("terminal:one");
             let view = lifecycle.borrow_mut().create(&instance, cx).unwrap();
             let entity = view.downcast::<TerminalFeature>().expect("TerminalFeature");
             entity.update(cx, |feature, cx| feature.request_new_tab(cx));
-            (lifecycle, instance)
+            (registry, instance)
         });
         // イベントの配送は effect として遅延するため、反映後に確認する。
         cx.run_until_parked();
-        let requests = lifecycle.borrow_mut().take_requests();
+        let requests = registry.take_view_requests();
         assert_eq!(instance, ViewInstanceId::new("terminal:one"));
         assert!(matches!(
             requests.as_slice(),
-            [ViewRequest::OpenTab(view)] if view.as_str() == id::VIEW_TERMINAL
+            [(view, ViewRequest::OpenTab)] if view.as_str() == "example.extension.view"
         ));
     }
 }

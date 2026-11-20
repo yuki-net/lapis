@@ -97,6 +97,7 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt, clippy, rust-analyzer, rust-src
+          targets: wasm32-wasip2
 
       - name: Cache Cargo artifacts
         uses: actions/cache@v4
@@ -120,6 +121,22 @@ jobs:
       - name: Test Rust Core
         run: python3 scripts/check.py rust_core test
 
+      - name: Test external extension component
+        run: |
+          cargo build --locked -p lapis-terminal-native
+          python3 -m scripts.extensions.smoke_native_terminal
+          cargo test --locked -p extension-runtime --lib native::tests
+          cargo test --locked -p extension-runtime --test native -- --ignored
+          cargo build --locked --manifest-path examples/external-extension/Cargo.toml --target wasm32-wasip2 --target-dir target/external-extension
+          cargo build --locked -p extension-runtime --bin lapis-extension-host
+          python3 -m scripts.extensions.smoke
+          python3 -m scripts.extensions.smoke_pty
+          python3 -m scripts.extensions.smoke_terminal
+          python3 -m scripts.extensions.stage extensions "$RUNNER_TEMP/lapis-bundled-input" --target-dir target/terminal-component --debug
+          cargo fmt --manifest-path extensions/terminal/component/Cargo.toml -- --check
+          cargo clippy --locked --manifest-path extensions/terminal/component/Cargo.toml --target wasm32-wasip2 --target-dir target/terminal-component -- -D warnings
+          cargo test --locked -p extensions-entry --test package independent_component_is_packaged_installed_and_activated -- --ignored
+
       - name: Lint Rust Core
         run: python3 scripts/check.py rust_core lint
 
@@ -140,6 +157,17 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt, clippy
+          targets: wasm32-wasip2, wasm32-unknown-unknown
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install wasm-bindgen
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@0.2.129
 
       - name: Cache Cargo artifacts
         uses: actions/cache@v4
@@ -161,7 +189,61 @@ jobs:
         run: python scripts/check.py host format
 
       - name: Test Host
-        run: python scripts/check.py host test
+        shell: pwsh
+        timeout-minutes: 20
+        run: |
+          $process = Start-Process python -ArgumentList @('scripts/check.py', 'host', 'test') -NoNewWindow -PassThru
+          if (-not $process.WaitForExit(1200000)) {
+            & taskkill /F /T /PID $process.Id 2>$null
+            throw 'Host tests exceeded 20 minutes'
+          }
+          exit $process.ExitCode
+
+      - name: Test approved extension PTY
+        shell: pwsh
+        run: |
+          cargo build --locked -p lapis-terminal-native
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m scripts.extensions.stage extensions "$env:RUNNER_TEMP/lapis-native-input" --target-dir target --debug
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m scripts.extensions.smoke_native_terminal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p extension-runtime --lib native::tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p extension-runtime --lib staged_image_is_locked_until_extension_is_unloaded -- --ignored
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p extension-runtime --test supervisor native_image_runs_in_worker_and_preserves_invocation_context -- --ignored
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p extension-runtime --test native -- --ignored
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p local-process pty::tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --locked -p extension-runtime --bin lapis-extension-host
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p host signed_native_package_runs_in_extension_host -- --ignored
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p host --test quic native_terminal_survives_quic_disconnect_and_can_be_claimed -- --ignored
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --locked --manifest-path examples/pty-extension/Cargo.toml --target wasm32-wasip2 --target-dir target/pty-extension
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p host approved_wasm_uses_host_pty_and_shutdown_reclaims_it -- --ignored
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --locked --manifest-path extensions/terminal/component/Cargo.toml --target wasm32-wasip2 --target-dir target/terminal-component
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p host terminal_component_uses_approved_host_pty -- --ignored
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p lapis desktop_terminal_runs_real_extension_pty -- --ignored
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Test Web extension terminal against Host
+        shell: pwsh
+        run: |
+          cargo build --locked -p host -p web-bridge --bins
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --locked -p web-terminal-smoke --target wasm32-unknown-unknown --profile web
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python clients/web/wasm/tests/extension_terminal_smoke.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Test managed Web publication
         shell: pwsh
@@ -216,7 +298,19 @@ jobs:
         run: python scripts/check.py desktop format
 
       - name: Test Desktop
-        run: python scripts/check.py desktop test
+        shell: pwsh
+        timeout-minutes: 20
+        run: |
+          cargo build --locked -p extension-runtime --bin lapis-extension-host
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --locked -p lapis-terminal-native
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $process = Start-Process python -ArgumentList @('scripts/check.py', 'desktop', 'test') -NoNewWindow -PassThru
+          if (-not $process.WaitForExit(1200000)) {
+            & taskkill /F /T /PID $process.Id 2>$null
+            throw 'Desktop tests exceeded 20 minutes'
+          }
+          if ($process.ExitCode -ne 0) { exit $process.ExitCode }
 
       - name: Lint Desktop
         run: python scripts/check.py desktop lint

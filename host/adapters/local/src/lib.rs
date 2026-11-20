@@ -14,7 +14,6 @@ pub use local_git::LocalGitBackend;
 pub use local_lsp::LocalLspBackend;
 pub use local_search::LocalWorkspaceSearchBackend;
 pub use local_tasks::{LocalTaskBackend, run_task_worker};
-pub use local_terminal::{LocalTerminalBackend, default_profiles as default_terminal_profiles};
 pub use local_workbench::LocalWorkbenchStore;
 pub use local_workspace::LocalWorkspaceRepository;
 pub use local_workspace_store::{WorkspaceRecord, WorkspaceStore, WorkspaceStoreError};
@@ -22,9 +21,6 @@ use lsp::{
     CompletionItem, DefinitionTarget, Diagnostic, LanguageServerBackend, LspError, LspPosition,
 };
 use task_runner::{TaskBackend, TaskControl, TaskError, TaskRecord};
-use terminal::{
-    TerminalBackend, TerminalDelta, TerminalError, TerminalEvent, TerminalId, TerminalInput,
-};
 use workspace::WorkspaceRepository;
 use workspace::{FileEntry, SearchError, SearchHit, WorkspaceError, WorkspaceSearchBackend};
 
@@ -251,75 +247,6 @@ impl<T: GitBackend> GitBackend for LoopbackBackend<T> {
             ));
         }
         self.inner.discard_worktree(worktree)
-    }
-}
-
-impl<T: TerminalBackend> TerminalBackend for LoopbackBackend<T> {
-    fn start(&self, cwd: &Path, columns: u16, rows: u16) -> Result<TerminalId, TerminalError> {
-        if !self.gate.is_connected() {
-            return Err(TerminalError::new("loopback workspace is disconnected"));
-        }
-        self.inner.start(cwd, columns, rows)
-    }
-
-    fn start_profile(
-        &self,
-        cwd: &Path,
-        columns: u16,
-        rows: u16,
-        profile: Option<&terminal::TerminalProfileId>,
-    ) -> Result<TerminalId, TerminalError> {
-        if !self.gate.is_connected() {
-            return Err(TerminalError::new("loopback workspace is disconnected"));
-        }
-        self.inner.start_profile(cwd, columns, rows, profile)
-    }
-
-    fn profiles(&self, cwd: &Path) -> Result<terminal::TerminalProfiles, TerminalError> {
-        if !self.gate.is_connected() {
-            return Err(TerminalError::new("loopback workspace is disconnected"));
-        }
-        self.inner.profiles(cwd)
-    }
-
-    fn input(&self, id: &TerminalId, input: &TerminalInput) -> Result<(), TerminalError> {
-        if !self.gate.is_connected() {
-            return Err(TerminalError::new("loopback workspace is disconnected"));
-        }
-        self.inner.input(id, input)
-    }
-
-    fn resize(&self, id: &TerminalId, columns: u16, rows: u16) -> Result<(), TerminalError> {
-        if !self.gate.is_connected() {
-            return Err(TerminalError::new("loopback workspace is disconnected"));
-        }
-        self.inner.resize(id, columns, rows)
-    }
-
-    fn resize_delta(
-        &self,
-        id: &TerminalId,
-        columns: u16,
-        rows: u16,
-    ) -> Result<TerminalDelta, TerminalError> {
-        if !self.gate.is_connected() {
-            return Err(TerminalError::new("loopback workspace is disconnected"));
-        }
-        self.inner.resize_delta(id, columns, rows)
-    }
-
-    fn poll(&self, id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
-        if !self.gate.is_connected() {
-            return Err(TerminalError::new("loopback workspace is disconnected"));
-        }
-        self.inner.poll(id)
-    }
-
-    fn terminate(&self, id: &TerminalId) -> Result<(), TerminalError> {
-        if !self.gate.is_connected() {
-            return Err(TerminalError::new("loopback workspace is disconnected"));
-        }
-        self.inner.terminate(id)
     }
 }
 

@@ -22,6 +22,61 @@ pub(crate) struct GroupLayout {
 }
 
 impl GroupLayout {
+    pub(crate) fn can_rekey_views(
+        &self,
+        old: &[extension_ui_contract::ViewId],
+        new: &extension_ui_contract::ViewId,
+    ) -> bool {
+        let mut seen = std::collections::HashSet::new();
+        let mut instances = std::collections::HashSet::new();
+        self.tabs.keys().all(|tab| {
+            let unique_instance =
+                !matches!(tab, PanelTab::Tool { .. }) || instances.insert(tab.instance_id());
+            unique_instance
+                && seen.insert(if tab.view_id().is_some_and(|view| old.contains(view)) {
+                    tab.with_view(new.clone())
+                } else {
+                    tab.clone()
+                })
+        }) && {
+            let mut seen = std::collections::HashSet::new();
+            self.pending_pins.keys().all(|tab| {
+                seen.insert(if tab.view_id().is_some_and(|view| old.contains(view)) {
+                    tab.with_view(new.clone())
+                } else {
+                    tab.clone()
+                })
+            })
+        }
+    }
+    pub(crate) fn rekey_views(
+        &mut self,
+        old: &[extension_ui_contract::ViewId],
+        new: &extension_ui_contract::ViewId,
+    ) {
+        self.tabs = std::mem::take(&mut self.tabs)
+            .into_iter()
+            .map(|(tab, placement)| {
+                let tab = if tab.view_id().is_some_and(|view| old.contains(view)) {
+                    tab.with_view(new.clone())
+                } else {
+                    tab
+                };
+                (tab, placement)
+            })
+            .collect();
+        self.pending_pins = std::mem::take(&mut self.pending_pins)
+            .into_iter()
+            .map(|(tab, owner)| {
+                let tab = if tab.view_id().is_some_and(|view| old.contains(view)) {
+                    tab.with_view(new.clone())
+                } else {
+                    tab
+                };
+                (tab, owner)
+            })
+            .collect();
+    }
     /// Creates a layout containing only the root window and no tab placements.
     pub(crate) fn new() -> Self {
         Self {
@@ -93,6 +148,26 @@ impl GroupLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn declared_view_rekey_preserves_window_placement_and_rejects_collisions() {
+        use extension_ui_contract::ViewId;
+        let old = ViewId::new("old.view");
+        let new = ViewId::new("example.view");
+        let mut group = GroupLayout::new();
+        let child = group.add_window();
+        let tab = PanelTab::external(old.clone(), "instance", Some("session".into()));
+        group.register_tab(tab.clone(), child);
+        group.pending_pins.insert(tab.clone(), child);
+        assert!(group.can_rekey_views(std::slice::from_ref(&old), &new));
+        group.rekey_views(std::slice::from_ref(&old), &new);
+        let renamed = tab.with_view(new.clone());
+        assert_eq!(group.tabs[&renamed].0, child);
+        assert_eq!(group.pending_pins[&renamed], child);
+        group.register_tab(tab, ROOT_HOST);
+        assert!(!group.can_rekey_views(&[old], &new));
+        assert_eq!(group.tabs.len(), 2);
+    }
 
     #[test]
     fn creator_metadata_does_not_undo_moves_or_orphan_tabs_after_host_release() {

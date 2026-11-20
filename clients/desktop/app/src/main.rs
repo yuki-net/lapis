@@ -1,4 +1,5 @@
 mod connection;
+mod extension_poll;
 mod install;
 mod update_fetch;
 mod updater;
@@ -195,7 +196,10 @@ fn main() {
     } else {
         LspSession::new(Arc::new(lsp_backend))
     };
-    let mut terminal_session = TerminalSession::new(host.terminals());
+    let terminal_backend: Arc<dyn terminal::TerminalBackend> = Arc::new(
+        lapis::extension_terminal::ExtensionTerminals::new(host.clone()),
+    );
+    let terminal_session = TerminalSession::new(terminal_backend);
     let search_session = if use_loopback {
         WorkspaceSearchSession::new(Arc::new(LoopbackBackend::new(
             Arc::new(LocalWorkspaceSearchBackend),
@@ -206,12 +210,6 @@ fn main() {
     };
 
     let show_terminal = arguments.iter().any(|value| value == "--show-terminal");
-    if show_terminal
-        && let Some(root) = session.workspace_root()
-        && let Err(error) = terminal_session.start(root, 120, 30)
-    {
-        eprintln!("Terminal start failed: {error}");
-    }
     let initial_view = desktop_ui::InitialView {
         empty_window: false,
         native_window_smoke: arguments.iter().any(|value| value == "--window-host-smoke"),
@@ -240,8 +238,54 @@ fn main() {
         conversation_session,
         settings_session.clone(),
     )
+    .with_extension_terminal(true)
     .with_workbench_watch(workbench_watch)
     .with_session_view(session_view)
+    .with_extension_loader({
+        let host = host.clone();
+        move |workspace, generation, contributions, cancelled| {
+            let host = host.clone();
+            let _worker = std::thread::spawn(move || {
+                extension_poll::run(
+                    contributions,
+                    generation,
+                    cancelled,
+                    Duration::from_secs(2),
+                    || {
+                        client_api::WorkspaceId::try_from(&workspace)
+                            .map_err(|error| error.to_string())
+                            .and_then(|workspace| {
+                                host.extensions(workspace)
+                                    .map_err(|error| error.to_string())
+                            })
+                    },
+                );
+            });
+        }
+    })
+    .with_extension_manager({
+        let host = host.clone();
+        move |workspace, id, enabled| {
+            let workspace =
+                client_api::WorkspaceId::try_from(&workspace).map_err(|error| error.to_string())?;
+            host.set_extension_enabled(workspace, id, enabled)
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        }
+    })
+    .with_extension_capability_manager({
+        let host = host.clone();
+        move |workspace, id, action| {
+            let workspace =
+                client_api::WorkspaceId::try_from(&workspace).map_err(|error| error.to_string())?;
+            if let Some(action) = action {
+                host.set_extension_capability(workspace.clone(), action)
+                    .map_err(|error| error.to_string())?;
+            }
+            host.extension_capabilities(workspace, id)
+                .map_err(|error| error.to_string())
+        }
+    })
     .with_process_session(ProcessSession::new(host.processes(), {
         let local: Arc<dyn process::ProcessRegistry> = local_processes;
         Some(local)

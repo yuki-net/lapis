@@ -6,8 +6,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use settings::{
-    DefinitionCatalog, ResolvedSettings, SettingKey, SettingValue, SettingsContext,
-    SettingsDocument, SettingsError, SettingsRepository, SettingsScope, catalog,
+    DefinitionCatalog, ExtensionSettingDefinition, ExtensionSettingsCatalog, ResolvedSettings,
+    SettingKey, SettingValue, SettingsContext, SettingsDocument, SettingsError, SettingsRepository,
+    SettingsScope, catalog,
 };
 
 struct Owner {
@@ -17,6 +18,9 @@ struct Owner {
 
 struct Inner {
     context: SettingsContext,
+    extensions: ExtensionSettingsCatalog,
+    contribution_catalogs: BTreeMap<u64, ExtensionSettingsCatalog>,
+    next_contribution_source: u64,
     owners: BTreeMap<SettingsScope, Owner>,
     subscribers: Vec<mpsc::Sender<ResolvedSettings>>,
 }
@@ -40,6 +44,9 @@ impl SettingsModel {
             writer: Mutex::new(()),
             inner: Mutex::new(Inner {
                 context,
+                extensions: ExtensionSettingsCatalog::default(),
+                contribution_catalogs: BTreeMap::new(),
+                next_contribution_source: 1,
                 owners: BTreeMap::new(),
                 subscribers: Vec::new(),
             }),
@@ -52,6 +59,183 @@ impl SettingsModel {
 
     pub fn context(&self) -> SettingsContext {
         self.inner.lock().unwrap().context.clone()
+    }
+
+    /// 拡張を有効にしたときに定義を登録し、既存の保存値も検証する。
+    pub fn register_extension_settings(
+        &self,
+        owner: &str,
+        definitions: Vec<ExtensionSettingDefinition>,
+    ) -> Result<(), SettingsError> {
+        let _writer = self.writer.lock().unwrap();
+        {
+            let mut inner = self.inner.lock().unwrap();
+            let mut extensions = inner.extensions.clone();
+            extensions.register(owner, definitions)?;
+            for (key, definition) in extensions.definitions() {
+                if inner.contribution_catalogs.values().any(|catalog| {
+                    catalog
+                        .definition(key)
+                        .is_some_and(|existing| existing != definition)
+                }) {
+                    return Err(SettingsError::new(format!(
+                        "Host 間で拡張設定の定義が競合しています: {key}"
+                    )));
+                }
+            }
+            if extensions.definitions().any(|(key, _)| {
+                self.catalog
+                    .settings()
+                    .iter()
+                    .any(|definition| definition.key.as_str() == key)
+            }) {
+                return Err(SettingsError::new(
+                    "拡張設定が既存の設定キーと重複しています",
+                ));
+            }
+            for stored in inner.owners.values() {
+                stored
+                    .document
+                    .validate_with_extensions(self.catalog, &extensions, true)?;
+            }
+            inner.extensions = extensions;
+        }
+        self.publish();
+        Ok(())
+    }
+
+    /// 定義と表示だけを除き、各スコープの保存値は削除しない。
+    pub fn unregister_extension_settings(&self, owner: &str) -> bool {
+        let _writer = self.writer.lock().unwrap();
+        let removed = self.inner.lock().unwrap().extensions.unregister(owner);
+        if removed {
+            self.publish();
+        }
+        removed
+    }
+
+    /// 現在有効な拡張設定の定義。呼び出し側はスナップショットを得る。
+    pub fn extension_settings(&self) -> ExtensionSettingsCatalog {
+        self.inner.lock().unwrap().extensions.clone()
+    }
+
+    /// 接続ごとの定義を保存済み文書に照らす。既存 state は変更しない。
+    pub(crate) fn new_contribution_source(&self) -> u64 {
+        let mut inner = self.inner.lock().unwrap();
+        let id = inner.next_contribution_source;
+        inner.next_contribution_source = id.checked_add(1).expect("contribution source overflow");
+        id
+    }
+
+    pub(crate) fn remove_contribution_source(&self, id: u64) {
+        let _writer = self.writer.lock().unwrap();
+        self.inner.lock().unwrap().contribution_catalogs.remove(&id);
+    }
+
+    pub(crate) fn with_validated_extension_catalog<T>(
+        &self,
+        source: u64,
+        extensions: &ExtensionSettingsCatalog,
+        commit: impl FnOnce() -> T,
+    ) -> Result<T, SettingsError> {
+        let _writer = self.writer.lock().unwrap();
+        {
+            let mut inner = self.inner.lock().unwrap();
+            for (key, definition) in extensions.definitions() {
+                if self
+                    .catalog
+                    .settings()
+                    .iter()
+                    .any(|existing| existing.key.as_str() == key)
+                {
+                    return Err(SettingsError::new(format!(
+                        "拡張設定が既存の設定キーと重複しています: {key}"
+                    )));
+                }
+                if inner
+                    .extensions
+                    .definition(key)
+                    .is_some_and(|existing| existing != definition)
+                {
+                    return Err(SettingsError::new(format!(
+                        "既存の拡張設定と定義が競合しています: {key}"
+                    )));
+                }
+            }
+            for (other_id, other) in &inner.contribution_catalogs {
+                if *other_id == source {
+                    continue;
+                }
+                for (key, definition) in extensions.definitions() {
+                    if other
+                        .definition(key)
+                        .is_some_and(|existing| existing != definition)
+                    {
+                        return Err(SettingsError::new(format!(
+                            "Host 間で拡張設定の定義が競合しています: {key}"
+                        )));
+                    }
+                }
+            }
+            for owner in inner.owners.values() {
+                owner
+                    .document
+                    .validate_with_extensions(self.catalog, extensions, true)?;
+            }
+            inner
+                .contribution_catalogs
+                .insert(source, extensions.clone());
+        }
+        Ok(commit())
+    }
+
+    /// 接続の宣言で解決し、他の Host の宣言に触れない。
+    pub(crate) fn resolved_with_extension_catalog(
+        &self,
+        extensions: &ExtensionSettingsCatalog,
+    ) -> ResolvedSettings {
+        let inner = self.inner.lock().unwrap();
+        let documents = inner
+            .owners
+            .values()
+            .map(|owner| &owner.document)
+            .collect::<Vec<_>>();
+        ResolvedSettings::resolve_with_extensions(
+            &inner.context,
+            self.catalog,
+            extensions,
+            &documents,
+        )
+    }
+
+    /// 接続に固定された定義でスコープと値を検証し、既存の repository へ保存する。
+    pub(crate) fn update_with_extension_catalog(
+        &self,
+        extensions: &ExtensionSettingsCatalog,
+        scope: SettingsScope,
+        values: &[(&str, Option<SettingValue>)],
+    ) -> Result<(), SettingsError> {
+        let _writer = self.writer.lock().unwrap();
+        if !self.inner.lock().unwrap().context.contains(&scope) {
+            return Err(SettingsError::new(
+                "現在の接続で利用できない設定スコープです",
+            ));
+        }
+        for (key, value) in values {
+            let definition = extensions
+                .definition(key)
+                .ok_or_else(|| SettingsError::new(format!("未登録の拡張設定: {key}")))?;
+            if !definition.allows_scope(&scope)
+                || value
+                    .as_ref()
+                    .is_some_and(|value| !definition.accepts(value))
+            {
+                return Err(SettingsError::new(format!(
+                    "拡張設定の値またはスコープが不正です: {key}"
+                )));
+            }
+        }
+        self.persist_updates(scope, values)
     }
 
     /// スコープの保存先を登録し、保存済みの値を読み込む。
@@ -68,7 +252,11 @@ impl SettingsModel {
                 document.scope()
             )));
         }
-        document.validate(self.catalog)?;
+        document.validate_with_extensions(
+            self.catalog,
+            &self.inner.lock().unwrap().extensions,
+            true,
+        )?;
         self.inner.lock().unwrap().owners.insert(
             scope,
             Owner {
@@ -102,7 +290,12 @@ impl SettingsModel {
             .values()
             .map(|owner| &owner.document)
             .collect::<Vec<_>>();
-        ResolvedSettings::resolve(&inner.context, self.catalog, &documents)
+        ResolvedSettings::resolve_with_extensions(
+            &inner.context,
+            self.catalog,
+            &inner.extensions,
+            &documents,
+        )
     }
 
     /// 値を保存する。保存に失敗した場合は state を変えない。
@@ -156,6 +349,47 @@ impl SettingsModel {
         }
 
         let _writer = self.writer.lock().unwrap();
+        let entries = values
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.clone()))
+            .collect::<Vec<_>>();
+        self.persist_updates(scope, &entries)
+    }
+
+    /// 現在登録された拡張定義に従って値を保存する。
+    pub fn update_extension(
+        &self,
+        scope: SettingsScope,
+        values: &[(&str, Option<SettingValue>)],
+    ) -> Result<(), SettingsError> {
+        let _writer = self.writer.lock().unwrap();
+        {
+            let inner = self.inner.lock().unwrap();
+            for (key, value) in values {
+                let definition = inner
+                    .extensions
+                    .definition(key)
+                    .ok_or_else(|| SettingsError::new(format!("未登録の拡張設定: {key}")))?;
+                if !definition.allows_scope(&scope)
+                    || value
+                        .as_ref()
+                        .is_some_and(|value| !definition.accepts(value))
+                {
+                    return Err(SettingsError::new(format!(
+                        "拡張設定の値またはスコープが不正です: {key}"
+                    )));
+                }
+            }
+        }
+        self.persist_updates(scope, values)
+    }
+
+    /// writer lock を保持したまま共通の文書保存経路を使う。
+    fn persist_updates(
+        &self,
+        scope: SettingsScope,
+        values: &[(&str, Option<SettingValue>)],
+    ) -> Result<(), SettingsError> {
         // 保存中は state を触らない。遅い I/O の間も読み取りは待たせない。
         let (repository, document) = {
             let inner = self.inner.lock().unwrap();
@@ -165,14 +399,16 @@ impl SettingsModel {
             let mut document = owner.document.clone();
             let mut changed = false;
             for (key, value) in values {
-                if document.get(*key) == value.as_ref() {
+                if document.values.get(*key) == value.as_ref() {
                     continue;
                 }
                 changed = true;
                 match value {
-                    Some(value) => document.insert(*key, value.clone()),
+                    Some(value) => {
+                        document.values.insert((*key).to_owned(), value.clone());
+                    }
                     None => {
-                        document.remove(*key);
+                        document.values.remove(*key);
                     }
                 }
             }
@@ -277,6 +513,210 @@ mod tests {
             .attach(SettingsScope::User, repository.clone())
             .unwrap();
         (model, repository)
+    }
+
+    fn extension_definition() -> ExtensionSettingDefinition {
+        ExtensionSettingDefinition {
+            name: "font-size".into(),
+            value_kind: settings::ValueKind::Integer,
+            scopes: vec![settings::ScopeKind::User],
+            default: Some(SettingValue::integer(12)),
+            allowed_values: None,
+        }
+    }
+
+    #[test]
+    fn extension_settings_are_validated_saved_and_restored_after_disable() {
+        let (model, repository) = model(SettingsContext::new());
+        let key = "extensions/dev.example.terminal/font-size";
+        model
+            .register_extension_settings("dev.example.terminal", vec![extension_definition()])
+            .unwrap();
+        let watch = model.subscribe();
+        assert_eq!(
+            model.resolved().extension_setting(key).unwrap().value(),
+            Some(&SettingValue::integer(12))
+        );
+        assert!(
+            model
+                .update_extension(
+                    SettingsScope::User,
+                    &[(key, Some(SettingValue::text("bad")))]
+                )
+                .is_err()
+        );
+        assert!(
+            model
+                .update_extension(
+                    SettingsScope::User,
+                    &[("extensions/other/value", Some(SettingValue::integer(14)))]
+                )
+                .is_err()
+        );
+        assert!(watch.try_recv().is_err());
+        model
+            .update_extension(
+                SettingsScope::User,
+                &[(key, Some(SettingValue::integer(16)))],
+            )
+            .unwrap();
+        assert_eq!(
+            watch
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap()
+                .extension_setting(key)
+                .unwrap()
+                .value(),
+            Some(&SettingValue::integer(16))
+        );
+        assert_eq!(
+            repository.document.lock().unwrap().values.get(key),
+            Some(&SettingValue::integer(16))
+        );
+        assert!(model.unregister_extension_settings("dev.example.terminal"));
+        assert!(model.resolved().extension_setting(key).is_none());
+        // 無効中の他の設定変更でも拡張の値を消さない。
+        model
+            .set(
+                SettingsScope::User,
+                UI_THEME,
+                SettingValue::text("lapis.white"),
+            )
+            .unwrap();
+        assert_eq!(
+            repository.document.lock().unwrap().values.get(key),
+            Some(&SettingValue::integer(16))
+        );
+        let restarted = SettingsModel::new(SettingsContext::new());
+        restarted
+            .attach(SettingsScope::User, repository.clone())
+            .unwrap();
+        assert!(restarted.resolved().extension_setting(key).is_none());
+        restarted
+            .register_extension_settings("dev.example.terminal", vec![extension_definition()])
+            .unwrap();
+        assert_eq!(
+            restarted.resolved().extension_setting(key).unwrap().value(),
+            Some(&SettingValue::integer(16))
+        );
+        assert_eq!(restarted.resolved().theme(), "lapis.white");
+    }
+
+    #[test]
+    fn extension_registration_is_atomic_for_invalid_stored_values() {
+        let (model, repository) = model(SettingsContext::new());
+        let key = "extensions/dev.example.terminal/font-size";
+        // 無効な拡張の保存値は壊さず読み、再有効化時に定義と照合する。
+        repository
+            .document
+            .lock()
+            .unwrap()
+            .values
+            .insert(key.into(), SettingValue::text("wrong"));
+        model
+            .attach(SettingsScope::User, repository.clone())
+            .unwrap();
+        assert!(
+            model
+                .register_extension_settings("dev.example.terminal", vec![extension_definition()])
+                .is_err()
+        );
+        assert!(model.resolved().extension_setting(key).is_none());
+        assert_eq!(
+            repository.document.lock().unwrap().values.get(key),
+            Some(&SettingValue::text("wrong"))
+        );
+        assert_eq!(repository.saves.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn attaching_keeps_rejecting_unknown_non_extension_keys() {
+        let repository = Arc::new(MemoryRepository::new(SettingsScope::User));
+        repository
+            .document
+            .lock()
+            .unwrap()
+            .values
+            .insert("unknown.key".into(), SettingValue::text("x"));
+        let model = SettingsModel::new(SettingsContext::new());
+        assert!(model.attach(SettingsScope::User, repository).is_err());
+    }
+
+    #[test]
+    fn extension_save_failure_does_not_publish_or_change_state() {
+        let model = SettingsModel::new(SettingsContext::new());
+        model
+            .attach(
+                SettingsScope::User,
+                Arc::new(MemoryRepository::failing(SettingsScope::User)),
+            )
+            .unwrap();
+        model
+            .register_extension_settings("dev.example.terminal", vec![extension_definition()])
+            .unwrap();
+        let watch = model.subscribe();
+        let key = "extensions/dev.example.terminal/font-size";
+        assert!(
+            model
+                .update_extension(
+                    SettingsScope::User,
+                    &[(key, Some(SettingValue::integer(18)))]
+                )
+                .is_err()
+        );
+        assert!(watch.try_recv().is_err());
+        assert_eq!(
+            model.resolved().extension_setting(key).unwrap().value(),
+            Some(&SettingValue::integer(12))
+        );
+    }
+
+    #[test]
+    fn extension_scopes_override_without_leaking_other_projects() {
+        let context = SettingsContext::new().with_project(ProjectId::new("lapis"));
+        let model = SettingsModel::new(context);
+        let key = "extensions/dev.example.terminal/font-size";
+        let mut definition = extension_definition();
+        definition.scopes.push(settings::ScopeKind::ProjectLocal);
+        model
+            .register_extension_settings("dev.example.terminal", vec![definition])
+            .unwrap();
+        let user = Arc::new(MemoryRepository::new(SettingsScope::User));
+        let local_scope = SettingsScope::ProjectLocal {
+            id: ProjectId::new("lapis"),
+        };
+        let local = Arc::new(MemoryRepository::new(local_scope.clone()));
+        model.attach(SettingsScope::User, user).unwrap();
+        model.attach(local_scope.clone(), local).unwrap();
+        model
+            .update_extension(
+                SettingsScope::User,
+                &[(key, Some(SettingValue::integer(13)))],
+            )
+            .unwrap();
+        model
+            .update_extension(
+                local_scope.clone(),
+                &[(key, Some(SettingValue::integer(17)))],
+            )
+            .unwrap();
+        let resolved = model.resolved();
+        let setting = resolved.extension_setting(key).unwrap();
+        assert_eq!(setting.value(), Some(&SettingValue::integer(17)));
+        assert_eq!(setting.origin(), Some(&local_scope));
+        let forbidden = SettingsScope::Host {
+            id: HostId::new("host"),
+        };
+        assert!(
+            model
+                .update_extension(forbidden, &[(key, Some(SettingValue::integer(22)))])
+                .is_err()
+        );
+        model.update_extension(local_scope, &[(key, None)]).unwrap();
+        assert_eq!(
+            model.resolved().extension_setting(key).unwrap().value(),
+            Some(&SettingValue::integer(13))
+        );
     }
 
     #[test]

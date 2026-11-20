@@ -1,0 +1,6 @@
+package lapis:external-example@1.0.0;
+
+world extension {
+    include lapis:extension/extension@1.0.0;
+    include lapis:dispatch/extension-dispatch@1.0.0;
+}

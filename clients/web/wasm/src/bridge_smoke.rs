@@ -97,8 +97,6 @@ pub async fn bridge_smoke(
             CapabilityId::try_new("workspace.workbench.write").unwrap(),
             CapabilityId::try_new("workspace.documents.read").unwrap(),
             CapabilityId::try_new("workspace.documents.write").unwrap(),
-            CapabilityId::try_new("workspace.terminal.start").unwrap(),
-            CapabilityId::try_new("workspace.terminal.control").unwrap(),
         ])
         .unwrap(),
     };
@@ -334,25 +332,6 @@ pub async fn bridge_smoke(
         return Err(JsValue::from_str("reverse document edit failed"));
     };
     wait_document_edit(&mut events, &document_id, reverse.revision).await?;
-    let started = client_core::AsyncHostConnection::request(
-        &connection,
-        RequestBody::TerminalStart(client_api::TerminalStartRequest {
-            workspace_id: workspace.clone(),
-            cwd: None,
-            command: None,
-            profile: None,
-            size: client_api::TerminalSize {
-                columns: 80,
-                rows: 24,
-            },
-        }),
-    )
-    .await
-    .map_err(|e| JsValue::from_str(&e))?;
-    let ResponseBody::TerminalStart(started) = started else {
-        return Err(JsValue::from_str("terminal start failed"));
-    };
-    let terminal_id = started.terminal.terminal_id;
     drop(connection);
     drop(other);
     gloo_timers::future::TimeoutFuture::new(250).await;
@@ -438,7 +417,7 @@ pub async fn bridge_smoke(
     .await
     .map_err(|e| JsValue::from_str(&e))?;
     let ResponseBody::SnapshotResync(snapshot) = snapshot else {
-        return Err(JsValue::from_str("terminal snapshot failed"));
+        return Err(JsValue::from_str("workspace snapshot failed"));
     };
     if !snapshot.snapshot.documents.iter().any(|document| {
         document.document_id == document_id
@@ -448,33 +427,6 @@ pub async fn bridge_smoke(
         return Err(JsValue::from_str(
             "dirty document did not survive disconnect",
         ));
-    }
-    if !snapshot.snapshot.terminals.iter().any(|terminal| {
-        terminal.terminal_id == terminal_id
-            && terminal.status == client_api::TerminalStatus::Running
-    }) {
-        return Err(JsValue::from_str("terminal did not survive disconnect"));
-    }
-    let input = client_core::AsyncHostConnection::request(
-        &reconnected,
-        RequestBody::TerminalInput(client_api::TerminalInputRequest {
-            terminal_id: terminal_id.clone(),
-            input: client_api::TerminalInput::Text("\r".into()),
-        }),
-    )
-    .await
-    .map_err(|e| JsValue::from_str(&e))?;
-    if !matches!(input, ResponseBody::TerminalInput(_)) {
-        return Err(JsValue::from_str("terminal input after disconnect failed"));
-    }
-    let terminated = client_core::AsyncHostConnection::request(
-        &reconnected,
-        RequestBody::TerminalTerminate(client_api::TerminalTerminateRequest { terminal_id }),
-    )
-    .await
-    .map_err(|e| JsValue::from_str(&e))?;
-    if !matches!(terminated, ResponseBody::TerminalTerminate(_)) {
-        return Err(JsValue::from_str("terminal cleanup failed"));
     }
     // 同じ接続のまま close -> connect で別 Workspace へ切り替える。
     let closed = client_core::AsyncHostConnection::request(

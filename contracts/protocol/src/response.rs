@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use crate::{
     DocumentCloseResponse, DocumentCreateResponse, DocumentEditResponse, DocumentHistoryResponse,
     DocumentOpenResponse, DocumentSaveResponse, FileTreeResponse, ProtocolError, SnapshotResponse,
-    TerminalCommandResponse, TerminalListProfilesResponse, TerminalStartResponse,
     WorkspaceCloseResponse, WorkspaceConnectResponse, WorkspaceListResponse,
 };
 
@@ -33,6 +32,14 @@ pub enum ResponseBody {
     HostWebStop(crate::HostWebStatus),
     #[serde(rename = "host.extensions.list")]
     HostExtensions(crate::HostExtensionsListResponse),
+    #[serde(rename = "host.extensions.set_enabled")]
+    HostExtensionSetEnabled(crate::HostExtensionSetEnabledResponse),
+    #[serde(rename = "host.extensions.capabilities")]
+    HostExtensionCapabilities(crate::HostExtensionCapabilitiesResponse),
+    #[serde(rename = "host.extensions.set_capability")]
+    HostExtensionSetCapability(crate::HostExtensionSetCapabilityResponse),
+    #[serde(rename = "host.extensions.dispatch")]
+    HostExtensionDispatch(crate::HostExtensionDispatchResponse),
     #[serde(rename = "document.relocate")]
     DocumentRelocate(crate::DocumentCloseResponse),
     #[serde(rename = "files.create_directory")]
@@ -81,20 +88,6 @@ pub enum ResponseBody {
     DocumentClaim(crate::DocumentCommandResponse),
     #[serde(rename = "document.release")]
     DocumentRelease(crate::DocumentCommandResponse),
-    #[serde(rename = "terminal.start")]
-    TerminalStart(TerminalStartResponse),
-    #[serde(rename = "terminal.list_profiles")]
-    TerminalListProfiles(TerminalListProfilesResponse),
-    #[serde(rename = "terminal.input")]
-    TerminalInput(TerminalCommandResponse),
-    #[serde(rename = "terminal.resize")]
-    TerminalResize(TerminalCommandResponse),
-    #[serde(rename = "terminal.terminate")]
-    TerminalTerminate(TerminalCommandResponse),
-    #[serde(rename = "terminal.claim")]
-    TerminalClaim(TerminalCommandResponse),
-    #[serde(rename = "terminal.release")]
-    TerminalRelease(TerminalCommandResponse),
     #[serde(rename = "snapshot.resync")]
     SnapshotResync(SnapshotResponse),
     #[serde(rename = "error")]
@@ -115,6 +108,10 @@ impl ResponseBody {
             Self::HostWebStart(_) => Some("host.web.start"),
             Self::HostWebStop(_) => Some("host.web.stop"),
             Self::HostExtensions(_) => Some("host.extensions.list"),
+            Self::HostExtensionSetEnabled(_) => Some("host.extensions.set_enabled"),
+            Self::HostExtensionCapabilities(_) => Some("host.extensions.capabilities"),
+            Self::HostExtensionSetCapability(_) => Some("host.extensions.set_capability"),
+            Self::HostExtensionDispatch(_) => Some("host.extensions.dispatch"),
             Self::DocumentRelocate(_) => Some("document.relocate"),
             Self::CreateDirectory(_) => Some("files.create_directory"),
             Self::DocumentInspect(_) => Some("document.inspect"),
@@ -139,13 +136,6 @@ impl ResponseBody {
             Self::DocumentClose(_) => Some("document.close"),
             Self::DocumentClaim(_) => Some("document.claim"),
             Self::DocumentRelease(_) => Some("document.release"),
-            Self::TerminalStart(_) => Some("terminal.start"),
-            Self::TerminalListProfiles(_) => Some("terminal.list_profiles"),
-            Self::TerminalInput(_) => Some("terminal.input"),
-            Self::TerminalResize(_) => Some("terminal.resize"),
-            Self::TerminalTerminate(_) => Some("terminal.terminate"),
-            Self::TerminalClaim(_) => Some("terminal.claim"),
-            Self::TerminalRelease(_) => Some("terminal.release"),
             Self::SnapshotResync(_) => Some("snapshot.resync"),
             Self::Error(_) => None,
         }

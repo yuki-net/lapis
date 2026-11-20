@@ -31,6 +31,29 @@ pub(crate) fn apply_view_state(
     // 共有状態に含まれないアクティブタブは、このClientの現在の選択を残す。
     let local_layout = shell.layout.capture();
     if let Some(layout) = view.layout.as_mut() {
+        for panel in layout.zones.iter_mut().flat_map(|zone| &mut zone.panels) {
+            for tab in panel
+                .tabs
+                .iter_mut()
+                .chain(&mut panel.pinned_tabs)
+                .chain(panel.active_tab.iter_mut())
+            {
+                match tab {
+                    TabRef::View {
+                        view: Some(view), ..
+                    }
+                    | TabRef::Resource {
+                        view: Some(view), ..
+                    } => {
+                        *view = registry
+                            .resolve_view(&ViewId::new(view.as_str()))
+                            .as_str()
+                            .to_owned();
+                    }
+                    _ => {}
+                }
+            }
+        }
         layout.retain_active_tabs_from(&local_layout);
     }
     let restored = view.layout.as_ref().and_then(|layout| {
@@ -41,20 +64,30 @@ pub(crate) fn apply_view_state(
                 // 外部 Resource を参照するタブは、Resource の実在確認を再アタッチ時に任せ、
                 // 参照 ID だけで復元する。どの View が参照するかは宣言から決まる。
                 PanelTab::Tool { resource, .. } if resource.is_some() => true,
-                PanelTab::Tool { view, .. } => [
-                    ZonePosition::Main,
-                    ZonePosition::Left,
-                    ZonePosition::Bottom,
-                    ZonePosition::Right,
-                ]
-                .into_iter()
-                .flat_map(|position| registry.zone_contributions(position))
-                .any(|contribution| contribution.view.as_ref() == Some(view)),
+                PanelTab::Tool { view, .. } => {
+                    [
+                        ZonePosition::Main,
+                        ZonePosition::Left,
+                        ZonePosition::Bottom,
+                        ZonePosition::Right,
+                    ]
+                    .into_iter()
+                    .flat_map(|position| registry.zone_contributions(position))
+                    .any(|contribution| contribution.view.as_ref() == Some(view))
+                        || matches!(reference, TabRef::View { view: Some(_), .. })
+                }
             }
             .then_some(tab)
         })
     });
     shell.layout = restored.unwrap_or_default();
+    shell.unregistered_view_types = shell
+        .layout
+        .placements()
+        .into_iter()
+        .filter_map(|(tab, _)| tab.view_id().cloned())
+        .filter(|view| registry.declaration(view).is_none())
+        .collect();
     shell.show_panel_controls = view.show_panel_controls;
     shell.synchronize_documents(documents);
 }
@@ -63,28 +96,50 @@ fn deserialize_panel_tab(value: &TabRef, registry: &FeatureRegistry) -> Option<P
     match value {
         TabRef::Document { id } => Some(PanelTab::Document(id.clone())),
         TabRef::Resource { view, id } => {
-            // View 未指定の旧 Terminal タブは、外部 Resource を宣言した View へ戻す。
-            let view = view.as_deref().map(ViewId::new).or_else(|| {
-                registry
-                    .external_resource_view()
-                    .filter(|_| value.legacy_terminal_id().is_some())
-            })?;
-            let instance = ViewInstanceId::new(format!("{TERMINAL_INSTANCE_PREFIX}{id}"));
+            // View 未指定の旧形式は Terminal として保存されていた。
+            let view = view
+                .as_deref()
+                .map(|view| registry.resolve_view(&ViewId::new(view)))
+                .or_else(|| {
+                    let terminal =
+                        registry.resolve_view(&ViewId::new(crate::features::id::VIEW_TERMINAL));
+                    (value.legacy_terminal_id().is_some()
+                        && registry.declaration(&terminal).is_some_and(|declaration| {
+                            declaration.tab_reference
+                                == extension_ui_contract::TabReference::ExternalResource
+                        }))
+                    .then_some(terminal)
+                })?;
+            let instance = if view
+                == registry.resolve_view(&ViewId::new(crate::features::id::VIEW_TERMINAL))
+            {
+                ViewInstanceId::new(format!("{TERMINAL_INSTANCE_PREFIX}{id}"))
+            } else {
+                ViewInstanceId::new(format!(
+                    "resource:{}:{}:{id}",
+                    view.as_str().len(),
+                    view.as_str()
+                ))
+            };
             Some(PanelTab::external(view, instance, Some(id.clone())))
         }
-        TabRef::View { id } => {
+        TabRef::View { id, view } => {
             if id.is_empty() {
                 return None;
             }
             // ViewInstanceIdは "shared:<view>" か "<view>:<token>" の形を取る。
-            let view = id
-                .strip_prefix("shared:")
-                .or_else(|| id.split_once(':').map(|(view, _)| view))
-                .unwrap_or(id.as_str());
+            let view = view.as_deref().unwrap_or_else(|| {
+                id.strip_prefix("shared:")
+                    .or_else(|| id.split_once(':').map(|(view, _)| view))
+                    .unwrap_or(id.as_str())
+            });
             if view.is_empty() {
                 return None;
             }
-            Some(PanelTab::tool_instance(ViewId::new(view), id.clone()))
+            Some(PanelTab::tool_instance(
+                registry.resolve_view(&ViewId::new(view)),
+                id.clone(),
+            ))
         }
     }
 }
@@ -94,6 +149,170 @@ mod tests {
     use super::*;
     use crate::shell::PanelId;
     use desktop_client::ZoneLayoutViewState;
+
+    #[test]
+    fn arbitrary_instance_id_restores_with_its_declared_view() {
+        use extension_ui_contract::{FeatureDescriptor, UiContribution, UiSlot};
+        let mut registry = crate::features::bundled_registry();
+        registry
+            .register(
+                FeatureDescriptor::core("example").contributes(
+                    UiContribution::view(
+                        "example.view",
+                        UiSlot::BottomDock,
+                        "Example",
+                        "example",
+                        0,
+                    )
+                    .multiple_instances(),
+                ),
+            )
+            .unwrap();
+        let tab = PanelTab::tool_instance("example.view", "opaque-instance");
+        let mut original = ShellState::default();
+        original.layout_profile.set(LayoutProfile::Wide);
+        original
+            .layout
+            .open_tab(ZonePosition::Bottom, tab.clone())
+            .unwrap();
+        original.layout.set_tab_pinned(&tab, true);
+        let saved = serde_json::to_string(&capture_view_state(&original)).unwrap();
+        let decoded = serde_json::from_str(&saved).unwrap();
+        let mut restored = ShellState::default();
+        restored.layout_profile.set(LayoutProfile::Wide);
+        apply_view_state(decoded, &mut restored, &[], &registry);
+        assert!(restored.layout.find_tab(&tab).is_some());
+        assert!(restored.layout.tab_is_pinned(&tab));
+        let legacy: TabRef =
+            serde_json::from_str(r#"{"kind":"view","id":"example.view:old"}"#).unwrap();
+        assert_eq!(
+            deserialize_panel_tab(&legacy, &registry)
+                .unwrap()
+                .view_id()
+                .unwrap()
+                .as_str(),
+            "example.view"
+        );
+    }
+
+    #[test]
+    fn pending_extension_tabs_survive_until_the_view_is_registered() {
+        use extension_ui_contract::{FeatureDescriptor, UiContribution, UiSlot};
+        let mut registry = crate::features::bundled_registry();
+        let pending = PanelTab::tool_instance("example.later.view", "opaque-id");
+        let resource = PanelTab::external("example.later.view", "other-id", Some("session".into()));
+        let mut original = ShellState::default();
+        original.layout_profile.set(LayoutProfile::Wide);
+        original
+            .layout
+            .open_tab(ZonePosition::Bottom, pending.clone())
+            .unwrap();
+        original
+            .layout
+            .open_tab(ZonePosition::Bottom, resource.clone())
+            .unwrap();
+        let saved = capture_view_state(&original);
+        let mut restored = ShellState::default();
+        restored.layout_profile.set(LayoutProfile::Wide);
+        apply_view_state(saved, &mut restored, &[], &registry);
+        assert!(restored.layout.find_tab(&pending).is_some());
+        let restored_resource = restored
+            .layout
+            .placements()
+            .into_iter()
+            .map(|(tab, _)| tab)
+            .find(|tab| tab.resource() == Some("session"))
+            .unwrap();
+        assert!(!restored.view_visible(&pending));
+        assert!(!restored.view_visible(&restored_resource));
+        let persisted = capture_view_state(&restored);
+        registry
+            .register(
+                FeatureDescriptor::core("example.later").contributes(
+                    UiContribution::view(
+                        "example.later.view",
+                        UiSlot::BottomDock,
+                        "Example",
+                        "example",
+                        0,
+                    )
+                    .multiple_instances(),
+                ),
+            )
+            .unwrap();
+        apply_view_state(persisted, &mut restored, &[], &registry);
+        assert!(restored.layout.find_tab(&pending).is_some());
+        assert!(restored.view_visible(&pending));
+        assert!(restored.view_visible(&restored_resource));
+    }
+
+    #[test]
+    fn old_terminal_view_reference_restores_to_declared_id_with_pin() {
+        let mut registry = crate::features::bundled_registry();
+        let old = ViewId::new(crate::features::id::VIEW_TERMINAL);
+        let new = ViewId::new("lapis.terminal.view");
+        let tab = PanelTab::external(old.clone(), "terminal:before", Some("session".into()));
+        let mut original = ShellState::default();
+        original.layout_profile.set(LayoutProfile::Wide);
+        original
+            .layout
+            .open_tab(ZonePosition::Bottom, tab.clone())
+            .unwrap();
+        original.layout.set_tab_pinned(&tab, true);
+        let saved = capture_view_state(&original);
+        assert!(registry.rekey_view(&old, &new));
+        let mut restored = ShellState::default();
+        restored.layout_profile.set(LayoutProfile::Wide);
+        apply_view_state(saved, &mut restored, &[], &registry);
+        let tab = restored
+            .layout
+            .placements()
+            .into_iter()
+            .map(|(tab, _)| tab)
+            .find(|tab| tab.resource() == Some("session"))
+            .unwrap();
+        assert_eq!(tab.view_id(), Some(&new));
+        assert!(restored.layout.tab_is_pinned(&tab));
+    }
+
+    #[test]
+    fn external_resources_restore_per_view_and_legacy_terminal_keeps_its_owner() {
+        use extension_ui_contract::{FeatureDescriptor, UiContribution, UiSlot};
+
+        let mut registry = crate::features::bundled_registry();
+        registry
+            .register(
+                FeatureDescriptor::core("aaa.example").contributes(
+                    UiContribution::view(
+                        "aaa.example.view",
+                        UiSlot::BottomDock,
+                        "Example",
+                        "example",
+                        0,
+                    )
+                    .references_external_resource(),
+                ),
+            )
+            .unwrap();
+        let resource = |view: Option<&str>| TabRef::Resource {
+            view: view.map(str::to_owned),
+            id: "same-id".to_owned(),
+        };
+        let legacy = deserialize_panel_tab(&resource(None), &registry).unwrap();
+        let terminal = deserialize_panel_tab(
+            &resource(Some(crate::features::id::VIEW_TERMINAL)),
+            &registry,
+        )
+        .unwrap();
+        let other = deserialize_panel_tab(&resource(Some("aaa.example.view")), &registry).unwrap();
+        assert_eq!(legacy, terminal);
+        assert_eq!(
+            legacy.view_id().unwrap().as_str(),
+            crate::features::id::VIEW_TERMINAL
+        );
+        assert_ne!(other.instance_id(), terminal.instance_id());
+        assert_eq!(other.view_id().unwrap().as_str(), "aaa.example.view");
+    }
 
     #[test]
     fn broken_layout_keeps_dirty_documents_in_the_default_zone() {

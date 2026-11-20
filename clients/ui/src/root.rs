@@ -4,9 +4,7 @@ use crate::{
     commands::UiCommand,
     features::{
         self,
-        command_search::{
-            CommandSearchProvider, DoubleShiftDetector, QuickSearch, QuickSearchEvent,
-        },
+        command_search::{DoubleShiftDetector, QuickSearch, QuickSearchEvent},
         conversation::{ConversationEvent, ConversationFeature},
         editor::{Editor, EditorEvent},
         files::FilesFeature,
@@ -31,6 +29,45 @@ use gpui::{
     AnyView, AppContext, Context, Entity, Focusable, Render, Subscription, Window, div, prelude::*,
 };
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_THEME_SOURCE: AtomicU64 = AtomicU64::new(1);
+
+/// 有効設定ではなく、現在実行中で有効な表示宣言があるかを使う。
+fn extension_view_available(
+    snapshot: Option<&desktop_client::ExtensionContributionSnapshot>,
+    owner: &str,
+    content_type: &str,
+) -> bool {
+    snapshot.is_some_and(|snapshot| snapshot.has_active_view(owner, content_type))
+}
+
+/// 切断中や起動中は直前の表示状態を維持し、確定した目録だけで切り替える。
+fn extension_view_hidden(
+    snapshot: Option<&desktop_client::ExtensionContributionSnapshot>,
+    owner: &str,
+    content_type: &str,
+) -> Option<bool> {
+    let snapshot = snapshot?;
+    if snapshot
+        .extensions()
+        .iter()
+        .find(|entry| entry.id == owner)
+        .is_some_and(|entry| entry.active.is_none())
+    {
+        return None;
+    }
+    Some(!snapshot.has_active_view(owner, content_type))
+}
+
+fn contributed_zone(zone: extension_ui_contract::ContributedZone) -> ZonePosition {
+    match zone {
+        extension_ui_contract::ContributedZone::Main => ZonePosition::Main,
+        extension_ui_contract::ContributedZone::Left => ZonePosition::Left,
+        extension_ui_contract::ContributedZone::Bottom => ZonePosition::Bottom,
+        extension_ui_contract::ContributedZone::Right => ZonePosition::Right,
+    }
+}
 
 /// 共有ハンドルから、適用判定を持つ watch を取り出す。
 fn session_view_watch_of(
@@ -89,6 +126,7 @@ pub(crate) struct DesktopRoot {
     pub(crate) group: Entity<crate::window_host::WindowGroup>,
     /// Terminal のタブ個体と Session を所有する機能。Composition Root だけが具体型を知る。
     terminal: std::rc::Rc<std::cell::RefCell<features::terminal::TerminalLifecycle>>,
+    terminal_view: ViewId,
     pub(crate) editor: Entity<Editor>,
     files: Entity<FilesFeature>,
     git: Entity<GitFeature>,
@@ -105,6 +143,7 @@ pub(crate) struct DesktopRoot {
     update: Option<Entity<UpdateFeature>>,
     quick_search: Entity<QuickSearch>,
     universal_search: Entity<QuickSearch>,
+    locale_packs: Vec<localization::LocalePack>,
     universal_search_open: bool,
     universal_previous_focus: Option<gpui::FocusHandle>,
     path_request: Option<PathRequest>,
@@ -161,7 +200,7 @@ impl DesktopRoot {
     /// Installs command, snapshot, persistence, and close subscriptions and focuses the editor.
     pub(crate) fn new(
         session: EditorSession,
-        mut services: DesktopServices,
+        services: DesktopServices,
         initial: InitialView,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -184,24 +223,32 @@ impl DesktopRoot {
         let terminal_context = conversation_id.clone();
         let terminal_root = session.workspace_root().map(ToOwned::to_owned);
         let initial_locale = services.settings.settings().locale();
-        if services.terminal.terminals().is_empty() {
-            let summaries = services
-                .conversation
-                .active_record()
-                .filter(|record| record.workspace.root == terminal_root)
-                .map(|record| record.terminals.clone())
-                .unwrap_or_default();
-            services.terminal.restore_summaries(&summaries);
-        }
         let document_connection = Some(session.document_connection());
         let initial_workspace = session.workspace_id().cloned();
-        let worker = ClientWorker::new(DocumentClient::new(
+        #[cfg_attr(target_family = "wasm", allow(unused_mut))]
+        let mut document_client = DocumentClient::new(
             session,
             services.conversation,
             services.lsp,
             services.git.backend(),
             session_view.clone(),
-        ));
+        );
+        #[cfg(not(target_family = "wasm"))]
+        let extension_contributions = services
+            .extension_loader
+            .as_ref()
+            .map(|_| services.settings.extension_contributions());
+        #[cfg(not(target_family = "wasm"))]
+        if let (Some(loader), Some(contributions)) = (
+            services.extension_loader.clone(),
+            extension_contributions.clone(),
+        ) {
+            let mut loading =
+                crate::extension_loading::ExtensionLoading::new(contributions, loader);
+            loading.set_workspace(initial_workspace.clone());
+            document_client.extension_loading = Some(loading);
+        }
+        let worker = ClientWorker::new(document_client);
         let process_worker = ClientWorker::new(ProcessWorker::new(
             services.process.clone(),
             initial_workspace.clone(),
@@ -244,6 +291,21 @@ impl DesktopRoot {
                 services.web_access.clone(),
                 services.web_access_control.clone(),
             )
+        });
+        settings.update(cx, |settings, _| {
+            settings.set_legacy_terminal_settings_hidden(false)
+        });
+        #[cfg(target_family = "wasm")]
+        let extension_contributions = desktop_client::web_host::extension_contributions();
+        let locale_contributions = extension_contributions.clone();
+        settings.update(cx, |settings, cx| {
+            settings.set_extension_contributions(extension_contributions, cx)
+        });
+        #[cfg(not(target_family = "wasm"))]
+        settings.update(cx, |settings, _| {
+            settings.set_extension_manager(services.extension_manager.clone());
+            settings
+                .set_extension_capability_manager(services.extension_capability_manager.clone());
         });
         let update = services
             .updater
@@ -310,6 +372,7 @@ impl DesktopRoot {
             (id::VIEW_COMMAND_SEARCH.into(), quick_search.clone().into()),
         ]);
         let shell = cx.new(|cx| Shell::new(editor.clone().into(), views, cx));
+        let extension_terminal = services.extension_terminal;
         let branch_picker = cx.new(|cx| features::git::BranchPicker::new(git.clone(), window, cx));
         let terminal_backend = services.terminal.backend();
         // Terminal を設定の供給元として登録する。
@@ -323,6 +386,11 @@ impl DesktopRoot {
                 backend: terminal_backend,
                 context: terminal_context,
                 settings: terminal_settings,
+                extension_settings: if extension_terminal {
+                    locale_contributions.clone()
+                } else {
+                    None
+                },
             });
         shell.update(cx, |shell, cx| {
             shell.branch_picker = Some(branch_picker);
@@ -333,7 +401,12 @@ impl DesktopRoot {
                 });
             }
             // Terminal を「宣言の供給者＋個体の所有者」として登録する。Shell は
-            // ターミナル固有の分岐を持たず、宣言された状態だけを扱う。
+            // 拡張の現在の稼働状態を受け取るまで View を隠す。
+            if extension_terminal {
+                shell.set_view_available(ViewId::new(id::VIEW_TERMINAL), false, cx);
+                shell.set_view_hidden(ViewId::new(id::VIEW_TERMINAL), true, cx);
+            }
+            shell.register_content_renderer("lapis.content.terminal-grid.v1", terminal.clone(), cx);
             shell.configure_view_lifecycles(terminal.clone(), ViewId::new(id::VIEW_TERMINAL), cx);
             shell.open_view_in_zone(ZonePosition::Left, id::VIEW_PROJECT_TASKS.into(), cx);
             if initial.show_tasks {
@@ -603,6 +676,11 @@ impl DesktopRoot {
                 root.schedule_persist(cx);
             }),
         ];
+        let theme_source = NEXT_THEME_SOURCE.fetch_add(1, Ordering::Relaxed);
+        subscriptions.push(cx.on_release(move |_, cx| {
+            let selected = crate::theme::active_id(cx);
+            let _ = crate::theme::replace_source(theme_source, Vec::new(), &selected, cx);
+        }));
 
         let weak = cx.entity().downgrade();
         window.on_window_should_close(cx, move |window, cx| {
@@ -642,6 +720,205 @@ impl DesktopRoot {
             }
         }));
         crate::gpui_compat::focus(window, &editor.focus_handle(cx), cx);
+        if let Some(session) = locale_contributions {
+            let receiver = session.subscribe();
+            let settings_watch = services.settings.subscribe();
+            let mut pending_terminal =
+                extension_terminal && initial.show_terminal && !initial.show_problems;
+            cx.spawn(async move |root, cx| {
+                let mut first = true;
+                loop {
+                    let mut changed = first;
+                    first = false;
+                    while receiver.try_recv().is_ok() {
+                        changed = true;
+                    }
+                    while settings_watch.try_recv().is_ok() {
+                        changed = true;
+                    }
+                    let alive = root
+                        .update(cx, |root, cx| {
+                            if changed {
+                                let snapshot = session.snapshot();
+                                for entity in root.terminal.borrow().entities() {
+                                    entity.update(cx, |terminal, cx| terminal.refresh_extension_settings(cx));
+                                }
+                                if extension_terminal {
+                                    let terminal_active = snapshot
+                                        .as_ref()
+                                        .is_some_and(|snapshot| snapshot.has_active_view("lapis.terminal", "lapis.content.terminal-grid.v1"));
+                                    root.settings.update(cx, |settings, _| {
+                                        settings.set_legacy_terminal_settings_hidden(terminal_active)
+                                    });
+                                    let available = extension_view_available(snapshot.as_ref(), "lapis.terminal", "lapis.content.terminal-grid.v1");
+                                    let hidden = extension_view_hidden(snapshot.as_ref(), "lapis.terminal", "lapis.content.terminal-grid.v1");
+                                    let declaration = snapshot.as_ref().and_then(|snapshot| snapshot.active_view("lapis.terminal", "lapis.content.terminal-grid.v1"));
+                                    let shells = root.group.read(cx).members.values().map(|member| member.shell.clone()).collect::<Vec<_>>();
+                                    if let Some(snapshot) = snapshot.as_ref() {
+                                        let live = snapshot
+                                            .extensions()
+                                            .iter()
+                                            .filter(|extension| extension.active == Some(true))
+                                            .map(|extension| extension.id.clone())
+                                            .collect::<Vec<_>>();
+                                        let catalog = snapshot
+                                            .extensions()
+                                            .iter()
+                                            .map(|extension| extension.id.clone())
+                                            .collect::<Vec<_>>();
+                                        for shell in &shells {
+                                            shell.update(cx, |shell, cx| {
+                                                shell.sync_extension_availability(
+                                                    live.clone(),
+                                                    catalog.clone(),
+                                                    cx,
+                                                )
+                                            });
+                                        }
+                                    }
+                                    if let Some(view) = declaration {
+                                        let next = ViewId::new(view.id.clone());
+                                        let old = root.terminal_view.clone();
+                                        let legacy = ViewId::new(id::VIEW_TERMINAL);
+                                        let sources = shells.iter().map(|shell| {
+                                            let shell = shell.read(cx);
+                                            if shell.can_rekey_extension_view(&old, &next) { Some(old.clone()) }
+                                            else if shell.can_rekey_extension_view(&legacy, &next) { Some(legacy.clone()) }
+                                            else { None }
+                                        }).collect::<Option<Vec<_>>>();
+                                        if let Some(sources) = sources.filter(|sources| root.group.read(cx).layout.can_rekey_views(sources, &next)) {
+                                            root.group.update(cx, |group, _| group.layout.rekey_views(&sources, &next));
+                                            for (shell, source) in shells.iter().zip(&sources) {
+                                                if source != &next {
+                                                    shell.update(cx, |shell, cx| { shell.rekey_extension_view(source, &next, cx); });
+                                                }
+                                            }
+                                            root.terminal_view = next;
+                                        } else {
+                                            tracing::warn!("拡張 View ID が既存の View と競合しています");
+                                        }
+                                    }
+                                    // 旧 View ID の付け替えが終わるまで新しい宣言を登録しない。
+                                    // 先に登録すると、遷移先 ID が既存宣言と競合して付け替えを拒否する。
+                                    if let Some(snapshot) = snapshot.as_ref() {
+                                        let declarations = snapshot
+                                            .active_views()
+                                            .filter_map(|(owner, view)| {
+                                                if view.content_type != "lapis.content.terminal-grid.v1" {
+                                                    return None;
+                                                }
+                                                let contribution = extension_ui_contract::UiContribution::view(
+                                                    view.id.clone(),
+                                                    extension_ui_contract::UiSlot::BottomDock,
+                                                    view.title.clone(),
+                                                    owner,
+                                                    100,
+                                                )
+                                                .multiple_instances()
+                                                .references_external_resource()
+                                                .feature_owned_scroll();
+                                                Some((owner.to_owned(), (view.clone(), contribution)))
+                                            })
+                                            .fold(std::collections::BTreeMap::<String, Vec<_>>::new(), |mut grouped, (owner, view)| {
+                                                grouped.entry(owner).or_default().push(view);
+                                                grouped
+                                            })
+                                            .into_iter()
+                                            .collect::<Vec<_>>();
+                                        for shell in &shells {
+                                            if let Err(error) = shell.update(cx, |shell, cx| {
+                                                shell.sync_extension_declarations(declarations.clone(), cx)
+                                            }) {
+                                                tracing::warn!(target: "lapis::extensions", "拡張宣言を登録できませんでした: {}", error.as_str());
+                                            }
+                                        }
+                                    }
+                                    let terminal_view = root.terminal_view.clone();
+                                    let declaration = declaration.filter(|view| view.id == terminal_view.as_str());
+                                    let available = available && declaration.is_some();
+                                    for shell in shells {
+                                        shell.update(cx, |shell, cx| {
+                                            shell.set_view_available(terminal_view.clone(), available, cx);
+                                            if let (Some(snapshot), Some(view)) = (snapshot.as_ref(), declaration) {
+                                                shell.set_extension_view_command(
+                                                    terminal_view.clone(),
+                                                    view.open_command.clone().map(Into::into),
+                                                    contributed_zone(view.default_zone),
+                                                    view.multiple_instances,
+                                                    cx,
+                                                );
+                                                shell.set_extension_view_title(
+                                                    terminal_view.clone(),
+                                                    snapshot.clone(),
+                                                    "lapis.terminal".to_owned(),
+                                                    localization::MessageId::new(view.title.clone()),
+                                                    cx,
+                                                );
+                                            }
+                                            if let Some(hidden) = hidden {
+                                                shell.set_view_hidden(terminal_view.clone(), hidden, cx);
+                                            }
+                                        });
+                                    }
+                                    if available && pending_terminal {
+                                        let zone = declaration.map(|view| contributed_zone(view.default_zone)).unwrap_or(ZonePosition::Bottom);
+                                        root.shell.update(cx, |shell, cx| shell.open_view_in_zone(zone, terminal_view.clone(), cx));
+                                        pending_terminal = false;
+                                    }
+                                }
+                                let packs = snapshot
+                                    .as_ref()
+                                    .map(|snapshot| snapshot.core_locales())
+                                    .unwrap_or_default();
+                                let definitions = snapshot.as_ref().map(|snapshot| {
+                                    snapshot.contributions().iter()
+                                        .flat_map(|contribution| contribution.declaration.themes.iter())
+                                        .map(|theme| {
+                                            let parsed = crate::theme::ThemeDefinition::from_json(&theme.definition.to_string())?;
+                                            if parsed.id.as_str() != theme.id { return Err("theme id mismatch".to_owned()); }
+                                            Ok(parsed)
+                                        })
+                                        .collect::<Result<Vec<_>, String>>()
+                                }).unwrap_or_else(|| Ok(Vec::new()));
+                                match definitions {
+                                    Ok(definitions) => {
+                                        let selected = crate::features::settings_coordinator::SettingsCoordinator::try_shared(cx)
+                                            .map(|settings| extension_ui_contract::ThemeId::new(settings.read(cx).values.theme().to_owned()))
+                                            .unwrap_or_else(|| crate::theme::active_id(cx));
+                                        if let Err(id) = crate::theme::replace_source(theme_source, definitions, &selected, cx) {
+                                            tracing::warn!(target: "lapis::theme", "テーマ ID が重複しています: {}", id.as_str());
+                                        }
+                                    }
+                                    Err(error) => tracing::warn!(target: "lapis::theme", "テーマ定義が不正です: {error}"),
+                                }
+                                root.locale_packs = packs.to_vec();
+                                let locale = root.group.read(cx).locale.clone();
+                                root.shell.update(cx, |shell, cx| {
+                                    shell.set_locale_packs(packs, &locale, cx)
+                                });
+                                root.quick_search.update(cx, |search, cx| {
+                                    search.set_locale_packs(packs, &locale, cx)
+                                });
+                                root.universal_search.update(cx, |search, cx| {
+                                    search.set_locale_packs(packs, &locale, cx)
+                                });
+                                if let Some(update) = &root.update {
+                                    update.update(cx, |update, cx| {
+                                        update.set_locale_packs(packs, &locale, cx)
+                                    });
+                                }
+                                cx.refresh_windows();
+                            }
+                        })
+                        .is_ok();
+                    if !alive {
+                        break;
+                    }
+                    crate::timer::Timer::after(std::time::Duration::from_millis(200)).await;
+                }
+            })
+            .detach();
+        }
         #[cfg(not(target_family = "wasm"))]
         if let Some(watch) = workbench_watch.clone() {
             cx.spawn(async move |root, cx| {
@@ -719,6 +996,7 @@ impl DesktopRoot {
             group,
             shell,
             terminal,
+            terminal_view: ViewId::new(id::VIEW_TERMINAL),
             editor,
             files,
             git,
@@ -734,6 +1012,7 @@ impl DesktopRoot {
             update,
             quick_search,
             universal_search,
+            locale_packs: Vec::new(),
             universal_search_open: false,
             universal_previous_focus: None,
             path_request: None,
@@ -884,7 +1163,7 @@ impl DesktopRoot {
         let terminal_key = self
             .shell
             .read(cx)
-            .first_active_tab_of(id::VIEW_TERMINAL)
+            .first_active_tab_of(self.terminal_view.as_str())
             .and_then(|tab| ViewInstanceKey::new(tab.stable_view_key()));
         let terminal_scope = terminal_key
             .as_ref()
@@ -1652,7 +1931,7 @@ impl DesktopRoot {
     ) -> Option<editor_core::ConversationId> {
         self.shell
             .read(cx)
-            .view_resource_owner(&ViewId::new(id::VIEW_TERMINAL), cx)
+            .view_resource_owner(&self.terminal_view, cx)
     }
 
     /// 外部 Resource の永続化用サマリー。Resource の意味は所有する機能が決める。
@@ -1662,24 +1941,25 @@ impl DesktopRoot {
     ) -> Vec<desktop_client::RestoredTerminal> {
         self.shell
             .read(cx)
-            .persisted_view_resources(&ViewId::new(id::VIEW_TERMINAL), cx)
+            .persisted_view_resources(&self.terminal_view, cx)
     }
 
     /// Captures this root's editor, layout, task, terminal, and draft state for later persistence.
     pub(crate) fn persisted_view(&self, cx: &gpui::App) -> PersistedView {
         let mut layout = self.shell.read(cx).view_state();
         self.workbench.persisted_view(&mut layout);
+        let terminals = self
+            .terminal
+            .borrow()
+            .entities()
+            .iter()
+            .flat_map(|tab| tab.read(cx).summaries())
+            .collect();
         PersistedView {
             document: self.editor.read(cx).view_state(),
             layout,
             execution: self.execution_for_persistence(cx),
-            terminals: self
-                .terminal
-                .borrow()
-                .entities()
-                .iter()
-                .flat_map(|tab| tab.read(cx).summaries())
-                .collect(),
+            terminals,
             terminal_owner: self.terminal_owner_for_persistence(cx),
             input: self
                 .editor
@@ -2022,13 +2302,8 @@ impl DesktopRoot {
             UiCommand::QuickSearch => {
                 self.double_shift.reset();
                 let locale = self.group.read(cx).locale.clone();
-                let mut localizer = crate::localization::Localizer::bundled();
-                localizer.set_active(&locale);
-                let provider = CommandSearchProvider::from_registry(
-                    &features::bundled_registry(),
-                    &localizer,
-                    crate::keymap::KeymapRegistry::active(cx),
-                );
+                let keymap = crate::keymap::KeymapRegistry::active(cx).clone();
+                let provider = self.shell.read(cx).command_search_provider(&keymap);
                 if !self.universal_search_open {
                     self.universal_previous_focus = window.focused(cx);
                 }
@@ -2472,6 +2747,73 @@ mod tests {
     use super::*;
     use desktop_client::ConversationViewState;
     use editor_core::{ConversationId, ExecutionId};
+
+    #[test]
+    fn extension_view_default_zone_is_preserved() {
+        use extension_ui_contract::ContributedZone;
+        assert_eq!(contributed_zone(ContributedZone::Main), ZonePosition::Main);
+        assert_eq!(contributed_zone(ContributedZone::Left), ZonePosition::Left);
+        assert_eq!(
+            contributed_zone(ContributedZone::Bottom),
+            ZonePosition::Bottom
+        );
+        assert_eq!(
+            contributed_zone(ContributedZone::Right),
+            ZonePosition::Right
+        );
+    }
+
+    #[test]
+    fn view_visibility_waits_for_a_definitive_host_state() {
+        struct Memory;
+        impl settings::SettingsRepository for Memory {
+            fn load(&self) -> Result<settings::SettingsDocument, settings::SettingsError> {
+                Ok(settings::SettingsDocument::empty(
+                    settings::SettingsScope::User,
+                ))
+            }
+            fn save(&self, _: &settings::SettingsDocument) -> Result<(), settings::SettingsError> {
+                Ok(())
+            }
+        }
+        let settings = desktop_client::SettingsSession::load(std::sync::Arc::new(Memory)).unwrap();
+        let session = settings.extension_contributions();
+        let response = |active: Option<bool>| {
+            serde_json::from_value(serde_json::json!({
+            "extensions":[{"id":"lapis.terminal","version":"1.0.0","installed":true,"enabled":false,"active":active}],
+            "contributions":[{"extension_id":"lapis.terminal",
+                "declaration":{"schema":1,"translations":[{"target":"lapis.terminal","locale":"en-US","messages":{"terminal.title":"Terminal"}}]},
+                "views":{"schema":1,"views":[{"id":"lapis.terminal.view","content_type":"example.grid.v1","title":"terminal.title","default_zone":"bottom"}]}}]
+        })).unwrap()
+        };
+        let generation = session.begin_reload();
+        let hidden = |snapshot: Option<&desktop_client::ExtensionContributionSnapshot>| {
+            extension_view_hidden(snapshot, "lapis.terminal", "example.grid.v1")
+        };
+        assert_eq!(hidden(None), None);
+        session.apply(generation, response(None)).unwrap();
+        assert_eq!(hidden(session.snapshot().as_ref()), None);
+        session.apply(generation, response(Some(false))).unwrap();
+        assert_eq!(hidden(session.snapshot().as_ref()), Some(true));
+        session.apply(generation, response(Some(true))).unwrap();
+        assert_eq!(hidden(session.snapshot().as_ref()), Some(false));
+        session
+            .apply(
+                generation,
+                serde_json::from_value(serde_json::json!({
+                    "extensions": [], "contributions": []
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        let snapshot = session.snapshot();
+        assert_eq!(hidden(snapshot.as_ref()), Some(true));
+        assert!(!extension_view_available(
+            snapshot.as_ref(),
+            "lapis.terminal",
+            "example.grid.v1"
+        ));
+    }
 
     #[test]
     fn workbench_publication_ignores_client_private_workspace_details() {

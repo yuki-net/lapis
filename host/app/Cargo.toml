@@ -20,10 +20,12 @@ process = { path = "../../contracts/domain/process" }
 editor-core = { path = "../../contracts/domain/editor-core" }
 backend-state = { path = "../runtime" }
 extensions-entry = { path = "../extensions-entry" }
+extension-ui-contract = { path = "../../contracts/domain/extension-ui" }
+extension-runtime = { path = "../adapters/extension-runtime", default-features = false }
+semver = "1"
 client-api = { path = "../../contracts/protocol" }
 platform = { path = "../adapters/local" }
 local-process = { path = "../adapters/process" }
-terminal = { package = "terminal-contract", path = "../../extensions/terminal/contract" }
 remote = { path = "../transport/remote" }
 wire = { path = "../../contracts/transport/wire" }
 tokio = { workspace = true, features = ["signal"] }
@@ -44,6 +46,9 @@ windows-sys = { version = "0.61", features = ["Win32_Security_Cryptography", "Wi
 libc = "0.2"
 
 [dev-dependencies]
+extension-runtime = { path = "../adapters/extension-runtime", features = ["worker"] }
+base64 = "0.22"
+ed25519-dalek = "3"
 futures-util.workspace = true
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
 # 拡張 package の読み込み経路を確かめるテストが zip を組み立てる。

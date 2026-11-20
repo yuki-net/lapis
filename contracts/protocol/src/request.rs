@@ -3,9 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     DocumentCloseRequest, DocumentCreateRequest, DocumentEditRequest, DocumentHistoryRequest,
     DocumentOpenRequest, DocumentSaveRequest, FileTreeRequest, SnapshotRequest,
-    TerminalInputRequest, TerminalListProfilesRequest, TerminalResizeRequest, TerminalStartRequest,
-    TerminalTerminateRequest, WorkspaceCloseRequest, WorkspaceConnectRequest, WorkspaceId,
-    WorkspaceListRequest, capability,
+    WorkspaceCloseRequest, WorkspaceConnectRequest, WorkspaceId, WorkspaceListRequest, capability,
 };
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -34,6 +32,14 @@ pub enum RequestBody {
     HostWebStop(crate::HostWebStopRequest),
     #[serde(rename = "host.extensions.list")]
     HostExtensions(crate::HostExtensionsListRequest),
+    #[serde(rename = "host.extensions.set_enabled")]
+    HostExtensionSetEnabled(crate::HostExtensionSetEnabledRequest),
+    #[serde(rename = "host.extensions.capabilities")]
+    HostExtensionCapabilities(crate::HostExtensionCapabilitiesRequest),
+    #[serde(rename = "host.extensions.set_capability")]
+    HostExtensionSetCapability(crate::HostExtensionSetCapabilityRequest),
+    #[serde(rename = "host.extensions.dispatch")]
+    HostExtensionDispatch(crate::HostExtensionDispatchRequest),
     #[serde(rename = "document.relocate")]
     DocumentRelocate(crate::DocumentRelocateRequest),
     #[serde(rename = "files.create_directory")]
@@ -82,20 +88,6 @@ pub enum RequestBody {
     DocumentClaim(crate::DocumentClaimRequest),
     #[serde(rename = "document.release")]
     DocumentRelease(crate::DocumentReleaseRequest),
-    #[serde(rename = "terminal.start")]
-    TerminalStart(TerminalStartRequest),
-    #[serde(rename = "terminal.list_profiles")]
-    TerminalListProfiles(TerminalListProfilesRequest),
-    #[serde(rename = "terminal.input")]
-    TerminalInput(TerminalInputRequest),
-    #[serde(rename = "terminal.resize")]
-    TerminalResize(TerminalResizeRequest),
-    #[serde(rename = "terminal.terminate")]
-    TerminalTerminate(TerminalTerminateRequest),
-    #[serde(rename = "terminal.claim")]
-    TerminalClaim(crate::TerminalClaimRequest),
-    #[serde(rename = "terminal.release")]
-    TerminalRelease(crate::TerminalReleaseRequest),
     #[serde(rename = "snapshot.resync")]
     SnapshotResync(SnapshotRequest),
 }
@@ -114,6 +106,10 @@ impl RequestBody {
             Self::HostWebStart(_) => "host.web.start",
             Self::HostWebStop(_) => "host.web.stop",
             Self::HostExtensions(_) => "host.extensions.list",
+            Self::HostExtensionSetEnabled(_) => "host.extensions.set_enabled",
+            Self::HostExtensionCapabilities(_) => "host.extensions.capabilities",
+            Self::HostExtensionSetCapability(_) => "host.extensions.set_capability",
+            Self::HostExtensionDispatch(_) => "host.extensions.dispatch",
             Self::DocumentRelocate(_) => "document.relocate",
             Self::CreateDirectory(_) => "files.create_directory",
             Self::DocumentInspect(_) => "document.inspect",
@@ -138,13 +134,6 @@ impl RequestBody {
             Self::DocumentClose(_) => "document.close",
             Self::DocumentClaim(_) => "document.claim",
             Self::DocumentRelease(_) => "document.release",
-            Self::TerminalStart(_) => "terminal.start",
-            Self::TerminalListProfiles(_) => "terminal.list_profiles",
-            Self::TerminalInput(_) => "terminal.input",
-            Self::TerminalResize(_) => "terminal.resize",
-            Self::TerminalTerminate(_) => "terminal.terminate",
-            Self::TerminalClaim(_) => "terminal.claim",
-            Self::TerminalRelease(_) => "terminal.release",
             Self::SnapshotResync(_) => "snapshot.resync",
         }
     }
@@ -162,7 +151,13 @@ impl RequestBody {
             | Self::HostWebStatus(_)
             | Self::HostWebStart(_)
             | Self::HostWebStop(_) => capability::HOST_MANAGE,
-            Self::HostExtensions(_) => capability::EXTENSIONS_READ,
+            Self::HostExtensionDispatch(_) => capability::EXTENSIONS_EXECUTE,
+            Self::HostExtensionSetEnabled(_) | Self::HostExtensionSetCapability(_) => {
+                capability::EXTENSIONS_MANAGE
+            }
+            Self::HostExtensions(_) | Self::HostExtensionCapabilities(_) => {
+                capability::EXTENSIONS_READ
+            }
             Self::CreateDirectory(_) => capability::FILES_WRITE,
             Self::DocumentInspect(_) => capability::DOCUMENTS_READ,
             Self::DocumentUntitled(_)
@@ -185,12 +180,6 @@ impl RequestBody {
             | Self::DocumentRedo(_)
             | Self::DocumentClaim(_)
             | Self::DocumentRelease(_) => capability::DOCUMENTS_WRITE,
-            Self::TerminalStart(_) | Self::TerminalListProfiles(_) => capability::TERMINAL_START,
-            Self::TerminalInput(_)
-            | Self::TerminalResize(_)
-            | Self::TerminalTerminate(_)
-            | Self::TerminalClaim(_)
-            | Self::TerminalRelease(_) => capability::TERMINAL_CONTROL,
             Self::SnapshotResync(_) => capability::WORKSPACE_SYNC,
         }
     }
@@ -209,6 +198,10 @@ impl RequestBody {
             | Self::HostWebStart(_)
             | Self::HostWebStop(_)
             | Self::HostExtensions(_)
+            | Self::HostExtensionSetEnabled(_)
+            | Self::HostExtensionCapabilities(_)
+            | Self::HostExtensionSetCapability(_)
+            | Self::HostExtensionDispatch(_)
             | Self::DocumentRelocate(_) => None,
             Self::CreateDirectory(request) => Some(&request.workspace_id),
             Self::DocumentUntitled(request) => Some(&request.workspace_id),
@@ -226,8 +219,6 @@ impl RequestBody {
             Self::FileTree(request) => Some(&request.workspace_id),
             Self::DocumentOpen(request) => Some(&request.workspace_id),
             Self::DocumentCreate(request) => Some(&request.workspace_id),
-            Self::TerminalStart(request) => Some(&request.workspace_id),
-            Self::TerminalListProfiles(request) => Some(&request.workspace_id),
             Self::SnapshotResync(request) => Some(&request.workspace_id),
             Self::DocumentEdit(_)
             | Self::DocumentSave(_)
@@ -235,12 +226,7 @@ impl RequestBody {
             | Self::DocumentRedo(_)
             | Self::DocumentClose(_)
             | Self::DocumentClaim(_)
-            | Self::DocumentRelease(_)
-            | Self::TerminalInput(_)
-            | Self::TerminalResize(_)
-            | Self::TerminalTerminate(_)
-            | Self::TerminalClaim(_)
-            | Self::TerminalRelease(_) => None,
+            | Self::DocumentRelease(_) => None,
         }
     }
 }
@@ -248,7 +234,7 @@ impl RequestBody {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{TerminalSize, WorkspaceId};
+    use crate::WorkspaceId;
 
     #[test]
     fn workbench_write_requires_its_own_capability_and_workspace() {
@@ -284,26 +270,9 @@ mod tests {
     }
 
     #[test]
-    fn terminal_start_and_control_have_distinct_capabilities() {
-        let start = RequestBody::TerminalStart(TerminalStartRequest {
-            workspace_id: WorkspaceId::try_new("workspace-1").unwrap(),
-            cwd: None,
-            command: None,
-            profile: None,
-            size: TerminalSize {
-                columns: 80,
-                rows: 24,
-            },
-        });
-        let terminate = RequestBody::TerminalTerminate(TerminalTerminateRequest {
-            terminal_id: crate::TerminalId::try_new("terminal-1").unwrap(),
-        });
-
-        assert_eq!(start.required_capability(), capability::TERMINAL_START);
-        assert_eq!(
-            terminate.required_capability(),
-            capability::TERMINAL_CONTROL
-        );
+    fn legacy_terminal_request_is_rejected() {
+        let value = serde_json::json!({"type": "terminal.start", "payload": {}});
+        assert!(serde_json::from_value::<RequestBody>(value).is_err());
     }
 
     #[test]
@@ -344,11 +313,6 @@ mod tests {
             workspace_id: workspace_id.clone(),
             path: None,
         });
-        let terminal_control = RequestBody::TerminalTerminate(crate::TerminalTerminateRequest {
-            terminal_id: crate::TerminalId::try_new("terminal-1").unwrap(),
-        });
-
         assert_eq!(tree.workspace_id(), Some(&workspace_id));
-        assert_eq!(terminal_control.workspace_id(), None);
     }
 }

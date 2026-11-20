@@ -12,17 +12,14 @@ editor-core = { path = "../../contracts/domain/editor-core" }
 client-api = { path = "../../contracts/protocol" }
 document = { path = "../../contracts/domain/document" }
 text = { path = "../../contracts/domain/text" }
-terminal = { package = "terminal-contract", path = "../../extensions/terminal/contract" }
 workbench = { path = "../../contracts/domain/workbench" }
 workbench-state = { path = "../workbench" }
-terminal-state = { path = "../../extensions/terminal/host" }
 document-state = { path = "../documents" }
 workspace-state = { path = "../workspaces" }
 auth-state = { path = "../auth" }
 task-state = { path = "../tasks" }
 serde.workspace = true
 serde_json.workspace = true
-futures.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

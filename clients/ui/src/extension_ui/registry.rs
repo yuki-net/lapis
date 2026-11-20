@@ -1,12 +1,12 @@
 use gpui::{AnyView, App};
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 
 use extension_ui_contract::{
-    ActivationCondition, CommandId, FeatureDescriptor, FeatureId, FeatureKind, ToolInstancePolicy,
-    UiContribution, UiSlot, ViewId, ViewInstanceId, ViewVisibility, WorkspaceCapabilityId,
-    ZonePosition,
+    ActivationCondition, CommandId, ContributedView, FeatureDescriptor, FeatureId, FeatureKind,
+    ToolInstancePolicy, UiContribution, UiSlot, ViewId, ViewInstanceId, ViewVisibility,
+    WorkspaceCapabilityId, ZonePosition,
 };
 
 use super::ActivationEvent;
@@ -23,7 +23,7 @@ pub(crate) enum ViewRequest {
         resource: Option<String>,
     },
     /// 同じ View のタブを1つ増やす。
-    OpenTab(ViewId),
+    OpenTab,
 }
 
 /// 宣言された View の個体を所有する機能が実装する内部契約。
@@ -56,6 +56,11 @@ pub(crate) trait ViewLifecycle {
 
     /// タブを閉じた。この個体が所有する Resource を終了する。
     fn deactivate(&mut self, _instance: &ViewInstanceId, _cx: &mut App) {}
+
+    /// 明示的に閉じると、実行中または状態未確定の Resource が失われるか。
+    fn requires_close_confirmation(&self, _instance: &ViewInstanceId, _cx: &App) -> bool {
+        false
+    }
 
     /// 外部の変更通知を受けた。表示中の個体へ再取得を促す。
     fn changed(&mut self, _cx: &mut App) {}
@@ -104,6 +109,15 @@ pub struct FeatureRegistry {
     lifecycles: HashMap<ViewId, SharedLifecycle>,
     started: HashSet<ViewId>,
     instances: HashMap<ViewInstanceId, (ViewId, AnyView)>,
+    unavailable_views: HashSet<ViewId>,
+    view_open_commands: HashMap<ViewId, CommandId>,
+    view_aliases: HashMap<ViewId, ViewId>,
+    /// 提供元 ID ごとの宣言済み View。差し替えと OFF に使う。
+    provider_views: HashMap<String, Vec<ViewId>>,
+    /// View とクライアント描画器の種別。提供元とは独立する。
+    content_types: HashMap<ViewId, String>,
+    /// クライアント native 描画器の登録。提供元ごとではなく共有する。
+    content_renderers: HashMap<String, SharedLifecycle>,
     workspace_open: bool,
     capabilities: HashSet<WorkspaceCapabilityId>,
     active_commands: HashSet<CommandId>,
@@ -124,6 +138,152 @@ fn is_visible(
 }
 
 impl FeatureRegistry {
+    /// 保存済みの旧 View ID を現在登録されている ID に解決する。
+    pub(crate) fn resolve_view(&self, view: &ViewId) -> ViewId {
+        self.view_aliases
+            .get(view)
+            .cloned()
+            .unwrap_or_else(|| view.clone())
+    }
+
+    /// 描画器の登録名を宣言 ID に移し、既存の Entity と個体 ID を維持する。
+    pub(crate) fn can_rekey_view(&self, old: &ViewId, new: &ViewId) -> bool {
+        self.declaration(old).is_some()
+            && (old == new
+                || (self.declaration(new).is_none()
+                    && !self.lifecycles.contains_key(new)
+                    && !self.shared_views.contains_key(new)
+                    && self.view_aliases.get(new).is_none_or(|owner| owner == old)))
+    }
+    pub(crate) fn rekey_view(&mut self, old: &ViewId, new: &ViewId) -> bool {
+        if !self.can_rekey_view(old, new) {
+            return false;
+        }
+        if old == new {
+            return true;
+        }
+        for descriptor in self.descriptors.values_mut() {
+            for contribution in &mut descriptor.contributions {
+                if contribution.view.as_ref() == Some(old) {
+                    contribution.view = Some(new.clone());
+                }
+            }
+            for activation in &mut descriptor.activation {
+                if let ActivationCondition::OnView(view) = activation
+                    && view == old
+                {
+                    *view = new.clone();
+                }
+            }
+        }
+        if let Some(value) = self.lifecycles.remove(old) {
+            self.lifecycles.insert(new.clone(), value);
+        }
+        if let Some(value) = self.shared_views.remove(old) {
+            self.shared_views.insert(new.clone(), value);
+        }
+        if let Some(value) = self.view_open_commands.remove(old) {
+            self.view_open_commands.insert(new.clone(), value);
+        }
+        if self.started.remove(old) {
+            self.started.insert(new.clone());
+        }
+        if self.unavailable_views.remove(old) {
+            self.unavailable_views.insert(new.clone());
+        }
+        if self.visible_views.remove(old) {
+            self.visible_views.insert(new.clone());
+        }
+        for value in self.active_views.values_mut() {
+            if value == old {
+                *value = new.clone();
+            }
+        }
+        for (owner, _) in self.instances.values_mut() {
+            if owner == old {
+                *owner = new.clone();
+            }
+        }
+        for value in self.view_aliases.values_mut() {
+            if value == old {
+                *value = new.clone();
+            }
+        }
+        self.view_aliases.remove(new);
+        self.view_aliases.insert(old.clone(), new.clone());
+        self.recompute();
+        true
+    }
+    pub(crate) fn set_view_default_zone(&mut self, view: &ViewId, zone: ZonePosition) {
+        if let Some(contribution) = self
+            .descriptors
+            .values_mut()
+            .flat_map(|feature| &mut feature.contributions)
+            .find(|contribution| contribution.view.as_ref() == Some(view))
+        {
+            contribution.default_zone = Some(zone);
+        }
+    }
+
+    pub(crate) fn set_view_instance_policy(&mut self, view: &ViewId, policy: ToolInstancePolicy) {
+        if let Some(contribution) = self
+            .descriptors
+            .values_mut()
+            .flat_map(|feature| &mut feature.contributions)
+            .find(|contribution| contribution.view.as_ref() == Some(view))
+        {
+            contribution.instance_policy = policy;
+        }
+    }
+
+    /// View を開く公開コマンドを、その描画器が登録された View に結び付ける。
+    pub(crate) fn set_view_open_command(
+        &mut self,
+        view: ViewId,
+        command: Option<CommandId>,
+    ) -> bool {
+        if let Some(command) = command.as_ref() {
+            let conflicts = self
+                .descriptors
+                .values()
+                .flat_map(|feature| &feature.contributions)
+                .any(|contribution| contribution.command.as_ref() == Some(command))
+                || self
+                    .view_open_commands
+                    .iter()
+                    .any(|(other, existing)| *other != view && existing == command);
+            if conflicts {
+                self.view_open_commands.remove(&view);
+                return false;
+            }
+        }
+        if let Some(command) = command {
+            self.view_open_commands.insert(view, command);
+        } else {
+            self.view_open_commands.remove(&view);
+        }
+        true
+    }
+
+    pub(crate) fn view_open_commands(&self) -> Vec<(&ViewId, &CommandId)> {
+        let mut commands = self
+            .view_open_commands
+            .iter()
+            .filter(|(view, _)| {
+                self.declaration(view).is_some_and(|declaration| {
+                    self.can_create_view(view, declaration.instance_policy)
+                })
+            })
+            .collect::<Vec<_>>();
+        commands.sort_by(|a, b| a.1.as_str().cmp(b.1.as_str()));
+        commands
+    }
+
+    pub(crate) fn view_for_open_command(&self, command: &CommandId) -> Option<ViewId> {
+        self.view_open_commands()
+            .into_iter()
+            .find_map(|(view, candidate)| (candidate == command).then(|| view.clone()))
+    }
     pub(crate) fn register_shared_view(&mut self, view: ViewId, entity: AnyView) {
         self.shared_views.insert(view, entity);
     }
@@ -137,10 +297,212 @@ impl FeatureRegistry {
         self.lifecycles.insert(view, lifecycle);
     }
 
+    /// 署名済み宣言を提供元単位で登録する。同じ提供元の旧宣言を置換する。
+    pub(crate) fn register_provider(
+        &mut self,
+        provider: &str,
+        views: impl IntoIterator<Item = (ContributedView, UiContribution)>,
+    ) -> Result<(), FeatureId> {
+        self.remove_provider(provider);
+        let mut views = views.into_iter();
+        let first = views.next();
+        if first.is_none() {
+            self.provider_views.insert(provider.to_owned(), Vec::new());
+            return Ok(());
+        }
+        let mut descriptor = FeatureDescriptor::core(format!("extension.{provider}"));
+        let mut view_ids = Vec::new();
+        for (view, contribution) in first.into_iter().chain(views) {
+            let id = ViewId::new(view.id);
+            self.content_types.insert(id.clone(), view.content_type);
+            view_ids.push(id);
+            descriptor = descriptor.contributes(contribution);
+        }
+        self.register(descriptor)?;
+        self.provider_views.insert(provider.to_owned(), view_ids);
+        Ok(())
+    }
+
+    /// 提供元の宣言を除去する。タブと個体は残し、表示可否だけを再評価する。
+    pub(crate) fn remove_provider(&mut self, provider: &str) -> Vec<ViewId> {
+        let Some(views) = self.provider_views.remove(provider) else {
+            return Vec::new();
+        };
+        for view in &views {
+            self.view_open_commands.remove(view);
+            self.unavailable_views.remove(view);
+            self.lifecycles.remove(view);
+            self.started.remove(view);
+            self.content_types.remove(view);
+        }
+        self.descriptors
+            .remove(&FeatureId::new(format!("extension.{provider}")));
+        self.states
+            .remove(&FeatureId::new(format!("extension.{provider}")));
+        self.recompute();
+        views
+    }
+
+    /// 現在の目録にある提供元を、現在稼働中の公開状態として反映する。
+    ///
+    /// 目録に存在するが稼働していない提供元は、セッションと描画器を保持した
+    /// まま公開面から隠す。目録から消えた提供元だけを宣言ごと除去する。
+    pub(crate) fn sync_provider_availability(
+        &mut self,
+        live: impl IntoIterator<Item = String>,
+        catalog: impl IntoIterator<Item = String>,
+    ) -> Vec<ViewId> {
+        let live = live.into_iter().collect::<BTreeSet<_>>();
+        let catalog = catalog.into_iter().collect::<BTreeSet<_>>();
+        let unavailable = self
+            .provider_views
+            .iter()
+            .filter(|(provider, _)| catalog.contains(*provider) && !live.contains(*provider))
+            .flat_map(|(_, views)| views.iter().cloned())
+            .collect::<Vec<_>>();
+        for view in &unavailable {
+            self.set_view_available(view.clone(), false);
+        }
+        self.provider_views
+            .keys()
+            .filter(|provider| !catalog.contains(*provider))
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .flat_map(|provider| self.remove_provider(&provider))
+            .collect()
+    }
+
+    /// 提供元の宣言を現在の有効状態へ反映する。
+    ///
+    /// 既に登録済みの View は再利用し、描画器の登録を失わない。無効化された
+    /// 提供元だけを除去し、同じ `content_type` を持つ別提供元は残す。
+    pub(crate) fn sync_providers(
+        &mut self,
+        declarations: impl IntoIterator<Item = (String, Vec<(ContributedView, UiContribution)>)>,
+    ) -> Result<Vec<ViewId>, FeatureId> {
+        let declarations = declarations.into_iter().collect::<Vec<_>>();
+        let active = declarations
+            .iter()
+            .map(|(provider, _)| provider.as_str())
+            .collect::<BTreeSet<_>>();
+        let stale = self
+            .provider_views
+            .keys()
+            .filter(|provider| !active.contains(provider.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut removed = Vec::new();
+        for provider in stale {
+            removed.extend(self.remove_provider(&provider));
+        }
+        for (provider, views) in declarations {
+            let next_views = views
+                .iter()
+                .map(|(view, _)| ViewId::new(view.id.clone()))
+                .collect::<Vec<_>>();
+            if self.provider_views.get(&provider) == Some(&next_views) {
+                continue;
+            }
+            self.register_provider(&provider, views)?;
+        }
+        self.reconnect_registered_renderers();
+        Ok(removed)
+    }
+
+    /// コンテンツ種別に対応する描画器を、宣言済みの全 View へ配線する。
+    pub(crate) fn connect_renderer(
+        &mut self,
+        content_type: &str,
+        renderer: SharedLifecycle,
+    ) -> Vec<ViewId> {
+        let views = self
+            .provider_views
+            .values()
+            .flatten()
+            .filter(|view| {
+                self.declaration(view)
+                    .is_some_and(|_| self.content_type(view) == Some(content_type))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for view in &views {
+            self.lifecycles.insert(view.clone(), renderer.clone());
+        }
+        views
+    }
+
+    pub(crate) fn register_content_renderer(
+        &mut self,
+        content_type: impl Into<String>,
+        renderer: SharedLifecycle,
+    ) {
+        self.content_renderers.insert(content_type.into(), renderer);
+    }
+
+    /// 追加された提供元の View へ、既に登録済みの描画器を接続する。
+    pub(crate) fn reconnect_registered_renderers(&mut self) {
+        let renderers = self
+            .content_renderers
+            .iter()
+            .map(|(kind, renderer)| (kind.clone(), renderer.clone()))
+            .collect::<Vec<_>>();
+        for (kind, renderer) in renderers {
+            self.connect_renderer(&kind, renderer);
+        }
+    }
+
+    pub(crate) fn content_type(&self, view: &ViewId) -> Option<&str> {
+        self.content_types.get(view).map(String::as_str)
+    }
+
+    /// 署名済み宣言から `UiContribution` の公開属性を更新する。
+    pub(crate) fn set_view_presentation(
+        &mut self,
+        view: &ViewId,
+        default_zone: ZonePosition,
+        multiple_instances: bool,
+        open_command: Option<CommandId>,
+    ) {
+        self.set_view_default_zone(view, default_zone);
+        self.set_view_instance_policy(
+            view,
+            if multiple_instances {
+                ToolInstancePolicy::Multiple
+            } else {
+                ToolInstancePolicy::Shared
+            },
+        );
+        let _ = self.set_view_open_command(view.clone(), open_command);
+    }
+
+    pub(crate) fn provider_view_ids(&self) -> impl Iterator<Item = &ViewId> {
+        self.provider_views.values().flatten()
+    }
+
     pub(crate) fn can_create_view(&self, view: &ViewId, policy: ToolInstancePolicy) -> bool {
+        if self.unavailable_views.contains(view)
+            || self
+                .content_types
+                .get(view)
+                .is_some_and(|content_type| !self.content_renderers.contains_key(content_type))
+        {
+            return false;
+        }
         match policy {
-            ToolInstancePolicy::Shared => self.shared_views.contains_key(view),
+            ToolInstancePolicy::Shared => {
+                self.shared_views.contains_key(view) || self.lifecycles.contains_key(view)
+            }
             ToolInstancePolicy::Multiple => self.lifecycles.contains_key(view),
+        }
+    }
+
+    /// 提供元の現在の稼働状態を反映する。既存の個体は切断時に終了しない。
+    pub(crate) fn set_view_available(&mut self, view: ViewId, available: bool) {
+        if available {
+            self.unavailable_views.remove(&view);
+        } else {
+            self.unavailable_views.insert(view);
         }
     }
 
@@ -160,17 +522,6 @@ impl FeatureRegistry {
     /// 個体を所有する機能を引く。
     pub(crate) fn lifecycle(&self, view: &ViewId) -> Option<&SharedLifecycle> {
         self.lifecycles.get(view)
-    }
-
-    /// 外部 Resource を参照するタブを宣言した View。タブの復元に使う。
-    pub(crate) fn external_resource_view(&self) -> Option<ViewId> {
-        self.descriptors
-            .values()
-            .flat_map(|feature| &feature.contributions)
-            .find(|contribution| {
-                contribution.tab_reference == extension_ui_contract::TabReference::ExternalResource
-            })
-            .and_then(|contribution| contribution.view.clone())
     }
 
     /// 機能が現在持っている個体。Layout から消えた個体の解放に使う。
@@ -201,6 +552,14 @@ impl FeatureRegistry {
         if let Some((definition, _)) = self.instances.get(instance) {
             return definition == view;
         }
+        if self.unavailable_views.contains(view)
+            || self
+                .content_types
+                .get(view)
+                .is_some_and(|content_type| !self.content_renderers.contains_key(content_type))
+        {
+            return false;
+        }
         let policy = self
             .descriptors
             .values()
@@ -212,7 +571,13 @@ impl FeatureRegistry {
                 .lifecycles
                 .get(view)
                 .and_then(|lifecycle| lifecycle.borrow_mut().create(instance, cx)),
-            Some(ToolInstancePolicy::Shared) => self.shared_views.get(view).cloned(),
+            Some(ToolInstancePolicy::Shared) => {
+                self.shared_views.get(view).cloned().or_else(|| {
+                    self.lifecycles
+                        .get(view)
+                        .and_then(|lifecycle| lifecycle.borrow_mut().create(instance, cx))
+                })
+            }
             None => None,
         };
         let Some(entity) = entity else {
@@ -340,7 +705,13 @@ impl FeatureRegistry {
             .descriptors
             .values()
             .flat_map(|descriptor| descriptor.contributions.iter())
-            .filter(|contribution| contribution.slot == slot)
+            .filter(|contribution| {
+                contribution.slot == slot
+                    && contribution
+                        .view
+                        .as_ref()
+                        .is_none_or(|view| !self.unavailable_views.contains(view))
+            })
             .collect::<Vec<_>>();
         contributions.sort_by_key(|contribution| contribution.order);
         contributions
@@ -483,6 +854,32 @@ mod tests {
     use extension_ui_contract::{IconId, MessageId};
 
     struct InstanceCounter(usize);
+
+    #[test]
+    fn rekey_preserves_aliases_and_prevents_reusing_another_views_old_id() {
+        let mut registry = FeatureRegistry::default();
+        for (feature, view) in [("one", "example.one"), ("two", "example.two")] {
+            registry
+                .register(
+                    FeatureDescriptor::core(feature).contributes(UiContribution::view(
+                        view,
+                        UiSlot::BottomDock,
+                        "title",
+                        "icon",
+                        0,
+                    )),
+                )
+                .unwrap();
+        }
+        let one = ViewId::new("example.one");
+        let renamed = ViewId::new("example.renamed");
+        let two = ViewId::new("example.two");
+        assert!(registry.rekey_view(&one, &renamed));
+        assert!(!registry.rekey_view(&two, &one));
+        assert_eq!(registry.resolve_view(&one), renamed);
+        assert!(registry.rekey_view(&renamed, &one));
+        assert_eq!(registry.resolve_view(&renamed), one);
+    }
     impl gpui::Render for InstanceCounter {
         fn render(
             &mut self,
@@ -506,6 +903,68 @@ mod tests {
             self.created.push(entity.clone());
             Some(entity.into())
         }
+    }
+
+    #[test]
+    fn declared_open_command_tracks_availability_and_rejects_collisions() {
+        let mut registry = FeatureRegistry::default();
+        let view = ViewId::new("example.view");
+        registry
+            .register(
+                FeatureDescriptor::core("example").contributes(
+                    UiContribution::view(view.clone(), UiSlot::BottomDock, "title", "icon", 0)
+                        .multiple_instances(),
+                ),
+            )
+            .unwrap();
+        registry.register_view_lifecycle(
+            view.clone(),
+            Rc::new(RefCell::new(CounterLifecycle::default())),
+        );
+        let command = CommandId::new("example.open");
+        assert!(registry.set_view_open_command(view.clone(), Some(command.clone())));
+        assert_eq!(registry.view_for_open_command(&command), Some(view.clone()));
+        registry.set_view_available(view.clone(), false);
+        assert_eq!(registry.view_for_open_command(&command), None);
+        registry.set_view_available(view.clone(), true);
+        assert_eq!(registry.view_for_open_command(&command), Some(view.clone()));
+        let other = ViewId::new("other.view");
+        assert!(!registry.set_view_open_command(other, Some(command.clone())));
+        assert_eq!(registry.view_for_open_command(&command), Some(view.clone()));
+        assert!(registry.set_view_open_command(view, None));
+        assert_eq!(registry.view_for_open_command(&command), None);
+    }
+
+    #[gpui::test]
+    fn unavailable_view_keeps_existing_instances_and_blocks_new_ones(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let mut registry = FeatureRegistry::default();
+        let view = ViewId::new("example.view");
+        registry
+            .register(
+                FeatureDescriptor::core("example").contributes(
+                    UiContribution::view(view.clone(), UiSlot::BottomDock, "title", "icon", 0)
+                        .multiple_instances(),
+                ),
+            )
+            .unwrap();
+        registry.register_view_lifecycle(
+            view.clone(),
+            Rc::new(RefCell::new(CounterLifecycle::default())),
+        );
+        let first = ViewInstanceId::new("one");
+        let second = ViewInstanceId::new("two");
+        cx.update(|cx| {
+            assert!(registry.ensure_view_instance(&view, &first, cx));
+            registry.set_view_available(view.clone(), false);
+            assert!(!registry.can_create_view(&view, ToolInstancePolicy::Multiple));
+            assert!(registry.ensure_view_instance(&view, &first, cx));
+            assert!(!registry.ensure_view_instance(&view, &second, cx));
+            assert!(registry.instance_view(&first).is_some());
+            registry.set_view_available(view.clone(), true);
+            assert!(registry.ensure_view_instance(&view, &second, cx));
+        });
     }
 
     #[gpui::test]
@@ -690,5 +1149,59 @@ mod tests {
                 .and_then(|contribution| contribution.view.as_ref()),
             Some(&view)
         );
+    }
+
+    #[test]
+    fn providers_share_a_renderer_by_content_type_and_off_removes_public_views() {
+        let content_type = "example.grid.v1";
+        let renderer = Rc::new(RefCell::new(CounterLifecycle::default()));
+        let mut registry = FeatureRegistry::default();
+        registry.register_content_renderer(content_type, renderer.clone());
+        let declaration = |owner: &str, id: &str| {
+            let view = ContributedView {
+                id: id.into(),
+                content_type: content_type.into(),
+                title: "title".into(),
+                default_zone: extension_ui_contract::ContributedZone::Bottom,
+                multiple_instances: true,
+                open_command: Some(format!("{owner}.open")),
+            };
+            (
+                view.clone(),
+                UiContribution::view(view.id, UiSlot::BottomDock, view.title, "terminal", 10)
+                    .multiple_instances()
+                    .references_external_resource(),
+            )
+        };
+        registry
+            .sync_providers(vec![
+                (
+                    "example.one".into(),
+                    vec![declaration("example.one", "example.one.view")],
+                ),
+                (
+                    "example.two".into(),
+                    vec![declaration("example.two", "example.two.view")],
+                ),
+            ])
+            .unwrap();
+        let first = ViewId::new("example.one.view");
+        let second = ViewId::new("example.two.view");
+        assert_eq!(registry.content_type(&first), Some(content_type));
+        assert_eq!(registry.content_type(&second), Some(content_type));
+        assert!(registry.lifecycle(&first).is_some());
+        assert!(registry.lifecycle(&second).is_some());
+        assert_eq!(registry.provider_view_ids().count(), 2);
+
+        registry
+            .sync_providers(vec![(
+                "example.two".into(),
+                vec![declaration("example.two", "example.two.view")],
+            )])
+            .unwrap();
+        assert!(registry.declaration(&first).is_none());
+        assert!(registry.declaration(&second).is_some());
+        assert!(registry.content_type(&first).is_none());
+        assert!(registry.content_type(&second).is_some());
     }
 }

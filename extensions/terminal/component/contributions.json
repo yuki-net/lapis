@@ -1,0 +1,125 @@
+{
+  "schema": 1,
+  "default_locale": "en-US",
+  "translations": [
+    {
+      "target": "lapis.terminal",
+      "locale": "en-US",
+      "messages": {
+        "terminal.title": "Terminal",
+        "terminal.setting.font-family": "Font family",
+        "terminal.setting.font-size": "Font size",
+        "terminal.setting.line-height-percent": "Line height (%)",
+        "terminal.setting.caret-shape": "Cursor shape",
+        "terminal.setting.default-profile": "Default shell profile"
+      }
+    },
+    {
+      "target": "lapis.terminal",
+      "locale": "ja-JP",
+      "messages": {
+        "terminal.title": "ターミナル",
+        "terminal.setting.font-family": "フォント",
+        "terminal.setting.font-size": "フォントサイズ",
+        "terminal.setting.line-height-percent": "行の高さ (%)",
+        "terminal.setting.caret-shape": "カーソルの形",
+        "terminal.setting.default-profile": "既定シェルプロファイル"
+      }
+    }
+  ],
+  "settings": [
+    {
+      "definition": {
+        "name": "font-family",
+        "value_kind": "text",
+        "scopes": [
+          "user",
+          "host",
+          "project-shared",
+          "project-local"
+        ],
+        "default": null,
+        "allowed_values": null
+      },
+      "label": "terminal.setting.font-family"
+    },
+    {
+      "definition": {
+        "name": "font-size",
+        "value_kind": "integer",
+        "scopes": [
+          "user",
+          "host",
+          "project-shared",
+          "project-local"
+        ],
+        "default": null,
+        "allowed_values": [
+          11,
+          12,
+          13,
+          14,
+          16,
+          18
+        ]
+      },
+      "label": "terminal.setting.font-size"
+    },
+    {
+      "definition": {
+        "name": "line-height-percent",
+        "value_kind": "integer",
+        "scopes": [
+          "user",
+          "host",
+          "project-shared",
+          "project-local"
+        ],
+        "default": null,
+        "allowed_values": [
+          100,
+          110,
+          120,
+          125,
+          140,
+          150
+        ]
+      },
+      "label": "terminal.setting.line-height-percent"
+    },
+    {
+      "definition": {
+        "name": "caret-shape",
+        "value_kind": "text",
+        "scopes": [
+          "user",
+          "host",
+          "project-shared",
+          "project-local"
+        ],
+        "default": null,
+        "allowed_values": [
+          "block",
+          "bar",
+          "underline"
+        ]
+      },
+      "label": "terminal.setting.caret-shape"
+    },
+    {
+      "definition": {
+        "name": "default-profile",
+        "value_kind": "text",
+        "scopes": [
+          "user",
+          "host",
+          "project-shared",
+          "project-local"
+        ],
+        "default": null,
+        "allowed_values": null
+      },
+      "label": "terminal.setting.default-profile"
+    }
+  ]
+}

@@ -16,10 +16,11 @@ use crate::{
     WorkspaceStateRepository, WorkspaceViewState,
 };
 use client_api::{
-    ClientKind, DocumentInspectRequest, RequestBody, ResponseBody, Revision as ApiRevision,
-    SnapshotReason, SnapshotRequest, TerminalListProfilesRequest, WorkbenchGetRequest,
-    WorkspaceCloseRequest, WorkspaceConnectRequest, WorkspaceId as ApiWorkspaceId,
-    WorkspaceListRequest, WorkspaceRelativePath, WorkspaceSummary, WorkspaceViewUnsubscribeRequest,
+    ClientKind, DocumentInspectRequest, HostExtensionsListRequest, HostExtensionsListResponse,
+    RequestBody, ResponseBody, Revision as ApiRevision, SnapshotReason, SnapshotRequest,
+    WorkbenchGetRequest, WorkspaceCloseRequest, WorkspaceConnectRequest,
+    WorkspaceId as ApiWorkspaceId, WorkspaceListRequest, WorkspaceRelativePath, WorkspaceSummary,
+    WorkspaceViewUnsubscribeRequest,
 };
 use client_core::browser::{BrowserConnection, WebClientConnectOptions, connect_web_client};
 use document::{
@@ -33,23 +34,22 @@ use lsp::{
 };
 use settings::{SettingsDocument, SettingsError, SettingsRepository, SettingsScope};
 use task::{TaskConnection, TaskControl, TaskError, TaskSnapshot, TaskStart};
-use terminal::{
-    TerminalBackend, TerminalError, TerminalEvent, TerminalId, TerminalInput, TerminalSnapshot,
-};
 use workbench::ConversationViewState;
 use workspace::{
     FileEntry, SearchError, SearchHit, WorkspaceError, WorkspaceIdentity, WorkspaceRepository,
     WorkspaceSearchBackend,
 };
 
+mod extension_terminal;
 mod transport;
+
+pub use extension_terminal::ExtensionTerminalBackend;
+pub use extension_terminal::{ExtensionTerminal, ExtensionTerminalUpdate};
 
 pub use crate::web_replica::ROOT;
 
 use crate::web_cache::{CachedWorkspace, WorkspaceCache};
-use crate::web_replica::{
-    DocumentState, Replica, TerminalState, cache_of, local_id, terminal_state, versioned_workbench,
-};
+use crate::web_replica::{DocumentState, Replica, cache_of, local_id, versioned_workbench};
 use crate::web_switch::{self, Command, Operation};
 use transport::{event_pump, fetch_tree, preload, preload_workbench, pump, request};
 
@@ -90,11 +90,22 @@ struct BackendState {
     workspaces: Vec<WorkspaceSummary>,
     replica: Rc<RefCell<Replica>>,
     commands: mpsc::UnboundedSender<Command>,
-    changes: Rc<RefCell<Vec<mpsc::UnboundedSender<()>>>>,
-    /// Editor 向けの文書変更通知。Terminal 向けの `changes` とは分ける。
     document_changes: Rc<RefCell<Vec<mpsc::UnboundedSender<()>>>>,
     /// 共有 view state の変更通知。tabs の適用は他の通知と独立させる。
     session_view_changes: Rc<RefCell<Vec<mpsc::UnboundedSender<()>>>>,
+    extensions: HostExtensionsListResponse,
+    extension_session: Option<crate::ExtensionContributionSession>,
+    extensions_connected: bool,
+    can_manage_extensions: bool,
+}
+
+impl Drop for BackendState {
+    fn drop(&mut self) {
+        if let Some(session) = &self.extension_session {
+            session.disconnect();
+        }
+        self.connection.disconnect();
+    }
 }
 
 /// Web UI が Host/Workspace の識別子と切り替え可否を表示するための情報。
@@ -172,6 +183,36 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
         .iter()
         .any(|capability| capability.as_str() == client_api::capability::WORKSPACES_SWITCH);
     let host_id = connected.host_id.clone();
+    let can_read_extensions = connected
+        .capabilities
+        .iter()
+        .any(|capability| capability.as_str() == client_api::capability::EXTENSIONS_READ);
+    let can_manage_extensions = connected
+        .capabilities
+        .iter()
+        .any(|capability| capability.as_str() == client_api::capability::EXTENSIONS_MANAGE);
+    let extensions = if can_read_extensions {
+        match request(
+            &connection,
+            RequestBody::HostExtensions(HostExtensionsListRequest::default()),
+        )
+        .await
+        {
+            Ok(ResponseBody::HostExtensions(response)) => response,
+            Ok(_) => {
+                web_sys::console::warn_1(&"Host の拡張一覧の応答が不正です".into());
+                HostExtensionsListResponse::default()
+            }
+            Err(error) => {
+                web_sys::console::warn_1(
+                    &format!("Host の拡張一覧を取得できません: {error}").into(),
+                );
+                HostExtensionsListResponse::default()
+            }
+        }
+    } else {
+        HostExtensionsListResponse::default()
+    };
     let fresh_credential = connected.credential.clone();
     let workspaces = workspace_list.workspaces;
     // 保持の上限は、接続先が持つ Workspace の数とする。active は含めない。
@@ -195,46 +236,13 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
         _ => return Err("Workspace identityを取得できません".to_owned()),
     };
     let entries = fetch_tree(&connection, &api_workspace).await?;
-    let terminals = match request(
-        &connection,
-        RequestBody::SnapshotResync(SnapshotRequest {
-            workspace_id: api_workspace.clone(),
-            reason: SnapshotReason::Reconnect,
-        }),
-    )
-    .await
-    {
-        Ok(ResponseBody::SnapshotResync(response)) => response.snapshot.terminals,
-        _ => Vec::new(),
-    };
-    let profiles = match request(
-        &connection,
-        RequestBody::TerminalListProfiles(TerminalListProfilesRequest {
-            workspace_id: api_workspace.clone(),
-        }),
-    )
-    .await
-    {
-        Ok(ResponseBody::TerminalListProfiles(response)) => response.profiles,
-        _ => terminal::TerminalProfiles::default(),
-    };
     let replica = Rc::new(RefCell::new(Replica::new(
         workspace.clone(),
         entries,
         connection
             .session_id()
             .map(|session| SessionId::new(session.as_str())),
-        profiles,
     )));
-    {
-        let mut replica = replica.borrow_mut();
-        for terminal in terminals {
-            let local = TerminalId::new(format!("web-terminal-{}", replica.next_terminal));
-            replica.next_terminal += 1;
-            let state = terminal_state(&local, &terminal);
-            replica.terminals.insert(local.as_str().to_owned(), state);
-        }
-    }
     if let Ok(ResponseBody::WorkbenchGet(snapshot)) = request(
         &connection,
         RequestBody::WorkbenchGet(WorkbenchGetRequest {
@@ -248,7 +256,6 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
     }
     preload_workbench(&connection, &replica, &api_workspace).await;
     let (commands, receiver) = mpsc::unbounded();
-    let changes = Rc::new(RefCell::new(Vec::new()));
     let document_changes = Rc::new(RefCell::new(Vec::new()));
     let session_view_changes = Rc::new(RefCell::new(Vec::new()));
     BACKEND.with(|backend| {
@@ -262,17 +269,21 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
             workspaces,
             replica: replica.clone(),
             commands: commands.clone(),
-            changes: changes.clone(),
             document_changes: document_changes.clone(),
             session_view_changes: session_view_changes.clone(),
+            extensions,
+            extension_session: None,
+            extensions_connected: true,
+            can_manage_extensions,
         })
     });
+    if can_read_extensions {
+        wasm_bindgen_futures::spawn_local(refresh_extensions(connection.clone()));
+    }
     wasm_bindgen_futures::spawn_local(pump(
         connection.clone(),
         receiver,
         replica.clone(),
-        changes.clone(),
-        document_changes.clone(),
         session_view_changes.clone(),
     ));
     if let Some(events) = events {
@@ -280,7 +291,6 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
             connection.clone(),
             events,
             replica.clone(),
-            changes,
             document_changes,
             session_view_changes,
         ));
@@ -423,29 +433,6 @@ async fn switch_workspace_inner(
             return Err(fail_switch(connection, &current_api, Some(requested), error).await);
         }
     };
-    let terminals = match request(
-        connection,
-        RequestBody::SnapshotResync(SnapshotRequest {
-            workspace_id: requested.clone(),
-            reason: SnapshotReason::Reconnect,
-        }),
-    )
-    .await
-    {
-        Ok(ResponseBody::SnapshotResync(response)) => response.snapshot.terminals,
-        _ => Vec::new(),
-    };
-    let profiles = match request(
-        connection,
-        RequestBody::TerminalListProfiles(TerminalListProfilesRequest {
-            workspace_id: requested.clone(),
-        }),
-    )
-    .await
-    {
-        Ok(ResponseBody::TerminalListProfiles(response)) => response.profiles,
-        _ => terminal::TerminalProfiles::default(),
-    };
     let workbench = match request(
         connection,
         RequestBody::WorkbenchGet(WorkbenchGetRequest {
@@ -461,24 +448,15 @@ async fn switch_workspace_inner(
         .with(|backend| backend.borrow().as_ref().map(|state| state.replica.clone()))
         .ok_or("Hostに接続していません")?;
     // 表示中の Root を組み直せなかった場合に戻せるよう、切替前の複製を残す。
-    let (next, next_terminal, session) = {
+    let (next, session) = {
         let replica = replica.borrow();
-        (replica.next, replica.next_terminal, replica.session.clone())
+        (replica.next, replica.session.clone())
     };
-    let mut next_replica = Replica::new(workspace.clone(), entries, session, profiles);
+    let mut next_replica = Replica::new(workspace.clone(), entries, session);
     next_replica.next = next;
-    next_replica.next_terminal = next_terminal;
     next_replica.workbench = workbench::WorkbenchReplica::default();
     if let Some(state) = workbench {
         let _ = next_replica.workbench.open(state);
-    }
-    for terminal in terminals {
-        let local = TerminalId::new(format!("web-terminal-{}", next_replica.next_terminal));
-        next_replica.next_terminal += 1;
-        let state = terminal_state(&local, &terminal);
-        next_replica
-            .terminals
-            .insert(local.as_str().to_owned(), state);
     }
     let replica = install_workspace(current, workspace, workspace_identity, next_replica, false)?;
     preload_workbench(connection, &replica, requested).await;
@@ -785,6 +763,344 @@ async fn rollback_workspace_inner(
 
 pub(super) fn api_workspace(id: &WorkspaceId) -> ApiWorkspaceId {
     ApiWorkspaceId::try_from(id).expect("workspace id is valid")
+}
+
+/// 現在の接続の宣言をこの UI の設定モデルへ登録する。
+pub fn bind_extension_contributions(
+    settings: &crate::SettingsSession,
+) -> Result<crate::ExtensionContributionSession, String> {
+    BACKEND.with(|backend| {
+        let mut backend = backend.borrow_mut();
+        let state = backend.as_mut().ok_or("Host に接続していません")?;
+        let session = settings.extension_contributions();
+        let generation = session.begin_reload();
+        if let Err(error) = session.apply(generation, state.extensions.clone()) {
+            web_sys::console::warn_1(&format!("拡張宣言を適用できません: {error}").into());
+            session
+                .apply(generation, HostExtensionsListResponse::default())
+                .map_err(|e| e.to_string())?;
+        }
+        if let Some(previous) = state.extension_session.replace(session.clone()) {
+            previous.disconnect();
+        }
+        Ok(session)
+    })
+}
+
+/// 現在の接続に属する宣言を UI が購読するためのハンドル。
+pub fn extension_contributions() -> Option<crate::ExtensionContributionSession> {
+    BACKEND.with(|backend| {
+        backend
+            .borrow()
+            .as_ref()
+            .and_then(|state| state.extension_session.clone())
+    })
+}
+
+/// 管理権限は現在接続中の credential に付与されたものだけを使う。
+pub fn can_manage_extensions() -> bool {
+    BACKEND.with(|backend| {
+        backend
+            .borrow()
+            .as_ref()
+            .is_some_and(|state| state.extensions_connected && state.can_manage_extensions)
+    })
+}
+
+pub async fn set_extension_enabled(id: String, enabled: bool) -> Result<(), String> {
+    let connection = BACKEND
+        .with(|backend| {
+            let backend = backend.borrow();
+            let state = backend.as_ref().ok_or("Host に接続していません")?;
+            if !state.extensions_connected || !state.can_manage_extensions {
+                return Err("拡張の管理権限がありません");
+            }
+            Ok(state.connection.clone())
+        })
+        .map_err(str::to_owned)?;
+    let response = request(
+        &connection,
+        RequestBody::HostExtensionSetEnabled(client_api::HostExtensionSetEnabledRequest {
+            id: id.clone(),
+            enabled,
+        }),
+    )
+    .await;
+    let current = BACKEND.with(|backend| {
+        backend.borrow().as_ref().is_some_and(|state| {
+            state.extensions_connected && Rc::ptr_eq(&state.connection, &connection)
+        })
+    });
+    crate::extension_management::validate_response(response, current, &id, enabled)
+}
+
+pub async fn extension_capabilities(
+    id: String,
+) -> Result<client_api::HostExtensionCapabilitiesResponse, String> {
+    let connection = BACKEND
+        .with(|backend| {
+            let backend = backend.borrow();
+            let state = backend.as_ref().ok_or("Host に接続していません")?;
+            if !state.extensions_connected {
+                return Err("Host に接続していません");
+            }
+            Ok(state.connection.clone())
+        })
+        .map_err(str::to_owned)?;
+    let response = request(
+        &connection,
+        RequestBody::HostExtensionCapabilities(client_api::HostExtensionCapabilitiesRequest {
+            id: id.clone(),
+        }),
+    )
+    .await;
+    let current = BACKEND.with(|backend| {
+        backend.borrow().as_ref().is_some_and(|state| {
+            state.extensions_connected && Rc::ptr_eq(&state.connection, &connection)
+        })
+    });
+    crate::extension_management::validate_capabilities_response(response, current, &id)
+}
+
+pub async fn set_extension_capability(
+    input: client_api::HostExtensionSetCapabilityRequest,
+) -> Result<(), String> {
+    let connection = BACKEND
+        .with(|backend| {
+            let backend = backend.borrow();
+            let state = backend.as_ref().ok_or("Host に接続していません")?;
+            if !state.extensions_connected || !state.can_manage_extensions {
+                return Err("拡張の管理権限がありません");
+            }
+            Ok(state.connection.clone())
+        })
+        .map_err(str::to_owned)?;
+    let response = request(
+        &connection,
+        RequestBody::HostExtensionSetCapability(input.clone()),
+    )
+    .await;
+    let current = BACKEND.with(|backend| {
+        backend.borrow().as_ref().is_some_and(|state| {
+            state.extensions_connected && Rc::ptr_eq(&state.connection, &connection)
+        })
+    });
+    crate::extension_management::validate_capability_update_response(response, current, &input)
+}
+
+/// Host 全体の拡張操作。実際の認可は Host が行う。
+pub async fn dispatch_extension(
+    input: client_api::HostExtensionDispatchRequest,
+) -> Result<client_api::HostExtensionDispatchResponse, String> {
+    let connection = BACKEND
+        .with(|backend| {
+            let backend = backend.borrow();
+            let state = backend.as_ref().ok_or("Host に接続していません")?;
+            if !state.extensions_connected {
+                return Err("Host に接続していません");
+            }
+            Ok(state.connection.clone())
+        })
+        .map_err(str::to_owned)?;
+    let response = request(
+        &connection,
+        RequestBody::HostExtensionDispatch(input.clone()),
+    )
+    .await;
+    let current = BACKEND.with(|backend| {
+        backend.borrow().as_ref().is_some_and(|state| {
+            state.extensions_connected && Rc::ptr_eq(&state.connection, &connection)
+        })
+    });
+    crate::extension_management::validate_dispatch_response(response, current, &input)
+}
+
+/// Terminal 拡張の DTO を汎用の拡張操作経路で送る。
+pub async fn terminal_operation<T: serde::Serialize, R: serde::de::DeserializeOwned>(
+    operation: &str,
+    input: &T,
+) -> Result<R, String> {
+    let request = crate::terminal_extension::request(operation, input)?;
+    let response = dispatch_extension(request).await?;
+    crate::terminal_extension::response(operation, response)
+}
+
+/// 接続に束縛された出力位置。別 Host の同名 ID に古い位置を流用しない。
+pub struct TerminalOutputStream {
+    cursor: crate::terminal_extension::OutputCursor,
+    connection: Rc<BrowserConnection>,
+}
+
+pub struct TerminalOutputBatch {
+    ticket: crate::terminal_extension::ReadTicket,
+    output: crate::terminal_extension::v1::ReadResponse,
+}
+
+struct CancelTerminalRead<'a> {
+    cursor: &'a mut crate::terminal_extension::OutputCursor,
+    armed: bool,
+}
+
+impl Drop for CancelTerminalRead<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.cursor.cancel();
+        }
+    }
+}
+
+impl TerminalOutputStream {
+    pub fn new(id: String) -> Result<Self, String> {
+        let connection = BACKEND
+            .with(|backend| {
+                let backend = backend.borrow();
+                let state = backend.as_ref().ok_or("Host に接続していません")?;
+                if !state.extensions_connected {
+                    return Err("Host に接続していません");
+                }
+                Ok(state.connection.clone())
+            })
+            .map_err(str::to_owned)?;
+        Ok(Self {
+            cursor: crate::terminal_extension::OutputCursor::new(id),
+            connection,
+        })
+    }
+
+    pub fn offset(&self) -> u64 {
+        self.cursor.offset()
+    }
+
+    pub async fn read(
+        &mut self,
+        max_bytes: u32,
+        timeout_ms: u32,
+    ) -> Result<TerminalOutputBatch, String> {
+        let current = BACKEND.with(|backend| {
+            backend.borrow().as_ref().is_some_and(|state| {
+                state.extensions_connected && Rc::ptr_eq(&state.connection, &self.connection)
+            })
+        });
+        if !current {
+            return Err("Host の接続が変更されました".into());
+        }
+        let (ticket, request) = self
+            .cursor
+            .begin(max_bytes, timeout_ms)
+            .map_err(|error| error.to_string())?;
+        // Future が途中で破棄されても、次の要求を開始できる。
+        let mut guard = CancelTerminalRead {
+            cursor: &mut self.cursor,
+            armed: true,
+        };
+        let result = terminal_operation(crate::terminal_extension::v1::READ, &request).await?;
+        let output = guard
+            .cursor
+            .accept(ticket, result)
+            .map_err(|error| error.to_string())?;
+        guard.armed = false;
+        Ok(TerminalOutputBatch { ticket, output })
+    }
+
+    /// apply は失敗時に画面状態を変更しないこと。成功後に位置を確定する。
+    pub fn apply(
+        &mut self,
+        batch: TerminalOutputBatch,
+        apply: impl FnOnce(&crate::terminal_extension::v1::ReadResponse) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let current = BACKEND.with(|backend| {
+            backend.borrow().as_ref().is_some_and(|state| {
+                state.extensions_connected && Rc::ptr_eq(&state.connection, &self.connection)
+            })
+        });
+        if !current {
+            let _ = self.cursor.discard(batch.ticket);
+            return Err("Host の接続が変更されました".into());
+        }
+        if !self.cursor.ready(batch.ticket) {
+            return Err("古い Terminal の出力を破棄しました".into());
+        }
+        if let Err(error) = apply(&batch.output) {
+            let _ = self.cursor.discard(batch.ticket);
+            return Err(error);
+        }
+        self.cursor
+            .commit(batch.ticket)
+            .map_err(|error| error.to_string())
+    }
+
+    /// 画面への反映を中止して、同じ位置から読み直せるようにする。
+    pub fn discard(&mut self, batch: TerminalOutputBatch) -> Result<(), String> {
+        self.cursor
+            .discard(batch.ticket)
+            .map_err(|error| error.to_string())
+    }
+
+    /// 応答を破棄した後でも明示的に読み取りを再開できる。
+    pub fn cancel(&mut self) {
+        self.cursor.cancel();
+    }
+}
+
+/// 古い接続の終了通知で新しい接続を解除しない。
+fn disconnect_extensions(connection: &Rc<BrowserConnection>) {
+    BACKEND.with(|backend| {
+        let mut backend = backend.borrow_mut();
+        if let Some(state) = backend.as_mut()
+            && Rc::ptr_eq(&state.connection, connection)
+        {
+            state.extensions = HostExtensionsListResponse::default();
+            state.extensions_connected = false;
+            if let Some(session) = state.extension_session.take() {
+                session.disconnect();
+            }
+        }
+    });
+}
+
+/// 起動中や再起動後の worker 状態を反映する。接続が置換・切断されたら終了する。
+async fn refresh_extensions(connection: Rc<BrowserConnection>) {
+    loop {
+        gloo_timers::future::TimeoutFuture::new(2_000).await;
+        let current = BACKEND.with(|backend| {
+            backend.borrow().as_ref().is_some_and(|state| {
+                state.extensions_connected && Rc::ptr_eq(&state.connection, &connection)
+            })
+        });
+        if !current {
+            break;
+        }
+        let Ok(ResponseBody::HostExtensions(response)) = request(
+            &connection,
+            RequestBody::HostExtensions(HostExtensionsListRequest::default()),
+        )
+        .await
+        else {
+            continue;
+        };
+        BACKEND.with(|backend| {
+            let mut backend = backend.borrow_mut();
+            let Some(state) = backend.as_mut() else {
+                return;
+            };
+            if !state.extensions_connected
+                || !Rc::ptr_eq(&state.connection, &connection)
+                || state.extensions == response
+            {
+                return;
+            }
+            if let Some(session) = &state.extension_session {
+                let generation = session.begin_reload();
+                if let Err(error) = session.apply(generation, response.clone()) {
+                    web_sys::console::warn_1(
+                        &format!("Host の拡張宣言を適用できません: {error}").into(),
+                    );
+                    return;
+                }
+            }
+            state.extensions = response;
+        });
+    }
 }
 
 /// 接続中の Host/Workspace 識別子と切り替え候補を返す。
@@ -1657,178 +1973,5 @@ impl LanguageServerBackend for WebBackend {
     }
     fn shutdown(&self) -> Result<(), LspError> {
         Ok(())
-    }
-}
-
-impl TerminalBackend for WebBackend {
-    fn start(&self, cwd: &Path, columns: u16, rows: u16) -> Result<TerminalId, TerminalError> {
-        self.start_profile(cwd, columns, rows, None)
-    }
-
-    fn start_profile(
-        &self,
-        cwd: &Path,
-        columns: u16,
-        rows: u16,
-        profile: Option<&terminal::TerminalProfileId>,
-    ) -> Result<TerminalId, TerminalError> {
-        let profile = profile.cloned();
-        self.with(|state| {
-            let mut replica = state.replica.borrow_mut();
-            let local = TerminalId::new(format!("web-terminal-{}", replica.next_terminal));
-            replica.next_terminal += 1;
-            replica.terminals.insert(
-                local.as_str().to_owned(),
-                TerminalState {
-                    host: None,
-                    snapshot: None,
-                    owner: None,
-                    events: Vec::new(),
-                    finished: false,
-                },
-            );
-            let _ = state.commands.unbounded_send(Command::StartTerminal {
-                local: local.clone(),
-                cwd: Some(cwd.to_owned()),
-                columns,
-                rows,
-                profile,
-            });
-            local
-        })
-        .map_err(TerminalError::new)
-    }
-
-    fn profiles(&self, _cwd: &Path) -> Result<terminal::TerminalProfiles, TerminalError> {
-        self.with(|state| state.replica.borrow().profiles.clone())
-            .map_err(TerminalError::new)
-    }
-
-    fn input(&self, id: &TerminalId, input: &TerminalInput) -> Result<(), TerminalError> {
-        self.with(|state| {
-            let _ = state.commands.unbounded_send(Command::TerminalInput {
-                local: id.clone(),
-                input: input.clone(),
-            });
-        })
-        .map_err(TerminalError::new)
-    }
-
-    fn resize(&self, id: &TerminalId, columns: u16, rows: u16) -> Result<(), TerminalError> {
-        let sent = self
-            .with(|state| {
-                // 画面は terminal.delta イベントで届くため、ここでは要求だけ送る。
-                state
-                    .commands
-                    .unbounded_send(Command::TerminalResize {
-                        local: id.clone(),
-                        columns,
-                        rows,
-                    })
-                    .is_ok()
-            })
-            .map_err(TerminalError::new)?;
-        if !sent {
-            return Err(TerminalError::new("Terminalの要求を送信できません"));
-        }
-        Ok(())
-    }
-
-    fn claim(&self, id: &TerminalId) -> Result<(), TerminalError> {
-        let sent = self
-            .with(|state| {
-                state
-                    .commands
-                    .unbounded_send(Command::TerminalClaim { local: id.clone() })
-                    .is_ok()
-            })
-            .map_err(TerminalError::new)?;
-        if !sent {
-            return Err(TerminalError::new("Terminalの要求を送信できません"));
-        }
-        Ok(())
-    }
-
-    fn release(&self, id: &TerminalId) -> Result<(), TerminalError> {
-        let sent = self
-            .with(|state| {
-                state
-                    .commands
-                    .unbounded_send(Command::TerminalRelease { local: id.clone() })
-                    .is_ok()
-            })
-            .map_err(TerminalError::new)?;
-        if !sent {
-            return Err(TerminalError::new("Terminalの要求を送信できません"));
-        }
-        Ok(())
-    }
-
-    fn changes(&self) -> Option<mpsc::UnboundedReceiver<()>> {
-        // Root の再構築でも同じ接続から購読し直せるよう、購読を都度追加する。
-        self.with(|state| {
-            let (sender, receiver) = mpsc::unbounded();
-            state.changes.borrow_mut().push(sender);
-            receiver
-        })
-        .ok()
-    }
-
-    fn poll(&self, id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
-        let events = self
-            .with(|state| {
-                let mut replica = state.replica.borrow_mut();
-                let terminal = replica
-                    .terminals
-                    .get_mut(id.as_str())
-                    .ok_or_else(|| "Terminalがありません".to_owned())?;
-                if terminal.finished && terminal.events.is_empty() {
-                    return Err("Terminalは終了しました".to_owned());
-                }
-                Ok(std::mem::take(&mut terminal.events))
-            })
-            .map_err(TerminalError::new)?;
-        events.map_err(TerminalError::new)
-    }
-
-    fn list(&self, _: &Path) -> Result<Vec<TerminalSnapshot>, TerminalError> {
-        self.with(|state| {
-            state
-                .replica
-                .borrow()
-                .terminals
-                .values()
-                .filter_map(|state| state.snapshot.clone())
-                .collect()
-        })
-        .map_err(TerminalError::new)
-    }
-
-    fn attach(&self, _: &Path, id: &TerminalId) -> Result<TerminalSnapshot, TerminalError> {
-        let snapshot = self
-            .with(|state| {
-                let snapshot = state
-                    .replica
-                    .borrow()
-                    .terminals
-                    .get(id.as_str())
-                    .and_then(|state| state.snapshot.clone())
-                    .ok_or_else(|| TerminalError::new("Terminalがありません"))?;
-                // キャッシュだけを返さず、Host の現在の snapshot を取得し直す。
-                // delta 欠番や開始応答前の取りこぼしはこの snapshot で回復する。
-                let _ = state.commands.unbounded_send(Command::ResyncTerminals);
-                Ok::<_, TerminalError>(snapshot)
-            })
-            .map_err(TerminalError::new)??;
-        Ok(snapshot)
-    }
-
-    fn terminate(&self, id: &TerminalId) -> Result<(), TerminalError> {
-        self.with(|state| {
-            let _ = state
-                .commands
-                .unbounded_send(Command::TerminalTerminate { local: id.clone() });
-        })
-        .map_err(TerminalError::new)
     }
 }

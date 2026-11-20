@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 acp-contract = { path = "../../extensions/acp/contract" }
 client-api = { path = "../../contracts/protocol" }
+extension-ui-contract = { path = "../../contracts/domain/extension-ui" }
 document = { path = "../../contracts/domain/document" }
 editor-core = { path = "../../contracts/domain/editor-core" }
 git = { package = "git-contract", path = "../../extensions/git/contract" }
@@ -18,24 +19,29 @@ localization = { path = "../../contracts/domain/localization" }
 settings = { path = "../../contracts/domain/settings" }
 task = { path = "../../contracts/domain/task" }
 terminal = { package = "terminal-contract", path = "../../extensions/terminal/contract" }
+terminal-session-api = { path = "../../extensions/terminal/api" }
+terminal-portable-renderer = { path = "../../extensions/terminal/portable-renderer" }
 workspace = { path = "../../contracts/domain/workspace" }
 workbench = { path = "../../contracts/domain/workbench" }
 wire = { path = "../../contracts/transport/wire" }
 serde.workspace = true
+serde_json.workspace = true
 getrandom.workspace = true
 zeroize.workspace = true
+futures-channel = "0.3"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+terminal-renderer = { path = "../../extensions/terminal/renderer" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { workspace = true, features = ["wasm_js"] }
 client-core = { path = "../transport" }
-futures-channel = "0.3"
 futures-util = "0.3"
+gloo-timers = { version = "0.3", features = ["futures"] }
 wasm-bindgen = "=0.2.129"
 wasm-bindgen-futures = "=0.4.79"
 web-sys = { version = "=0.3.106", features = ["console"] }
-serde_json.workspace = true
 
 [dev-dependencies]
 futures-channel = "0.3"
-serde_json.workspace = true
 tempfile.workspace = true

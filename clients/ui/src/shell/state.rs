@@ -151,6 +151,10 @@ pub(super) struct PanelResize {
 pub(crate) struct ShellState {
     pub focused_panel: Option<PanelId>,
     pub(crate) hidden_views: std::collections::HashSet<ViewInstanceId>,
+    /// 利用できない拡張の View 種別。Task 単位の非表示とは別に保持する。
+    pub(crate) hidden_view_types: std::collections::HashSet<extension_ui_contract::ViewId>,
+    /// 宣言をまだ受け取れていない View。配置は保持して表示だけを待つ。
+    pub(crate) unregistered_view_types: std::collections::HashSet<extension_ui_contract::ViewId>,
     pub layout: DockLayout,
     pub bottom_span_left_transition: Option<PanelSpanTransition>,
     pub bottom_span_right_transition: Option<PanelSpanTransition>,
@@ -179,6 +183,8 @@ impl Default for ShellState {
         Self {
             focused_panel: None,
             hidden_views: Default::default(),
+            hidden_view_types: Default::default(),
+            unregistered_view_types: Default::default(),
             layout: DockLayout::default(),
             bottom_span_left_transition: None,
             bottom_span_right_transition: None,
@@ -205,6 +211,10 @@ impl Default for ShellState {
 impl ShellState {
     pub(crate) fn view_visible(&self, tab: &PanelTab) -> bool {
         !self.hidden_views.contains(&tab.instance_id())
+            && tab.view_id().is_none_or(|view| {
+                !self.hidden_view_types.contains(view)
+                    && !self.unregistered_view_types.contains(view)
+            })
     }
 
     /// ターミナルタブが実際に画面へ出ているか。自動起動の判定に使う。
@@ -454,6 +464,27 @@ mod tests {
     }
 
     #[test]
+    fn unavailable_view_is_hidden_without_removing_layout_or_task_visibility() {
+        let mut shell = ShellState::default();
+        let view = extension_ui_contract::ViewId::new("example.view");
+        let tab = PanelTab::tool(view.clone());
+        shell
+            .layout
+            .open_tab(ZonePosition::Bottom, tab.clone())
+            .unwrap();
+        let saved = shell.layout.capture();
+        shell.hidden_view_types.insert(view.clone());
+        assert!(!shell.view_visible(&tab));
+        assert_eq!(shell.layout.capture(), saved);
+        shell.hidden_views.insert(tab.instance_id());
+        shell.hidden_view_types.remove(&view);
+        assert!(!shell.view_visible(&tab));
+        shell.hidden_views.remove(&tab.instance_id());
+        assert!(shell.view_visible(&tab));
+        assert_eq!(shell.layout.capture(), saved);
+    }
+
+    #[test]
     fn presentation_refresh_keeps_an_explicit_tool_tab_active() {
         let mut shell = ShellState::default();
         let document = test_document("doc", true);
@@ -656,7 +687,7 @@ mod tests {
         let saved = original.layout.capture();
         let mut restored = ShellState {
             layout: DockLayout::restore(&saved, |raw| {
-                let desktop_client::TabRef::View { id } = raw else {
+                let desktop_client::TabRef::View { id, .. } = raw else {
                     return None;
                 };
                 let view = id

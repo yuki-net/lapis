@@ -241,15 +241,21 @@ pub(crate) fn host_sessions() -> Result<(EditorSession, DesktopServices), String
         let _ = session.open_path(path);
     }
     let settings = SettingsSession::load(backend.clone()).map_err(|error| error.to_string())?;
+    if let Err(error) = desktop_client::web_host::bind_extension_contributions(&settings) {
+        web_sys::console::warn_1(&format!("拡張宣言を登録できません: {error}").into());
+    }
+    let terminal: Arc<dyn TerminalBackend> =
+        Arc::new(desktop_client::web_host::ExtensionTerminalBackend);
     let mut services = DesktopServices::new(
         TaskSession::new(backend.clone()),
         GitSession::new(backend.clone()),
         LspSession::new(backend.clone()),
-        TerminalSession::new(backend.clone()),
+        TerminalSession::new(terminal),
         WorkspaceSearchSession::new(backend.clone()),
         conversation,
         settings,
-    );
+    )
+    .with_extension_terminal(true);
     // 表示用の Workspace 名と切替候補は既存の ConnectionInfo をそのまま使う。
     if let Some(info) = desktop_client::web_host::connection_info() {
         services = services.with_connection_identity(crate::ConnectionIdentity {

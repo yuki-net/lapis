@@ -9,10 +9,11 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 | `clients/` | Client の Window、Panel、Tab、focus、selection、表示 cache | Host 上の実行資源 |
 | `clients/desktop/launcher/` | staging 済み package の適用と本体の起動、および検証・staging の共通実装 | 更新モードの設定、同意の判断、アプリの実行 |
 | `contracts/domain/` | Transport 非依存の値・ドメイン規則・port | GPUI、通信、外部プロセスの具体実装 |
-| `contracts/domain/extension-ui/` | 拡張が公開する UI 宣言の語彙（配置・表示名・アイコン・表示条件、`UiContribution` / `FeatureDescriptor`） | GPUI の View・Entity 生成、表示状態の解決、Feature の実装 || `contracts/protocol/` | request/response/event、revision、認可可能な操作契約 | OS 実装、Client の画面構成 |
+| `contracts/domain/extension-ui/` | 拡張が公開する UI 宣言の語彙（配置・表示名・アイコン・表示条件、`UiContribution` / `FeatureDescriptor`） | GPUI の View・Entity 生成、表示状態の解決、Feature の実装 |
+| `contracts/protocol/` | request/response/event、revision、認可可能な操作契約 | OS 実装、Client の画面構成 |
 | `contracts/transport/wire/` | Transport 固有の wire DTO | domain の規則、Client の画面構成 |
 | `extensions/git/contract/` | Git 拡張の wire 契約（domain git の DTO を再エクスポート） | 拡張の実装、Client の画面構成 |
-| `extensions/terminal/` | Terminal 拡張の自己完結した実装。`contract/` は型・wire DTO・`TerminalBackend` port の正本、`host/` は Host の正規状態、`adapter/` は PTY 実装 | 拡張の外に置くターミナル固有の実装、Client の画面構成 |
+| `extensions/terminal/` | Terminal の `contract/` は型・wire DTO・`TerminalBackend` port の正本、`component/` は公開 Wasm 契約のアダプター、`logic/` はセッション判断、`native/` は native ABI のアダプター、`renderer/` と `portable-renderer/` はクライアント側の画面モデル | Client の Window・Panel・Tab の正規状態 |
 | `clients/transport/` | Client共通の非同期要求・応答照合と接続世代 | UI、具体的な通信経路 |
 | `host/application/` | 操作と判断、port による外部連携 | GPUI、OS 固有 API |
 | `host/runtime/` | 正規状態、操作の直列化、購読・revision・実行資源の寿命 | Window、Panel、focus |
@@ -39,14 +40,13 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 - 状態・値・エラーは各機能の domain crate（`document` / `git` / `task` / `workspace` / `workbench` / `lsp` / `settings` など）が所有する。機能をまたぐ移動は、複数 crate が同じ型を必要とする場合だけ行う。
 - 拡張へ自己完結させる機能は、型・port を自分の contract crate が正本として持つ。Terminal は `extensions/terminal/contract` が型・wire DTO・`TerminalBackend` port を所有し、`contracts/domain/terminal` は置かない。実装を移す前後で正本が二重にならないよう、移動は正本の移送と同じ PR で完結させる。
 - 自己完結した拡張は `extensions/<機能>/` の下を役割ディレクトリで分ける。`contract/` は契約、`host/` は Host 側の正規状態、`adapter/` は OS に触れる具体実装、`assets/` は拡張が配布する固定データを置く。役割を追加するときは、その領域の README に「誰が何を判断するために置くか」を書いてから増やす。層の意味は拡張の中でも変えない（`host/` は runtime、`adapter/` は infrastructure として依存検査する）。
-- Terminal の Host 実装は Host の build 時にリンクして注入する。`host/adapters/terminal` のような旧位置には re-export を置かない。旧位置と新位置の両方が実装を持つと正本が読めなくなるため、参照側の Cargo 依存を新しい配置へ向けるだけにする。
 - port（`WorkspaceRepository` / `TerminalBackend` / `GitBackend` / `TaskBackend` / `LanguageServerBackend` / `WorkspaceSearchBackend` / `DocumentRepository` / `WorkbenchConnection` / `SettingsRepository`）は、実装ではなく利用側が正本を持つ crate に置く。`TerminalBackend` は `extensions/terminal/contract`、それ以外は各機能の domain crate が持つ。実装は `host/adapters/*`、`host/extensions/*`、および自己完結した拡張の `extensions/<機能>/host` / `extensions/<機能>/adapter` が持つ。
 - 追加の集約は行わない。現状の配置で「どの crate が正本か」が一意になっており、統合すると domain 間の依存が増えるだけで判断材料が増えない。
 
 ### `host/application` を独立させない
 
 - 操作の判断は `host/runtime`（`state` / `operations` / `state/*`）が持ち、`runtime` を application とみなす。`host/application` は作らない。
-- 理由: 判断と正規状態が同じ lock と寿命を共有しており、crate を分けると状態の受け渡しだけの層が増える。実際の境界は `host/workbench` / `extensions/terminal/host` / `host/documents` / `host/workspaces` として既に切り出している。
+- 理由: 判断と正規状態が同じ lock と寿命を共有しており、crate を分けると状態の受け渡しだけの層が増える。実際の境界は `host/workbench` / `host/documents` / `host/workspaces` として既に切り出している。
 - 将来、外部 I/O を伴わない純粋な判断が増え、`runtime` から独立した寿命を持つ場合だけ再検討する。
 
 ### Runtime を分割しない
@@ -88,6 +88,7 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 - PID 再利用は、登録時と比較時で同じ開始識別子を比べて判定する。識別子は壁時計の変更で値が変わらないもの（Linux は boot 相対の開始 ticks、Windows / macOS は OS が記録した作成時刻）を使い、開始時刻を確定できないプロセスは所有対象にしない。表示用の開始時刻と同一性判定は別の値として扱う。
 - 計測は 1 秒間隔で行い、root ごとに直近 60 サンプル（60 秒分）を保持する。CPU は 100 分の 1 パーセント、メモリは byte の整数として wire に載せる。終了した root は状態確認のため 60 秒残してから削除する。
 - 終了操作は接続中の Workspace に属する root だけを対象とし、root とその子孫を OS のプロセスツリー単位で終了する。Host / Desktop 自身は終了対象にしない。所有外の root ID は存在の有無を区別せず拒否する。
+- Worktree の破棄は実行資源の使用中判定と新規起動を共通ガードで直列化する。拡張が起動した PTY については起動時の作業ディレクトリを検査し、実行中なら破棄を拒否する。破棄中はその配下での新規 PTY 起動を拒否する。プロセスが後から変更した作業ディレクトリの追跡は未対応。
 - `workspace.execute` の `Processes` / `TerminateProcess` を使い、Local / Remote で同じ意味にする。読み取りは `workspace.process.read`、終了は `workspace.process.control` を要求する。
 - Desktop の一覧取得は Resource Manager 専用の worker で行い、Document の編集・保存と直列化を共有しない。Workspace は worker 側が保持し、切替時は Feature から同期する。
 - 一覧の再取得は Resource Manager パネルが表示中のときだけ 2 秒間隔で行う。非表示にしたら周期を止め、再表示時に 1 回取得してから再開する。
@@ -149,8 +150,8 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 - `DockLayout`はLeft・Main・Right・BottomのZoneとZoneの配置・表示を所有する。各ZoneはPanelの順序、比率、開閉状態を持ち、PanelはTabの順序と選択を持つ。Panelの所属ZoneはZone側で管理し、Panelには重複保持しない。PanelやZoneはDocument・Terminal・Agent等のResourceを所有しない。
 - `ZonePolicy`はZoneの開閉・Panel数・成長方向・サイズ制約を定義する。Mainは常に開き、削除不能な一つのPanelを持つ。Zone内部の順序と比率は`PanelLayout`で表し、初期状態もPanel追加後も同じRendererを使う。空ZoneはTool Pickerから初回Panelを作成する。
 - `DockGeometry`はViewportとLayoutからFrame・Zone・Panel・境界を計算し、描画と操作に使用する。RootとDetachedは同じFrameを使う。Zone操作は共通Commandを経由する。
-- `ViewId`は種類、`ViewInstanceId`は個体を識別する。Layoutの保存値はZone・Panel・Tab参照だけを含む。旧Layout形式は復元せず、Task・未保存Documentなど別の保存値は保持する。
-- 復元時はZone・Panel IDとTab個体の一意性、所属、比率、有限サイズを検証し、不正なLayoutは既定配置へ戻す。利用できないTabは除外する。
+- `ViewId`は種類、`ViewInstanceId`は個体を識別する。Layoutの保存値はZone・Panel・Tab参照だけを含む。Resource未確定のView参照には両方のIDを保存し、View IDのない旧参照は個体IDから復元する。旧Clientが同じ個体を更新する場合、Hostは同じLayout内で一意に特定できるView IDを引き継ぐ。旧Layout形式は復元せず、Task・未保存Documentなど別の保存値は保持する。
+- 復元時はZone・Panel IDとTab個体の一意性、所属、比率、有限サイズを検証し、不正なLayoutは既定配置へ戻す。利用できないDocumentと旧形式の不明なViewは除外する。明示的なView IDを持つ未登録の拡張Tabは、宣言を再取得できるまで非表示で保持する。
 - Zoneの開閉とPanel個別の表示状態は別に保存する。最後のTabが移動したSide Panelは閉鎖中の状態を経て除去する。空のSide Zoneも再び開くことができる。
 - Viewport幅の境界は `LayoutProfile` が決める。Wide は 960px 以上、Compact は 960px 未満とし、境界付近の往復を抑えるため Compact から Wide へは 960px、Wide から Compact へは 928px（960px − 32px のヒステリシス）で切り替える。
 - `InteractionPolicy` は Profile と入力方式（Mouse / Touch）から操作の可否を決める。Compact では Panel の drag / resize / tab detach を無効化し、Context Menu は Mouse なら右クリック、Touch なら長押しとする。
@@ -209,13 +210,14 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 
 ## 拡張の入口
 
-- `host/extensions-entry/`（crate `extensions-entry`）は拡張の入口として、導入済み拡張の目録と状態、`.lapis` package の読み込み・互換照合・署名検証、package と拡張データの置き場所を持つ。「配布・販売」を意味する `store` は使わない。Wasm ランタイム上での拡張実行は将来段階であり、ここでは扱わない。
+- `host/extensions-entry/`（crate `extensions-entry`）は拡張の入口として、導入済み拡張の目録と状態、`.lapis` package の読み込み・互換照合・署名検証、package と拡張データの置き場所を持つ。「配布・販売」を意味する `store` は使わない。Wasm component の実行は別プロセスの `extension-runtime` が担当する。
 - 目録は Host の正本で、`<state>/extensions/catalog.json`（`schema: 2`）に置く。1 件は `id` / `version` / `installed` / `enabled` / `incompatible` を持ち、`enabled` は `installed` を含意し、`incompatible` は `installed` と同時に立たない。`incompatible` を欠く `schema: 1`（PR1 の目録）は「非互換でない」として読む。書き換えは常に現在の schema で行うため、旧い入口は未知の schema として読み込みを拒否し、宣言を黙って失わない。壊れた目録・未知の schema・重複 ID・規則に合わない ID（末尾 `.`、Windows 予約デバイス名など）は読み込み時に拒否し、空として作り直さない。項目だけを黙って捨てず、file も上書きしない。
-- Client への提示は `host.extensions.list` の宣言に限る。要求 capability は読み取り専用の `extensions.read` とし、`host.manage` は要求しない（表示に使う通常の Client が読めるようにするため）。Client は受け取った値を表示にだけ使い、保存値を正本にしない。状態の変更は入口の再起動で反映する前提とし、登録は同じ宣言の再登録で file を書き換えない冪等な操作にする。
+- Client は `host.extensions.list` で目録を読み、`host.extensions.set_enabled` で次回起動時の有効状態を保存する。一覧には `extensions.read`、変更には `extensions.manage` を要求する。Client は受け取った値を表示にだけ使い、保存値を正本にしない。状態の変更は入口の再起動で反映する前提とし、登録は同じ宣言の再登録で file を書き換えない冪等な操作にする。
+- 静的な設定・翻訳宣言は `lapis.extension.contributions` 1.0.0 の契約を要求し、署名済み manifest の `files` に含む `contributions.json` で提供する。表示宣言は独立した `lapis.extension.views` 1.0.0 と `views.json` で提供する。提供元 ID は manifest から付与し、翻訳対象 ID と区別する。Host は起動時に署名と内容を再検証して宣言を固定する。無効な拡張は公開せず、実行を要する拡張は component の起動成功中だけ公開する。宣言は合計 256 KiB までとし、目録応答に含める。Client は設定・翻訳を登録する。表示宣言の UI 登録は未接続。
 - 拡張データの正本は Host 側の `<state>/extensions/data/<id>/` に置く。Client は再取得可能な cache だけを持つ。package の展開先は `<state>/extensions/installed/<id>/` とし、読み込みは一時 directory に書いてから置き換える。
 - `.lapis` package は zip + `manifest.json` であり、種別を manifest の `kind`（`extension` / `host`）だけで決める。拡張子や招待ファイル（`.lapis-host`）の名前で区別しない。manifest は `schema` / `kind` / `id` / `version` / `requires` / `files` / `key_id` / `signature` を持ち、未知・欠落 field は拒否する。
-- 互換照合は manifest の `requires`（契約 ID と、両端を含む版の範囲）を Host が提供する版と突き合わせる。比較は SemVer の precedence で行い、build metadata（`+vendor` など）は無視する。Host が提供する契約は `lapis.extension` だけで、その版は crate の定数が正本である。満たさない package は展開せず、目録に `incompatible` として登録する。非互換の拡張は有効にできない。導入済みの版が動いている場合、非互換の版を入れようとしてもその宣言と実体は残す（入れようとした版の都合で動いている版を壊さない）。
-- 署名検証はリリース署名と同じ規則を使う（Ed25519、`release/trusted-keys.json` を信頼の起点、`signature` を除いた manifest の正規化 bytes への署名、恒等元・小位数点の鍵を拒否）。署名が一致しない package は目録にも載せない。manifest の `id` すら署名で裏付けられていないため、宣言として採用しない。
+- 互換照合は manifest の `requires`（契約 ID と、両端を含む版の範囲）を Host が提供する版と突き合わせる。同じ契約の複数版を併存でき、範囲内に複数ある場合は SemVer の precedence が最も高い版を選ぶ。比較では build metadata（`+vendor` など）を無視する。`lapis.extension` は package 形式の契約であり、実行 API を意味しない。静的宣言の契約は `lapis.extension.contributions` とし、Wasm の lifecycle 契約は使用可能な worker の検証に成功した場合だけ提供する。満たさない package は展開せず、目録に `incompatible` として登録する。非互換の拡張は有効にできない。導入済みの版が動いている場合、非互換の版を入れようとしてもその宣言と実体は残す（入れようとした版の都合で動いている版を壊さない）。
+- 署名検証はリリース署名と同じ規則を使う（Ed25519、`signature` を除いた manifest の正規化 bytes への署名、恒等元・小位数点の鍵を拒否）。信頼鍵は Host の `<state>/extensions/trusted-keys.json` で管理する。明示的なローカル開発モードでは未署名 package も許可するが、署名の不一致は許可しない。
 - 有効化・無効化は目録の状態だけを変え、package の実体は動かさない。反映は入口の再起動で行う。導入済み package を取り除いても `<state>/extensions/data/<id>/` は残し、再導入で引き継ぐ。
 - package の `files` の path は、空・`.`・`..`・末尾 `.`・末尾空白の要素を拒否する。Windows は path 要素の末尾 `.` と空白を取り除いて解決するため、許可すると別名の member が同じ file を上書きする。同名 member を持つ zip は `ZipArchive::has_duplicate_names` で走査前に拒否する（`zip` は同名を内部 map に畳むため、`len()` と `by_index()` からは見えない）。拡張 ID は `.staging-` で始まってはならない（`installed/` 直下の残骸掃除が同名の実体を消すため）。
 - 目録と `installed/<id>/` は別の file なので、書き込みの間で Host が終了すると食い違う。`<state>/extensions/journal.json` に操作の段階（`prepared` / `catalog_written` / `backed_up` / `swapped`）と操作前の宣言を記録し、次の起動で段階に応じて完了または取り消す（`recover_pending_installs`）。回復は導入の lock を取得して行い、失敗した場合は目録を公開しない（起動時は `Unreadable`、稼働中は `PackageError::Unrecovered` を記録して `host.extensions.list` にエラーを返す）。実体は `.swap/` へ退避してから置き換える。

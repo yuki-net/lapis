@@ -8,10 +8,10 @@ license.workspace = true
 [dependencies]
 git-contract = { path = "../../extensions/git/contract" }
 process = { path = "../domain/process" }
+extension-ui-contract = { path = "../domain/extension-ui" }
 task = { path = "../domain/task" }
 editor-core = { path = "../domain/editor-core" }
 document = { path = "../domain/document" }
-terminal = { package = "terminal-contract", path = "../../extensions/terminal/contract" }
 workspace = { path = "../domain/workspace" }
 workbench = { path = "../domain/workbench" }
 serde.workspace = true

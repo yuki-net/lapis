@@ -97,14 +97,17 @@ fn validate_view_bytes(view: &ConversationViewState) -> Result<(), WorkbenchStat
 /// 旧Clientが知らないworkspaceを省略した場合は、Host側の値を引き継ぐ。
 pub fn parse_update_view(
     value: serde_json::Value,
-    current: Option<&workbench::SharedWorkspaceView>,
+    current: Option<&ConversationViewState>,
 ) -> Result<ConversationViewState, WorkbenchStateError> {
     let omitted = value
         .as_object()
         .is_some_and(|object| !object.contains_key("workspace"));
     let mut view = parse_view(value)?;
     if omitted {
-        view.workspace = current.cloned();
+        view.workspace = current.and_then(|current| current.workspace.clone());
+    }
+    if let Some(current) = current {
+        view.preserve_view_ids_from(current);
     }
     validate_view_bytes(&view)?;
     Ok(view)
@@ -148,6 +151,45 @@ pub fn snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_client_updates_preserve_view_identity_for_same_tab() {
+        let original = serde_json::json!({
+            "layout": {"version":3,"bottom_span_left":false,"bottom_span_right":false,"zones":[{
+                "position":"bottom","open":true,"extent_ratio":1.0,"layout":null,"panels":[{
+                    "id":"panel-1","open":true,
+                    "tabs":[{"kind":"view","id":"opaque","view":"example.view"}],
+                    "pinned_tabs":[{"kind":"view","id":"opaque","view":"example.view"}],
+                    "active_tab":{"kind":"view","id":"opaque","view":"example.view"}
+                }]
+            }]}
+        });
+        let current = parse_view(original.clone()).unwrap();
+        let mut old_update = original;
+        let panel = &mut old_update["layout"]["zones"][0]["panels"][0];
+        panel["tabs"][0].as_object_mut().unwrap().remove("view");
+        panel["pinned_tabs"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("view");
+        panel["active_tab"].as_object_mut().unwrap().remove("view");
+        let next = parse_update_view(old_update.clone(), Some(&current)).unwrap();
+        let panel = &next.layout.unwrap().zones[0].panels[0];
+        for tab in [
+            &panel.tabs[0],
+            &panel.pinned_tabs[0],
+            panel.active_tab.as_ref().unwrap(),
+        ] {
+            assert!(
+                matches!(tab, workbench::TabRef::View { view: Some(view), .. } if view == "example.view")
+            );
+        }
+        old_update["layout"]["zones"][0]["panels"][0]["tabs"][0]["view"] = "different.view".into();
+        let changed = parse_update_view(old_update, Some(&current)).unwrap();
+        assert!(
+            matches!(&changed.layout.unwrap().zones[0].panels[0].tabs[0], workbench::TabRef::View { view: Some(view), .. } if view == "different.view")
+        );
+    }
 
     fn workspace_with_drafts(drafts: impl IntoIterator<Item = String>) -> serde_json::Value {
         let documents: Vec<_> = drafts

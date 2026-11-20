@@ -60,6 +60,16 @@ impl SettingsDocument {
 
     /// 定義データに照らして保存内容を検証する。
     pub fn validate(&self, catalog: &DefinitionCatalog) -> Result<(), SettingsError> {
+        self.validate_with_extensions(catalog, &crate::ExtensionSettingsCatalog::default(), false)
+    }
+
+    /// 無効中の拡張の値は保持するが、登録済みの定義に反する値は拒否する。
+    pub fn validate_with_extensions(
+        &self,
+        catalog: &DefinitionCatalog,
+        extensions: &crate::ExtensionSettingsCatalog,
+        preserve_inactive: bool,
+    ) -> Result<(), SettingsError> {
         if self.version != DOCUMENT_VERSION {
             return Err(SettingsError::new(format!(
                 "未対応の設定ファイルversionです: {}",
@@ -67,6 +77,17 @@ impl SettingsDocument {
             )));
         }
         for (key, value) in &self.values {
+            if let Some(definition) = extensions.definition(key) {
+                if !definition.accepts(value) || !definition.allows_scope(&self.scope) {
+                    return Err(SettingsError::new(format!(
+                        "拡張設定の値またはスコープが不正です: {key}"
+                    )));
+                }
+                continue;
+            }
+            if preserve_inactive && crate::extension::is_extension_key(key) {
+                continue;
+            }
             let definition = catalog
                 .settings()
                 .iter()

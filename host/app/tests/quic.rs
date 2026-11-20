@@ -36,9 +36,17 @@ impl Fixture {
         }
     }
     async fn new() -> Self {
+        Self::with_setup(|_| {}, false).await
+    }
+    async fn with_setup(setup: impl FnOnce(&std::path::Path), development: bool) -> Self {
         let root = tempfile::tempdir().unwrap();
         let state = tempfile::tempdir().unwrap();
-        let host = BackendHost::start_with_state_directory(state.path().to_path_buf()).unwrap();
+        setup(state.path());
+        let host = if development {
+            BackendHost::start_development_with_state_directory(state.path().to_path_buf()).unwrap()
+        } else {
+            BackendHost::start_with_state_directory(state.path().to_path_buf()).unwrap()
+        };
         let workspace = host.register_workspace(root.path()).unwrap();
         let mut auth = RemoteAuth::system(
             AuthConfig::new(
@@ -117,6 +125,258 @@ impl Fixture {
         };
         (client, paired)
     }
+}
+
+#[cfg(windows)]
+fn prepare_native_terminal(state: &std::path::Path) {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use ed25519_dalek::SigningKey;
+    use std::{os::windows::process::CommandExt, process::Command};
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let seed = [11u8; 32];
+    let keys = state.join("extensions/trusted-keys.json");
+    std::fs::create_dir_all(keys.parent().unwrap()).unwrap();
+    std::fs::write(
+        &keys,
+        serde_json::to_vec(&serde_json::json!({"schema":1,"keys":{
+            "quic-test":STANDARD.encode(SigningKey::from_bytes(&seed).verifying_key().to_bytes())
+        }}))
+        .unwrap(),
+    )
+    .unwrap();
+    let source = state.join("fixture-source");
+    std::fs::create_dir_all(source.join("native")).unwrap();
+    std::fs::copy(
+        root.join("target/debug/lapis_terminal_native.dll"),
+        source.join("native/windows-x86_64.dll"),
+    )
+    .unwrap();
+    let requires: Vec<_> = [
+        "lapis.extension",
+        "lapis.extension.lifecycle",
+        "lapis.extension.dispatch",
+        "lapis.extension.native-abi",
+        "lapis.process.pty",
+        "lapis.process.info",
+    ]
+    .into_iter()
+    .map(|contract| serde_json::json!({"contract":contract,"minimum":"1.0.0","maximum":"1.0.0"}))
+    .collect();
+    let metadata = serde_json::json!({"id":"lapis.terminal","version":"0.2.0","requires":requires,
+        "capabilities":[{"id":"process.pty","version":"1.0.0"}],"files":["native/windows-x86_64.dll"]});
+    std::fs::write(
+        source.join("extension.json"),
+        serde_json::to_vec(&metadata).unwrap(),
+    )
+    .unwrap();
+    let seed_path = state.join("test-seed");
+    std::fs::write(&seed_path, seed).unwrap();
+    let package = state.join("terminal.lapis");
+    assert!(
+        Command::new("python")
+            .current_dir(root)
+            .args(["-m", "scripts.extensions.package"])
+            .arg(&source)
+            .arg(&package)
+            .arg("--seed-file")
+            .arg(&seed_path)
+            .args(["--key-id", "quic-test"])
+            .creation_flags(0x08000000)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let host = BackendHost::start_with_state_directory(state.to_owned()).unwrap();
+    host.install_extension(&package, true).unwrap();
+    let capability = host.extension_capabilities("lapis.terminal").unwrap();
+    host.set_extension_capability(&HostExtensionSetCapabilityRequest {
+        id: "lapis.terminal".into(),
+        manifest_digest: capability.manifest_digest,
+        capability: "process.pty".into(),
+        version: "1.0.0".into(),
+        approved: true,
+    })
+    .unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "native Terminal と拡張ホストの事前ビルドが必要"]
+fn native_terminal_survives_quic_disconnect_and_can_be_claimed() {
+    use std::{path::Path, process::Command, time::Instant};
+    const CHILD: &str = "LAPIS_QUIC_NATIVE_TEST_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let executable = temporary.path().join("quic-test.exe");
+        std::fs::copy(std::env::current_exe().unwrap(), &executable).unwrap();
+        std::fs::copy(
+            root.join("target/debug/lapis-extension-host.exe"),
+            temporary.path().join("lapis-extension-host.exe"),
+        )
+        .unwrap();
+        assert!(
+            Command::new(executable)
+                .args([
+                    "--exact",
+                    "native_terminal_survives_quic_disconnect_and_can_be_claimed",
+                    "--ignored"
+                ])
+                .env(CHILD, "1")
+                .status()
+                .unwrap()
+                .success()
+        );
+        return;
+    }
+    run(async {
+        let fixture = Fixture::with_setup(prepare_native_terminal, false).await;
+        std::fs::create_dir(fixture._root.path().join("sub")).unwrap();
+        let (mut first, _) = fixture.pair("native-first").await;
+        connect_workspace(&mut first, &fixture.workspace).await;
+        let dispatch = |operation: &str, payload: serde_json::Value| {
+            RequestBody::HostExtensionDispatch(HostExtensionDispatchRequest {
+                id: "lapis.terminal".into(),
+                operation: operation.into(),
+                payload: payload.to_string(),
+            })
+        };
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut sequence = 10;
+        let id = loop {
+            let response = request(
+                &mut first,
+                sequence,
+                dispatch(
+                    "terminal.v1.start",
+                    serde_json::json!({
+                        "program":"cmd.exe","arguments":["/D","/Q"],
+                        "working_directory":"sub","columns":80,"rows":24
+                    }),
+                ),
+            )
+            .await;
+            if let ResponseBody::HostExtensionDispatch(value) = response {
+                let value: serde_json::Value = serde_json::from_str(&value.result).unwrap();
+                break value["id"].as_str().unwrap().to_owned();
+            }
+            assert!(Instant::now() < deadline, "native extension did not start");
+            sequence += 1;
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        let (mut second, _) = fixture.pair("native-second").await;
+        connect_workspace(&mut second, &fixture.workspace).await;
+        let list_response = request(
+            &mut second,
+            100,
+            dispatch("terminal.v1.list", serde_json::json!({})),
+        )
+        .await;
+        let ResponseBody::HostExtensionDispatch(list) = list_response else {
+            panic!("list failed: {list_response:?}")
+        };
+        let list: serde_json::Value = serde_json::from_str(&list.result).unwrap();
+        assert!(
+            list["sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|session| session["id"] == id && session["working_directory"] == "sub")
+        );
+        drop(first);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut claim_sequence = 101;
+        loop {
+            let response = request(
+                &mut second,
+                claim_sequence,
+                dispatch("terminal.v1.claim", serde_json::json!({"id":id})),
+            )
+            .await;
+            if matches!(response, ResponseBody::HostExtensionDispatch(_)) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "ownership was not released");
+            claim_sequence += 1;
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        claim_sequence += 1;
+        assert!(matches!(
+            request(
+                &mut second,
+                claim_sequence,
+                dispatch(
+                    "terminal.v1.write",
+                    serde_json::json!({"id":id,"bytes":b"echo LAPIS_NATIVE_QUIC\r\n"})
+                )
+            )
+            .await,
+            ResponseBody::HostExtensionDispatch(_)
+        ));
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut offset = 0;
+        let mut output = Vec::new();
+        let mut answered = false;
+        while !output
+            .windows(b"LAPIS_NATIVE_QUIC".len())
+            .any(|part| part == b"LAPIS_NATIVE_QUIC")
+        {
+            assert!(
+                Instant::now() < deadline,
+                "native output missing: {output:?}"
+            );
+            claim_sequence += 1;
+            let response = request(
+                &mut second,
+                claim_sequence,
+                dispatch(
+                    "terminal.v1.read",
+                    serde_json::json!({
+                        "id":id,"offset":offset,"max_bytes":8192,"timeout_ms":500
+                    }),
+                ),
+            )
+            .await;
+            let ResponseBody::HostExtensionDispatch(read) = response else {
+                panic!("read failed: {response:?}")
+            };
+            let read: serde_json::Value = serde_json::from_str(&read.result).unwrap();
+            offset = read["next"].as_u64().unwrap();
+            output.extend(
+                read["bytes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|value| value.as_u64().unwrap() as u8),
+            );
+            if !answered && output.windows(4).any(|part| part == b"\x1b[6n") {
+                claim_sequence += 1;
+                assert!(matches!(
+                    request(
+                        &mut second,
+                        claim_sequence,
+                        dispatch(
+                            "terminal.v1.write",
+                            serde_json::json!({"id":id,"bytes":[27,91,49,59,49,82]})
+                        )
+                    )
+                    .await,
+                    ResponseBody::HostExtensionDispatch(_)
+                ));
+                answered = true;
+            }
+        }
+        assert!(matches!(
+            request(
+                &mut second,
+                claim_sequence + 1,
+                dispatch("terminal.v1.close", serde_json::json!({"id":id}))
+            )
+            .await,
+            ResponseBody::HostExtensionDispatch(_)
+        ));
+    });
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -408,85 +668,6 @@ async fn self_revoke_is_rejected_and_other_devices_still_revoke() {
     ));
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn desktop_ports_discover_and_reattach_the_same_live_terminal_with_its_cwd() {
-    use terminal::{TerminalProfileId, TerminalStatus as ModelStatus};
-    let fixture = Fixture::new().await;
-    std::fs::create_dir(fixture._root.path().join("sub")).unwrap();
-    std::fs::write(
-        fixture._root.path().join("sub/cwd-proof.txt"),
-        "LAPIS_ACTUAL_CWD\n",
-    )
-    .unwrap();
-    let first = fixture.config("port-terminal-first").await;
-    let second = fixture.config("port-terminal-second").await;
-    tokio::task::spawn_blocking(move || {
-        let virtual_root = std::env::temp_dir().join("lapis-virtual-terminal-test");
-        let first = host::BackendClient::remote(virtual_root.clone(), first).unwrap();
-        let second = host::BackendClient::remote(virtual_root.clone(), second).unwrap();
-        let terminals = first.terminals();
-        let profile = cfg!(windows).then(|| TerminalProfileId::new("cmd"));
-        let id = terminals
-            .start_profile(&virtual_root.join("sub"), 80, 24, profile.as_ref())
-            .unwrap();
-        let observer = second.terminals();
-        let found = observer
-            .list(&virtual_root)
-            .unwrap()
-            .into_iter()
-            .find(|terminal| terminal.id == id)
-            .unwrap();
-        assert_eq!(found.cwd, virtual_root.join("sub"));
-        assert_eq!(found.status, ModelStatus::Running);
-        let attached = observer.attach(&virtual_root, &id).unwrap();
-        assert_eq!(attached.id, id);
-        // 別 Client が操作するには操作権を取得する。
-        observer.claim(&id).unwrap();
-        drop(terminals);
-        let command = if cfg!(windows) {
-            "set LAPIS_PART=SHARED\r\necho LAPIS_PORT_%LAPIS_PART%\r\ntype cwd-proof.txt\r\n"
-        } else {
-            "printf 'LAPIS_PORT_%s\\n' SHARED\ncat cwd-proof.txt\n"
-        };
-        observer
-            .input(&id, &TerminalInput::Text(command.to_owned()))
-            .unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(15);
-        loop {
-            let snapshot = observer
-                .list(&virtual_root)
-                .unwrap()
-                .into_iter()
-                .find(|terminal| terminal.id == id)
-                .unwrap();
-            let output = snapshot.screen.plain_text();
-            let succeeded =
-                output.contains("LAPIS_PORT_SHARED") && output.contains("LAPIS_ACTUAL_CWD");
-            if succeeded {
-                break;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "shell did not execute: {output}"
-            );
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        observer.terminate(&id).unwrap();
-        assert_eq!(
-            observer
-                .list(&virtual_root)
-                .unwrap()
-                .into_iter()
-                .find(|terminal| terminal.id == id)
-                .unwrap()
-                .status,
-            ModelStatus::Exited
-        );
-    })
-    .await
-    .unwrap();
-}
-
 fn hello(id: &str) -> HelloRequest {
     HelloRequest {
         protocol: ProtocolRange::exact(CURRENT_PROTOCOL),
@@ -769,6 +950,12 @@ async fn extensions_list_reports_the_host_catalog_to_a_reader() {
     owner_hello.requested_capabilities = CapabilitySet::try_new(
         host::supported_capabilities()
             .iter()
+            .filter(|capability| {
+                !matches!(
+                    capability.as_str(),
+                    capability::EXTENSIONS_MANAGE | capability::EXTENSIONS_EXECUTE
+                )
+            })
             .cloned()
             .chain([CapabilityId::try_new(capability::HOST_MANAGE).unwrap()]),
     )
@@ -797,7 +984,37 @@ async fn extensions_list_reports_the_host_catalog_to_a_reader() {
     );
 
     // Workspace 限定の接続でも、読み取りだけの capability があれば宣言を読める。
-    let (mut reader, _) = fixture.pair("extension-reader").await;
+    let mut reader = fixture.connect().await;
+    let mut reader_hello = hello("extension-reader");
+    reader_hello.requested_capabilities = CapabilitySet::try_new(
+        host::supported_capabilities()
+            .iter()
+            .filter(|capability| {
+                !matches!(
+                    capability.as_str(),
+                    capability::EXTENSIONS_MANAGE | capability::EXTENSIONS_EXECUTE
+                )
+            })
+            .cloned(),
+    )
+    .unwrap();
+    let reader_token = fixture
+        .auth
+        .lock()
+        .unwrap()
+        .begin_pairing(fixture.workspace.clone())
+        .unwrap();
+    reader
+        .send(&ClientMessage::Pair(PairRequest::new(
+            reader_hello,
+            reader_token.secret_bytes(),
+        )))
+        .await
+        .unwrap();
+    assert!(matches!(
+        receive(&mut reader).await,
+        ServerMessage::Paired(_)
+    ));
     assert_eq!(
         request(
             &mut reader,
@@ -807,6 +1024,160 @@ async fn extensions_list_reports_the_host_catalog_to_a_reader() {
         .await,
         ResponseBody::HostExtensions(HostExtensionsListResponse::default())
     );
+    assert!(matches!(
+        request(
+            &mut reader,
+            4,
+            RequestBody::HostExtensionSetEnabled(HostExtensionSetEnabledRequest {
+                id: "dev.example.terminal".to_owned(),
+                enabled: false,
+            }),
+        ).await,
+        ResponseBody::Error(ref error) if error.code.as_str() == FORBIDDEN
+    ));
+    let mut catalog =
+        extensions_entry::ExtensionCatalog::open(fixture._state.path().join("extensions")).unwrap();
+    catalog
+        .register(extensions_entry::ExtensionEntry::new(
+            extensions_entry::ExtensionPackageId::try_new("dev.example.one").unwrap(),
+            extensions_entry::ExtensionVersion::parse("0.2.0").unwrap(),
+            extensions_entry::ExtensionState::installed(true),
+        ))
+        .unwrap();
+    let response = request(
+        &mut owner,
+        5,
+        RequestBody::HostExtensionSetEnabled(HostExtensionSetEnabledRequest {
+            id: "dev.example.one".to_owned(),
+            enabled: false,
+        }),
+    )
+    .await;
+    assert_eq!(
+        response,
+        ResponseBody::HostExtensionSetEnabled(HostExtensionSetEnabledResponse {
+            id: "dev.example.one".to_owned(),
+            enabled: false,
+        })
+    );
+    let reopened =
+        extensions_entry::ExtensionCatalog::open(fixture._state.path().join("extensions")).unwrap();
+    assert!(
+        !reopened
+            .get(&extensions_entry::ExtensionPackageId::try_new("dev.example.one").unwrap())
+            .unwrap()
+            .state
+            .is_enabled()
+    );
+    let (mut manager, paired) = fixture.pair("extension-manager").await;
+    assert!(
+        paired
+            .hello
+            .granted_capabilities
+            .iter()
+            .any(|capability| capability.as_str() == capability::EXTENSIONS_MANAGE)
+    );
+    assert!(
+        !paired
+            .hello
+            .granted_capabilities
+            .iter()
+            .any(|capability| capability.as_str() == capability::HOST_MANAGE)
+    );
+    assert_eq!(
+        request(
+            &mut manager,
+            6,
+            RequestBody::HostExtensionSetEnabled(HostExtensionSetEnabledRequest {
+                id: "dev.example.one".to_owned(),
+                enabled: true
+            })
+        )
+        .await,
+        ResponseBody::HostExtensionSetEnabled(HostExtensionSetEnabledResponse {
+            id: "dev.example.one".to_owned(),
+            enabled: true
+        })
+    );
+    let capability = HostExtensionSetCapabilityRequest {
+        id: "dev.example.one".into(),
+        manifest_digest: "a".repeat(64),
+        capability: "process.pty".into(),
+        version: "1.0.0".into(),
+        approved: false,
+    };
+    assert!(
+        matches!(request(&mut reader, 7, RequestBody::HostExtensionSetCapability(capability.clone())).await,
+        ResponseBody::Error(ref error) if error.code.as_str() == FORBIDDEN)
+    );
+    assert_eq!(
+        request(
+            &mut manager,
+            8,
+            RequestBody::HostExtensionSetCapability(capability.clone())
+        )
+        .await,
+        ResponseBody::HostExtensionSetCapability(HostExtensionSetCapabilityResponse {
+            id: capability.id,
+            manifest_digest: capability.manifest_digest,
+            capability: capability.capability,
+            version: capability.version,
+            approved: false,
+        })
+    );
+
+    let dispatch = HostExtensionDispatchRequest {
+        id: "dev.example.one".into(),
+        operation: "inspect".into(),
+        payload: "{}".into(),
+    };
+    assert!(matches!(
+        request(&mut reader, 9, RequestBody::HostExtensionDispatch(dispatch.clone())).await,
+        ResponseBody::Error(ref error) if error.code.as_str() == FORBIDDEN
+    ));
+    assert!(
+        paired
+            .hello
+            .granted_capabilities
+            .iter()
+            .any(|value| value.as_str() == capability::EXTENSIONS_EXECUTE)
+    );
+    assert!(matches!(
+        request(&mut manager, 9, RequestBody::HostExtensionDispatch(dispatch.clone())).await,
+        ResponseBody::Error(ref error) if error.code.as_str() != FORBIDDEN
+    ));
+    let mut manage_only = fixture.connect().await;
+    let mut manage_hello = hello("extension-manage-only");
+    manage_hello.requested_capabilities = CapabilitySet::try_new([
+        CapabilityId::try_new(capability::WORKSPACES_CONNECT).unwrap(),
+        CapabilityId::try_new(capability::EXTENSIONS_MANAGE).unwrap(),
+    ])
+    .unwrap();
+    let token = fixture
+        .auth
+        .lock()
+        .unwrap()
+        .begin_pairing(fixture.workspace.clone())
+        .unwrap();
+    manage_only
+        .send(&ClientMessage::Pair(PairRequest::new(
+            manage_hello,
+            token.secret_bytes(),
+        )))
+        .await
+        .unwrap();
+    assert!(matches!(
+        receive(&mut manage_only).await,
+        ServerMessage::Paired(_)
+    ));
+    assert!(matches!(
+        request(&mut manage_only, 9, RequestBody::HostExtensionDispatch(dispatch.clone())).await,
+        ResponseBody::Error(ref error) if error.code.as_str() == FORBIDDEN
+    ));
+    assert!(matches!(
+        request(&mut owner, 9, RequestBody::HostExtensionDispatch(dispatch)).await,
+        ResponseBody::Error(ref error) if error.code.as_str() != FORBIDDEN
+    ));
 
     // 宣言を要求しない接続は Host の目録を読めない。
     let mut unread = fixture.connect().await;
@@ -840,6 +1211,98 @@ async fn extensions_list_reports_the_host_catalog_to_a_reader() {
         .await,
         ResponseBody::Error(ref error) if error.code.as_str() == FORBIDDEN
     ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn extension_contributions_reach_a_remote_reader_after_restart() {
+    let fixture = Fixture::with_setup(|state| {
+        use sha2::Digest as _;
+        use std::io::Write as _;
+        let contents = r#"{"schema":1,"translations":[{"target":"dev.example.terminal","locale":"ja-JP","messages":{"title":"端末"}},{"target":"lapis.core","locale":"fr-FR","messages":{"command.save-document":"Enregistrer"}}]}"#.as_bytes();
+        let manifest = serde_json::json!({
+            "schema": 1, "kind": "extension", "id": "dev.example.japanese", "version": "0.1.0",
+            "requires": [{"contract":"lapis.extension.contributions", "minimum":"1.0.0", "maximum":"1.0.0"}],
+            "files": [{"path":"contributions.json", "sha256":format!("{:x}", sha2::Sha256::digest(contents))}]
+        });
+        let path = state.join("japanese.lapis");
+        let mut archive = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        let options = zip::write::SimpleFileOptions::default();
+        archive.start_file("manifest.json", options).unwrap();
+        archive.write_all(&serde_json::to_vec(&manifest).unwrap()).unwrap();
+        archive.start_file("contributions.json", options).unwrap();
+        archive.write_all(contents).unwrap();
+        archive.finish().unwrap();
+        let host = BackendHost::start_development_with_state_directory(state.to_owned()).unwrap();
+        host.install_extension(&path, true).unwrap();
+    }, true).await;
+    let (mut reader, _) = fixture.pair("extension-translation-reader").await;
+    let response = request(
+        &mut reader,
+        1,
+        RequestBody::HostExtensions(HostExtensionsListRequest {}),
+    )
+    .await;
+    let ResponseBody::HostExtensions(response) = response else {
+        panic!("expected extension declarations")
+    };
+    assert_eq!(response.contributions.len(), 1);
+    assert_eq!(
+        response.contributions[0].extension_id,
+        "dev.example.japanese"
+    );
+    assert_eq!(
+        response.contributions[0].declaration.translations[0].target,
+        "dev.example.terminal"
+    );
+    assert_eq!(
+        response.contributions[0].declaration.translations[0].messages["title"],
+        "端末"
+    );
+    assert_eq!(
+        response.contributions[0].declaration.translations[1].target,
+        "lapis.core"
+    );
+    assert_eq!(
+        response.contributions[0].declaration.translations[1].messages["command.save-document"],
+        "Enregistrer"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn extension_operations_reuse_the_authenticated_connection() {
+    let fixture = Fixture::new().await;
+    let config = fixture.config("extension-session-reuse").await;
+    let workspace = fixture.workspace.clone();
+    tokio::task::spawn_blocking(move || {
+        let root = std::env::temp_dir().join("lapis-extension-session-test");
+        let client = host::BackendClient::remote(root, config).unwrap();
+        let connection = client.open_extension_connection(workspace.clone()).unwrap();
+        assert_eq!(connection.workspace_id(), &workspace);
+        let initial = connection.session_id().expect("authenticated session");
+        let request = HostExtensionDispatchRequest {
+            id: "dev.example.missing".into(),
+            operation: "inspect".into(),
+            payload: "{}".into(),
+        };
+        assert!(connection.dispatch(request.clone()).is_err());
+        assert_eq!(connection.session_id(), Some(initial.clone()));
+        assert!(connection.dispatch(request).is_err());
+        let reserved = HostExtensionDispatchRequest {
+            id: "dev.example.missing".into(),
+            operation: "lapis.system.release-claims".into(),
+            payload: "{}".into(),
+        };
+        assert!(
+            connection
+                .dispatch(reserved)
+                .unwrap_err()
+                .to_string()
+                .contains("reserved extension operation")
+        );
+        assert_eq!(connection.session_id(), Some(initial));
+    })
+    .await
+    .unwrap();
 }
 
 async fn receive(client: &mut QuicClient) -> ServerMessage {
@@ -1771,139 +2234,4 @@ async fn request_document(client: &mut QuicClient, workspace: &WorkspaceId) -> R
         }),
     )
     .await
-}
-
-#[test]
-fn quic_and_embedded_clients_share_live_pty_across_disconnect() {
-    run(async {
-        let fixture = Fixture::new().await;
-        let (mut first, _) = fixture.pair("first").await;
-        connect_workspace(&mut first, &fixture.workspace).await;
-        let ResponseBody::TerminalStart(started) = request(
-            &mut first,
-            2,
-            RequestBody::TerminalStart(TerminalStartRequest {
-                workspace_id: fixture.workspace.clone(),
-                cwd: None,
-                command: None,
-                profile: None,
-                size: TerminalSize {
-                    columns: 80,
-                    rows: 24,
-                },
-            }),
-        )
-        .await
-        else {
-            panic!("start failed")
-        };
-        let terminal = started.terminal.terminal_id;
-        let (mut second, _) = fixture.pair("second").await;
-        let snapshot = connect_workspace(&mut second, &fixture.workspace).await;
-        assert!(
-            snapshot
-                .terminals
-                .iter()
-                .any(|value| value.terminal_id == terminal
-                    && value.status == TerminalStatus::Running)
-        );
-        drop(first);
-        assert!(matches!(
-            request(
-                &mut second,
-                3,
-                RequestBody::TerminalClaim(TerminalClaimRequest {
-                    terminal_id: terminal.clone(),
-                })
-            )
-            .await,
-            ResponseBody::TerminalClaim(_)
-        ));
-        let input_response = request(
-            &mut second,
-            2,
-            RequestBody::TerminalInput(TerminalInputRequest {
-                terminal_id: terminal.clone(),
-                input: TerminalInput::Text(
-                    if cfg!(windows) {
-                        "Write-Output ('LAPIS_QUIC_' + 'SHARED_PTY')\r\n"
-                    } else {
-                        "printf 'LAPIS_QUIC_%s\\n' SHARED_PTY\n"
-                    }
-                    .to_owned(),
-                ),
-            }),
-        )
-        .await;
-        assert!(
-            matches!(input_response, ResponseBody::TerminalInput(_)),
-            "terminal input failed: {input_response:?}"
-        );
-        let mut last_output = String::new();
-        let completed = tokio::time::timeout(Duration::from_secs(15), async {
-            let mut number = 4;
-            loop {
-                let ResponseBody::SnapshotResync(response) = request(
-                    &mut second,
-                    number,
-                    RequestBody::SnapshotResync(SnapshotRequest {
-                        workspace_id: fixture.workspace.clone(),
-                        reason: SnapshotReason::Reconnect,
-                    }),
-                )
-                .await
-                else {
-                    panic!("snapshot failed")
-                };
-                let value = response
-                    .snapshot
-                    .terminals
-                    .iter()
-                    .find(|value| value.terminal_id == terminal)
-                    .unwrap();
-                assert_eq!(value.status, TerminalStatus::Running);
-                last_output = value.screen.plain_text();
-                if last_output.contains("LAPIS_QUIC_SHARED_PTY") {
-                    break;
-                }
-                number += 1;
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-        })
-        .await;
-        assert!(
-            completed.is_ok(),
-            "shell output missing: {:?}",
-            &last_output[last_output.len().saturating_sub(4096)..]
-        );
-        // Local埋め込み接続も同じHostのPTYを再起動せず発見する。
-        let embedded = fixture.host.connect(fixture._root.path()).unwrap();
-        let ResponseBody::SnapshotResync(response) = embedded
-            .request(RequestBody::SnapshotResync(SnapshotRequest {
-                workspace_id: fixture.workspace.clone(),
-                reason: SnapshotReason::Reconnect,
-            }))
-            .unwrap()
-        else {
-            panic!("embedded snapshot failed")
-        };
-        assert!(
-            response
-                .snapshot
-                .terminals
-                .iter()
-                .any(|value| value.terminal_id == terminal)
-        );
-        assert!(matches!(
-            request(
-                &mut second,
-                9999,
-                RequestBody::TerminalTerminate(TerminalTerminateRequest {
-                    terminal_id: terminal
-                })
-            )
-            .await,
-            ResponseBody::TerminalTerminate(_)
-        ));
-    });
 }

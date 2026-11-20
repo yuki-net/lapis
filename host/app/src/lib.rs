@@ -15,11 +15,12 @@ pub use profile::{
     read_invitation, write_invitation, write_invitation_replacing, write_oidc_profile,
 };
 mod document;
-pub use client::BackendClient;
+pub use client::{BackendClient, ExtensionConnection};
+#[cfg(windows)]
+mod extension_pty;
 mod extensions;
 mod features;
 mod session_view;
-mod terminal;
 mod web_publisher;
 mod workbench;
 mod workspace;
@@ -38,8 +39,6 @@ pub fn supported_capabilities() -> client_api::CapabilitySet {
             FILES_WRITE,
             DOCUMENTS_READ,
             DOCUMENTS_WRITE,
-            TERMINAL_START,
-            TERMINAL_CONTROL,
             "workspace.git.read",
             "workspace.git.write",
             "workspace.tasks.read",
@@ -48,18 +47,19 @@ pub fn supported_capabilities() -> client_api::CapabilitySet {
             "workspace.process.read",
             "workspace.process.control",
             EXTENSIONS_READ,
+            EXTENSIONS_MANAGE,
+            EXTENSIONS_EXECUTE,
         ]
         .map(|name| CapabilityId::try_new(name).expect("built-in capability")),
     )
     .expect("bounded capabilities")
 }
 
-use ::terminal::{TerminalBackend, TerminalProfiles};
 use backend_state::{
     BackendService, BackendServiceError, BackendState, EmbeddedClient, WorkspaceRegistration,
 };
 use client_api::{SessionId, WorkspaceId};
-use platform::{LocalGitBackend, LocalTaskBackend, LocalTerminalBackend, LocalWorkspaceRepository};
+use platform::{LocalGitBackend, LocalTaskBackend, LocalWorkspaceRepository};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -76,14 +76,20 @@ pub struct BackendHost {
 
 struct HostInner {
     service: BackendService,
-    workspaces: Mutex<HashMap<PathBuf, WorkspaceId>>,
+    workspaces: Arc<Mutex<HashMap<PathBuf, WorkspaceId>>>,
     next_session: AtomicU64,
     state_directory: Option<PathBuf>,
     store: Option<Mutex<platform::WorkspaceStore>>,
-    /// Host が起動を許可する Terminal profile。
-    terminal_profiles: TerminalProfiles,
     /// 導入済み拡張の目録。state directory が無い Host は持たない。
-    extensions: crate::extensions::HostExtensions,
+    extensions: Arc<crate::extensions::HostExtensions>,
+    /// 拡張の有効状態と実行中のプロセスは Host 起動時に固定する。
+    extension_host: Option<extension_runtime::supervisor::ExtensionSupervisor>,
+    #[cfg(windows)]
+    extension_pty: Arc<crate::extension_pty::PtyBroker>,
+    extension_contributions: Vec<crate::extensions::StartupContribution>,
+    extension_data_active: Vec<String>,
+    extension_runtime_ids: Vec<String>,
+    extension_startup_errors: std::collections::BTreeMap<String, String>,
     /// Host 自身と Host が spawn したプロセスのレジストリ。
     processes: Arc<dyn process::ProcessRegistry>,
 }
@@ -99,34 +105,6 @@ impl HostInner {
             .register(root)
             .map_err(|_| BackendServiceError::Unavailable)?;
         WorkspaceId::try_new(record.id).map_err(|_| BackendServiceError::Unavailable)
-    }
-}
-
-/// Host の Terminal profile 設定を読む。無い場合は OS 既定を使う。
-fn load_terminal_profiles(directory: Option<&Path>) -> TerminalProfiles {
-    let Some(directory) = directory else {
-        return platform::default_terminal_profiles();
-    };
-    let path = directory.join("terminal-profiles.json");
-    let Ok(bytes) = std::fs::read(&path) else {
-        return platform::default_terminal_profiles();
-    };
-    match serde_json::from_slice::<TerminalProfiles>(&bytes) {
-        Ok(profiles) if !profiles.profiles.is_empty() => profiles,
-        Ok(_) => {
-            eprintln!(
-                "Terminal profile設定が空のため、Terminalを起動できません: {}",
-                path.display()
-            );
-            TerminalProfiles::default()
-        }
-        Err(error) => {
-            eprintln!(
-                "Terminal profile設定を読めないため、Terminalを起動できません: {}: {error}",
-                path.display()
-            );
-            TerminalProfiles::default()
-        }
     }
 }
 
@@ -164,14 +142,30 @@ impl BackendHost {
         BackendClient::from(self.clone()).session_view()
     }
     pub fn start() -> Result<Self, BackendServiceError> {
-        Self::start_inner(None)
+        Self::start_inner(None, false, false)
     }
 
     pub fn start_with_state_directory(directory: PathBuf) -> Result<Self, BackendServiceError> {
-        Self::start_inner(Some(directory))
+        Self::start_inner(Some(directory), false, false)
     }
 
-    fn start_inner(state_directory: Option<PathBuf>) -> Result<Self, BackendServiceError> {
+    /// ローカル開発に限り、署名のない拡張 package の導入と実行を許可する。
+    pub fn start_development_with_state_directory(
+        directory: PathBuf,
+    ) -> Result<Self, BackendServiceError> {
+        Self::start_inner(Some(directory), true, false)
+    }
+
+    /// 署名済み同梱物に限り、開発中の同一版更新を反映する。
+    pub fn start_with_development_bundles(directory: PathBuf) -> Result<Self, BackendServiceError> {
+        Self::start_inner(Some(directory), false, true)
+    }
+
+    fn start_inner(
+        state_directory: Option<PathBuf>,
+        development: bool,
+        development_refresh: bool,
+    ) -> Result<Self, BackendServiceError> {
         let state = BackendState::new([]).map_err(BackendServiceError::State)?;
         let store = match &state_directory {
             Some(directory) => {
@@ -184,18 +178,111 @@ impl BackendHost {
             }
             None => None,
         };
-        let terminal_profiles = load_terminal_profiles(state_directory.as_deref());
-        let extensions = crate::extensions::HostExtensions::load(state_directory.as_deref());
+        let extensions = Arc::new(if development {
+            crate::extensions::HostExtensions::load_with_development(
+                state_directory.as_deref(),
+                true,
+            )
+        } else {
+            crate::extensions::HostExtensions::load(state_directory.as_deref())
+        });
+        let bundled_failure = if state_directory.is_some() {
+            std::env::current_exe()
+                .ok()
+                .and_then(|exe| {
+                    exe.parent().map(|parent| {
+                        if development_refresh {
+                            extensions.install_bundled_with_refresh(
+                                &parent.join("bundled-extensions"),
+                                true,
+                            )
+                        } else {
+                            extensions.install_bundled(&parent.join("bundled-extensions"))
+                        }
+                    })
+                })
+                .and_then(Result::err)
+        } else {
+            None
+        };
+        let (
+            components,
+            extension_contributions,
+            extension_data_active,
+            extension_runtime_ids,
+            mut extension_startup_errors,
+            native_components,
+        ) = extensions.startup_components();
+        if let Some(error) = bundled_failure {
+            extension_startup_errors.insert("bundled".to_owned(), error);
+        }
+        let workspaces = Arc::new(Mutex::new(HashMap::new()));
+        #[cfg(windows)]
+        let extension_pty = Arc::new(crate::extension_pty::PtyBroker::with_guard(
+            Arc::clone(&extensions),
+            Arc::clone(&workspaces),
+            state.resource_guard(),
+        ));
+        #[cfg(windows)]
+        {
+            let broker = Arc::downgrade(&extension_pty);
+            state
+                .resource_guard()
+                .add_check(Arc::new(move |root| {
+                    broker
+                        .upgrade()
+                        .ok_or_else(|| "PTY service unavailable".to_owned())?
+                        .active_in(root)
+                }))
+                .map_err(|_| BackendServiceError::Unavailable)?;
+        }
+        let extension_host = if components.is_empty() && native_components.is_empty() {
+            None
+        } else {
+            match extensions.worker_executable() {
+                Some(path) => {
+                    #[cfg(windows)]
+                    // startup_components は native image の署名・契約と対象 OS を検証済み。
+                    let supervisor = unsafe {
+                        extension_runtime::supervisor::ExtensionSupervisor::start_with_verified_native(
+                            path.to_path_buf(),
+                            components,
+                            native_components,
+                            Some(extension_pty.clone()),
+                        )
+                    };
+                    #[cfg(not(windows))]
+                    let supervisor = extension_runtime::supervisor::ExtensionSupervisor::start(
+                        path.to_path_buf(),
+                        components,
+                    );
+                    Some(supervisor)
+                }
+                None => {
+                    extension_startup_errors.insert(
+                        "host".to_owned(),
+                        "拡張ホストの配置を解決できません".to_owned(),
+                    );
+                    None
+                }
+            }
+        };
         let processes = local_process::LocalProcessRegistry::new(process::ProcessOrigin::Host);
         let host = Self {
             inner: Arc::new(HostInner {
                 service: BackendService::start(state)?,
-                workspaces: Mutex::new(HashMap::new()),
+                workspaces,
                 next_session: AtomicU64::new(1),
                 state_directory,
                 store,
-                terminal_profiles,
                 extensions,
+                extension_host,
+                #[cfg(windows)]
+                extension_pty,
+                extension_contributions,
+                extension_data_active,
+                extension_runtime_ids,
+                extension_startup_errors,
                 processes,
             }),
         };
@@ -221,6 +308,67 @@ impl BackendHost {
 
     pub fn service(&self) -> BackendService {
         self.inner.service.clone()
+    }
+
+    /// 有効状態の設定とは別に、現在の拡張ホストの実行状態を返す。
+    pub fn extension_host_status(&self) -> Option<extension_runtime::supervisor::SupervisorStatus> {
+        self.inner.extension_host.as_ref().map(|host| host.status())
+    }
+
+    /// 呼び出し元の認可は transport が行う。実行中の契約宣言を必ず確認する。
+    pub fn dispatch_extension(
+        &self,
+        request: &client_api::HostExtensionDispatchRequest,
+        session: &client_api::SessionId,
+        workspace: &client_api::WorkspaceId,
+    ) -> Result<client_api::HostExtensionDispatchResponse, String> {
+        if request
+            .operation
+            .starts_with(extension_runtime::SYSTEM_OPERATION_PREFIX)
+        {
+            return Err("reserved extension operation".into());
+        }
+        if !self.inner.extensions.declares_dispatch(&request.id)? {
+            return Err("拡張が dispatch 契約を宣言していません".into());
+        }
+        let host = self
+            .inner
+            .extension_host
+            .as_ref()
+            .ok_or("拡張ホストが停止しています")?;
+        let context = extension_runtime::InvocationContext {
+            session: session.as_str().to_owned(),
+            workspace: workspace.as_str().to_owned(),
+        };
+        let result = host.dispatch_with_context(
+            &request.id,
+            &request.operation,
+            &request.payload,
+            &context,
+        )?;
+        Ok(client_api::HostExtensionDispatchResponse {
+            id: request.id.clone(),
+            operation: request.operation.clone(),
+            result,
+        })
+    }
+
+    fn extension_session_disconnected(
+        &self,
+        session: &client_api::SessionId,
+        workspace: &client_api::WorkspaceId,
+    ) {
+        if let Some(host) = &self.inner.extension_host {
+            host.session_disconnected(extension_runtime::InvocationContext {
+                session: session.as_str().to_owned(),
+                workspace: workspace.as_str().to_owned(),
+            });
+        }
+    }
+
+    /// 署名不正や旧形式など、起動時に検証できなかった拡張。
+    pub fn extension_startup_errors(&self) -> &std::collections::BTreeMap<String, String> {
+        &self.inner.extension_startup_errors
     }
 
     pub fn register_workspace(&self, root: &Path) -> Result<WorkspaceId, BackendServiceError> {
@@ -255,9 +403,6 @@ impl BackendHost {
             root.clone(),
             Arc::new(LocalWorkspaceRepository::new(root.clone())),
         )
-        .with_terminal(Arc::new(LocalTerminalBackend::with_profiles(
-            self.inner.terminal_profiles.clone(),
-        )))
         .with_git(Arc::new(LocalGitBackend::user_default()))
         .with_tasks(Arc::new(LocalTaskBackend::user_default().with_processes(
             self.inner.processes.clone(),
@@ -338,16 +483,40 @@ impl BackendHost {
     pub fn tasks(&self) -> Arc<dyn task::TaskConnection> {
         BackendClient::from(self.clone()).tasks()
     }
-    pub fn terminals(&self) -> Arc<dyn TerminalBackend> {
-        BackendClient::from(self.clone()).terminals()
-    }
     pub fn processes(&self) -> Arc<dyn process::ProcessConnection> {
         BackendClient::from(self.clone()).processes()
     }
 
     /// 導入済み拡張の目録を宣言として返す。Host の state directory が正本。
     pub fn extensions(&self) -> Result<client_api::HostExtensionsListResponse, String> {
-        self.inner.extensions.list()
+        let mut response = self.inner.extensions.list()?;
+        let status = self.extension_host_status();
+        let active = match &status {
+            Some(extension_runtime::supervisor::SupervisorStatus::Running { active, .. }) => {
+                active.clone()
+            }
+            _ => Vec::new(),
+        };
+        for entry in &mut response.extensions {
+            entry.active = if self.inner.extension_data_active.contains(&entry.id) {
+                Some(true)
+            } else if self.inner.extension_runtime_ids.contains(&entry.id) {
+                match &status {
+                    Some(extension_runtime::supervisor::SupervisorStatus::Starting) => None,
+                    _ => Some(active.contains(&entry.id)),
+                }
+            } else {
+                Some(false)
+            };
+        }
+        response.contributions = self
+            .inner
+            .extension_contributions
+            .iter()
+            .filter(|item| item.available(&active))
+            .map(|item| item.payload.clone())
+            .collect();
+        Ok(response)
     }
 
     /// `.lapis` package を読み込み、目録へ宣言を登録する。
@@ -371,40 +540,48 @@ impl BackendHost {
         self.inner.extensions.set_enabled(id, enabled)
     }
 
+    pub fn extension_capabilities(
+        &self,
+        id: &str,
+    ) -> Result<client_api::HostExtensionCapabilitiesResponse, String> {
+        self.inner.extensions.capabilities(id)
+    }
+
+    pub fn set_extension_capability(
+        &self,
+        request: &client_api::HostExtensionSetCapabilityRequest,
+    ) -> Result<client_api::HostExtensionSetCapabilityResponse, String> {
+        if request.capability != "process.pty" || request.version != "1.0.0" {
+            return Err("未対応の能力です".into());
+        }
+        #[cfg(windows)]
+        self.inner.extension_pty.set_approval(
+            &request.id,
+            request.approved,
+            &request.manifest_digest,
+        )?;
+        #[cfg(not(windows))]
+        {
+            if request.approved {
+                return Err("この Host は PTY 能力を提供していません".into());
+            }
+            let id = extensions_entry::ExtensionPackageId::try_new(&request.id)
+                .map_err(|error| error.to_string())?;
+            let capability = extensions_entry::ContractId::try_new(&request.capability)
+                .map_err(|error| error.to_string())?;
+            self.inner.extensions.revoke_capability(&id, &capability)?;
+        }
+        Ok(client_api::HostExtensionSetCapabilityResponse {
+            id: request.id.clone(),
+            manifest_digest: request.manifest_digest.clone(),
+            capability: request.capability.clone(),
+            version: request.version.clone(),
+            approved: request.approved,
+        })
+    }
+
     /// 導入済み package を取り除く。拡張データは残す。
     pub fn remove_extension(&self, id: &str) -> Result<(), String> {
         self.inner.extensions.remove(id)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn terminal_profiles_fall_back_only_when_the_setting_is_absent() {
-        let directory = tempfile::tempdir().unwrap();
-        assert!(
-            !load_terminal_profiles(Some(directory.path()))
-                .profiles
-                .is_empty()
-        );
-
-        let path = directory.path().join("terminal-profiles.json");
-        std::fs::write(
-            &path,
-            r#"{"profiles":[{"id":"custom","name":"Custom","program":"/bin/custom"}],"default":"custom"}"#,
-        )
-        .unwrap();
-        let profiles = load_terminal_profiles(Some(directory.path()));
-        assert_eq!(profiles.profiles.len(), 1);
-        assert_eq!(profiles.profiles[0].id.as_str(), "custom");
-
-        std::fs::write(&path, "not json").unwrap();
-        assert!(
-            load_terminal_profiles(Some(directory.path()))
-                .profiles
-                .is_empty()
-        );
     }
 }

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{DocumentSnapshot, EventSequence, TerminalSnapshot, WorkspaceId, WorkspaceSummary};
+use crate::{DocumentSnapshot, EventSequence, WorkspaceId, WorkspaceSummary};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -19,7 +19,6 @@ pub struct WorkspaceSnapshot {
     pub event_watermark: EventSequence,
     pub workspace: WorkspaceSummary,
     pub documents: Vec<DocumentSnapshot>,
-    pub terminals: Vec<TerminalSnapshot>,
     #[serde(default)]
     pub git_repositories: Vec<crate::git::GitRepositoryStatus>,
 }
@@ -50,7 +49,6 @@ mod tests {
                 name: "Lapis".to_owned(),
             },
             documents: Vec::new(),
-            terminals: Vec::new(),
             git_repositories: Vec::new(),
         };
 
@@ -58,5 +56,7 @@ mod tests {
             serde_json::from_str::<WorkspaceSnapshot>(&serde_json::to_string(&snapshot).unwrap())
                 .unwrap();
         assert_eq!(restored.event_watermark, EventSequence::new(42));
+        let json = serde_json::to_value(&snapshot).unwrap();
+        assert!(json.get("terminals").is_none());
     }
 }

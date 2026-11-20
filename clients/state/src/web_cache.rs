@@ -5,18 +5,11 @@
 
 use std::collections::VecDeque;
 
-use client_api::{
-    DocumentExternalChange, DocumentSnapshot, TerminalSnapshot as WireTerminalSnapshot,
-    WorkspaceSnapshot,
-};
+use client_api::{DocumentExternalChange, DocumentSnapshot, WorkspaceSnapshot};
 use document::ExternalChange;
 use editor_core::WorkspaceId;
-use terminal::TerminalId;
 
-use crate::web_replica::{
-    DocumentState, Replica, TerminalState, document_from_snapshot, model_terminal_snapshot,
-    owner_of, resync_terminal_owner, set_terminal_owner,
-};
+use crate::web_replica::{DocumentState, Replica, document_from_snapshot, owner_of};
 
 /// 切替で離れた Workspace の複製。
 pub(crate) struct CachedWorkspace {
@@ -76,24 +69,17 @@ impl WorkspaceCache {
 /// `snapshot.resync` で生じた変更の種類。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SnapshotDelta {
-    /// `poll` や再描画で表示を更新する必要がある。
-    pub(crate) display: bool,
     /// Editor が購読している文書状態に変更がある。
     pub(crate) documents: bool,
 }
 
 /// `snapshot.resync` の結果を保持済みの複製へ反映する。
 ///
-/// 文書は Host の内容へ置き換え、Terminal は snapshot を次の `poll` で返す。
 pub(crate) fn apply_snapshot(replica: &mut Replica, snapshot: &WorkspaceSnapshot) -> SnapshotDelta {
     let mut delta = SnapshotDelta::default();
     for document in &snapshot.documents {
         let changed = apply_document(replica, document);
-        delta.display |= changed;
         delta.documents |= changed;
-    }
-    for terminal in &snapshot.terminals {
-        delta.display |= apply_terminal(replica, terminal);
     }
     delta
 }
@@ -186,55 +172,6 @@ pub(crate) fn apply_inspection(
     changed
 }
 
-fn apply_terminal(replica: &mut Replica, terminal: &WireTerminalSnapshot) -> bool {
-    let owner = terminal
-        .owner
-        .as_ref()
-        .map(|owner| owner.as_str().to_owned());
-    if let Some(state) = replica
-        .terminals
-        .values_mut()
-        .find(|state| state.host.as_ref() == Some(&terminal.terminal_id))
-    {
-        // 再同期で events を置き換えるため、未 poll の Owner はここで失われる。
-        let unpolled_owner = state
-            .events
-            .iter()
-            .any(|event| matches!(event, terminal::TerminalEvent::Owner { .. }));
-        let local = state
-            .snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.id.clone())
-            .unwrap_or_else(|| TerminalId::new(terminal.terminal_id.as_str()));
-        let snapshot = model_terminal_snapshot(&local, terminal);
-        let mut changed = state.snapshot.as_ref() != Some(&snapshot);
-        state.snapshot = Some(snapshot.clone());
-        state.events.clear();
-        state
-            .events
-            .push(terminal::TerminalEvent::Snapshot(snapshot));
-        state.finished = false;
-        // Host snapshot の owner を反映する。保留イベントの上限で owner を
-        // 取りこぼしていても、ここで復元し UI へ通知する。
-        changed |= resync_terminal_owner(state, owner, unpolled_owner);
-        return changed;
-    }
-    let local = TerminalId::new(format!("web-terminal-{}", replica.next_terminal));
-    replica.next_terminal += 1;
-    let snapshot = model_terminal_snapshot(&local, terminal);
-    let mut state = TerminalState {
-        host: Some(terminal.terminal_id.clone()),
-        snapshot: Some(snapshot.clone()),
-        owner: None,
-        events: vec![terminal::TerminalEvent::Snapshot(snapshot)],
-        finished: false,
-    };
-    // 新しく作る Terminal も、UI に owner を届けてから表示を始める。
-    set_terminal_owner(&mut state, owner);
-    replica.terminals.insert(local.as_str().to_owned(), state);
-    true
-}
-
 fn model_external_change(change: DocumentExternalChange) -> ExternalChange {
     match change {
         DocumentExternalChange::Unchanged => ExternalChange::Unchanged,
@@ -263,12 +200,10 @@ mod tests {
 
     use client_api::{
         DocumentEncoding, DocumentId as ApiDocumentId, EventSequence, Revision as ApiRevision,
-        SessionId as ApiSessionId, TerminalId as ApiTerminalId, TerminalSnapshot, TerminalStatus,
-        WorkspaceId as ApiWorkspaceId, WorkspaceSummary,
+        SessionId as ApiSessionId, WorkspaceId as ApiWorkspaceId, WorkspaceSummary,
     };
     use document::{Document, Encoding, Revision};
     use editor_core::{DocumentId, SessionId, WorkspaceId};
-    use terminal::{TerminalScreen, TerminalSize};
 
     use super::*;
     use crate::web_replica::{DocumentState, ROOT};
@@ -278,14 +213,8 @@ mod tests {
     }
 
     fn cached(id: &WorkspaceId, text: &str) -> CachedWorkspace {
-        let mut replica = Replica::new(
-            id.clone(),
-            Vec::new(),
-            Some(SessionId::new("session")),
-            Default::default(),
-        );
+        let mut replica = Replica::new(id.clone(), Vec::new(), Some(SessionId::new("session")));
         replica.next = 7;
-        replica.next_terminal = 4;
         replica.documents.insert(
             DocumentId::new("web-1"),
             DocumentState {
@@ -327,22 +256,7 @@ mod tests {
         }
     }
 
-    fn wire_terminal(revision: u64) -> TerminalSnapshot {
-        TerminalSnapshot {
-            terminal_id: ApiTerminalId::try_new("terminal-1").unwrap(),
-            workspace_id: ApiWorkspaceId::try_new("workspace-a").unwrap(),
-            cwd: None,
-            status: TerminalStatus::Running,
-            revision,
-            screen: TerminalScreen::empty(TerminalSize::new(80, 24)),
-            owner: None,
-        }
-    }
-
-    fn snapshot(
-        documents: Vec<DocumentSnapshot>,
-        terminals: Vec<TerminalSnapshot>,
-    ) -> WorkspaceSnapshot {
+    fn snapshot(documents: Vec<DocumentSnapshot>) -> WorkspaceSnapshot {
         WorkspaceSnapshot {
             event_watermark: EventSequence::new(3),
             workspace: WorkspaceSummary {
@@ -350,7 +264,6 @@ mod tests {
                 name: "Workspace A".to_owned(),
             },
             documents,
-            terminals,
             git_repositories: Vec::new(),
         }
     }
@@ -373,141 +286,17 @@ mod tests {
             "before"
         );
         assert_eq!(replica.next, 7);
-        assert_eq!(replica.next_terminal, 4);
 
         // 離れていた間の差分だけを snapshot.resync で反映する。
-        let terminal = wire_terminal(5);
-        replica.terminals.insert(
-            "web-terminal-1".to_owned(),
-            TerminalState {
-                host: Some(ApiTerminalId::try_new("terminal-1").unwrap()),
-                snapshot: None,
-                owner: None,
-                events: Vec::new(),
-                finished: false,
-            },
-        );
-        let changed = apply_snapshot(
-            &mut replica,
-            &snapshot(vec![wire_document("after")], vec![terminal]),
-        );
+        let changed = apply_snapshot(&mut replica, &snapshot(vec![wire_document("after")]));
 
-        assert!(changed.display);
         assert!(changed.documents);
         let state =
             cached_document(&replica, &ApiDocumentId::try_new("document-1").unwrap()).unwrap();
         assert_eq!(state.document.content_for_save(), "after");
         assert_eq!(state.acked, "after");
         assert_eq!(state.host_revision, ApiRevision::new(2));
-        // 既存の Terminal は新しい snapshot を次の poll で返す。
-        let terminal_state = replica.terminals.get("web-terminal-1").unwrap();
-        assert_eq!(terminal_state.snapshot.as_ref().unwrap().revision, 5);
-        assert_eq!(
-            terminal_state.events,
-            vec![terminal::TerminalEvent::Snapshot(
-                terminal_state.snapshot.clone().unwrap()
-            )]
-        );
-        // 復元で使った識別子の採番は維持する。
         assert_eq!(replica.next, 7);
-        assert_eq!(replica.next_terminal, 4);
-    }
-
-    #[test]
-    fn resync_restores_a_terminal_owner_dropped_by_the_pending_event_limit() {
-        let workspace = workspace("workspace-a");
-        let mut replica = cached(&workspace, "text").replica;
-        let local = terminal::TerminalId::new("web-terminal-1");
-        let mut current = model_terminal_snapshot(&local, &wire_terminal(2));
-        current.screen.rows[0] = terminal::TerminalRow::empty(80);
-        replica.terminals.insert(
-            local.as_str().to_owned(),
-            TerminalState {
-                host: Some(ApiTerminalId::try_new("terminal-1").unwrap()),
-                snapshot: Some(current),
-                owner: None,
-                events: Vec::new(),
-                finished: false,
-            },
-        );
-        let mut remote = wire_terminal(2);
-        remote.owner = Some(ApiSessionId::try_new("session-2").unwrap());
-
-        let delta = apply_snapshot(&mut replica, &snapshot(Vec::new(), vec![remote]));
-
-        // 保留イベントの上限で owner を取りこぼしていても、再同期で復元する。
-        assert!(delta.display, "owner の復元だけでも UI へ通知が必要になる");
-        let state = replica.terminals.get(local.as_str()).unwrap();
-        assert_eq!(state.owner.as_deref(), Some("session-2"));
-        assert!(matches!(
-            state.events.last(),
-            Some(terminal::TerminalEvent::Owner { owner: Some(owner) }) if owner == "session-2"
-        ));
-    }
-
-    #[test]
-    fn resync_does_not_notify_when_the_owner_is_already_delivered() {
-        let workspace = workspace("workspace-a");
-        let mut replica = cached(&workspace, "text").replica;
-        let mut remote = wire_terminal(2);
-        remote.owner = Some(ApiSessionId::try_new("session-2").unwrap());
-        let snapshot = snapshot(Vec::new(), vec![remote]);
-
-        // 最初の再同期で owner を通知し、poll で受け取った状態にする。
-        assert!(apply_snapshot(&mut replica, &snapshot).display);
-        let state = replica.terminals.get_mut("web-terminal-4").unwrap();
-        state.events.clear();
-
-        // 同じ owner なら、他に表示差分が無い限り通知しない。
-        assert!(!apply_snapshot(&mut replica, &snapshot).display);
-    }
-
-    #[test]
-    fn resync_without_a_pending_start_does_not_lose_the_owner() {
-        let workspace = workspace("workspace-a");
-        let mut replica = cached(&workspace, "text").replica;
-        let mut remote = wire_terminal(2);
-        remote.owner = Some(ApiSessionId::try_new("session-2").unwrap());
-
-        apply_snapshot(&mut replica, &snapshot(Vec::new(), vec![remote]));
-
-        // 離れている間に始まった Terminal も、戻ったときの owner ごと復元する。
-        let state = replica.terminals.get("web-terminal-4").unwrap();
-        assert_eq!(state.owner.as_deref(), Some("session-2"));
-        assert!(matches!(
-            state.events.first(),
-            Some(terminal::TerminalEvent::Snapshot(_))
-        ));
-        assert!(matches!(
-            state.events.last(),
-            Some(terminal::TerminalEvent::Owner { owner: Some(owner) }) if owner == "session-2"
-        ));
-    }
-
-    #[test]
-    fn resync_adds_terminals_that_appeared_while_away() {
-        let workspace = workspace("workspace-a");
-        let mut replica = cached(&workspace, "text").replica;
-
-        let delta = apply_snapshot(&mut replica, &snapshot(Vec::new(), vec![wire_terminal(2)]));
-
-        // 離れている間に始まった Terminal も、戻ったときの resync で見える。
-        assert!(delta.display);
-        assert!(
-            !delta.documents,
-            "Terminal だけの変更で Editor を再同期しない"
-        );
-        assert_eq!(replica.terminals.len(), 1);
-        let state = replica.terminals.values().next().unwrap();
-        assert_eq!(
-            state.host,
-            Some(ApiTerminalId::try_new("terminal-1").unwrap())
-        );
-        assert_eq!(
-            state.snapshot.as_ref().unwrap().id.as_str(),
-            "web-terminal-4"
-        );
-        assert_eq!(replica.next_terminal, 5);
     }
 
     #[test]
@@ -518,7 +307,7 @@ mod tests {
         remote.revision = ApiRevision::new(1);
         remote.external_change = DocumentExternalChange::Modified;
 
-        let delta = apply_snapshot(&mut replica, &snapshot(vec![remote], Vec::new()));
+        let delta = apply_snapshot(&mut replica, &snapshot(vec![remote]));
 
         // 本文・revision・owner が同じでも、外部変更の状態は Editor に通知する。
         assert!(delta.documents);
@@ -547,7 +336,7 @@ mod tests {
         remote.revision = ApiRevision::new(1);
         remote.external_change = DocumentExternalChange::Modified;
 
-        let delta = apply_snapshot(&mut replica, &snapshot(vec![remote], Vec::new()));
+        let delta = apply_snapshot(&mut replica, &snapshot(vec![remote]));
 
         assert!(delta.documents);
         let state =
@@ -574,10 +363,7 @@ mod tests {
             );
         }
 
-        let delta = apply_snapshot(
-            &mut replica,
-            &snapshot(vec![wire_document("remote")], Vec::new()),
-        );
+        let delta = apply_snapshot(&mut replica, &snapshot(vec![wire_document("remote")]));
 
         assert!(delta.documents, "競合した文書は Editor にも通知する");
         let state =
@@ -607,7 +393,7 @@ mod tests {
         let mut remote = wire_document("remote");
         remote.owner = Some(ApiSessionId::try_new("session-2").unwrap());
 
-        apply_snapshot(&mut replica, &snapshot(vec![remote], Vec::new()));
+        apply_snapshot(&mut replica, &snapshot(vec![remote]));
 
         let state =
             cached_document(&replica, &ApiDocumentId::try_new("document-1").unwrap()).unwrap();

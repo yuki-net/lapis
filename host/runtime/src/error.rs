@@ -2,7 +2,6 @@ use std::{error::Error, fmt};
 
 use client_api::RevisionConflict;
 use document::DocumentError;
-use terminal::TerminalError;
 
 use crate::PathSecurityError;
 
@@ -15,17 +14,10 @@ pub enum BackendStateError {
     DocumentNotFound,
     DocumentNotAttached,
     DocumentNotOwner,
-    TerminalNotFound,
-    TerminalNotAttached,
-    TerminalNotRunning,
-    TerminalNotOwner,
-    InvalidTerminalSize,
-    TerminalProfileDenied,
     InvalidWorkbench,
     RevisionConflict(RevisionConflict),
     Path(PathSecurityError),
     Document(DocumentError),
-    Terminal(TerminalError),
     CounterOverflow,
     Unsupported,
     Operation(String),
@@ -42,21 +34,10 @@ impl fmt::Display for BackendStateError {
             Self::DocumentNotFound => formatter.write_str("document was not found"),
             Self::DocumentNotAttached => formatter.write_str("document is not attached to session"),
             Self::DocumentNotOwner => formatter.write_str("document is owned by another session"),
-            Self::TerminalNotFound => formatter.write_str("terminal was not found"),
-            Self::TerminalNotAttached => formatter.write_str("terminal is not attached to session"),
-            Self::TerminalNotRunning => formatter.write_str("terminal is not running"),
-            Self::TerminalNotOwner => formatter.write_str("terminal is owned by another session"),
-            Self::InvalidTerminalSize => {
-                formatter.write_str("terminal size must be greater than zero")
-            }
-            Self::TerminalProfileDenied => {
-                formatter.write_str("terminal profile is not allowed by the Host")
-            }
             Self::InvalidWorkbench => formatter.write_str("invalid workbench state"),
             Self::RevisionConflict(_) => formatter.write_str("document revision conflicts"),
             Self::Path(error) => error.fmt(formatter),
             Self::Document(error) => error.fmt(formatter),
-            Self::Terminal(error) => error.fmt(formatter),
             Self::CounterOverflow => formatter.write_str("backend resource counter overflowed"),
             Self::Unsupported => formatter.write_str("request is not implemented by this service"),
         }
@@ -68,7 +49,6 @@ impl Error for BackendStateError {
         match self {
             Self::Path(error) => Some(error),
             Self::Document(error) => Some(error),
-            Self::Terminal(error) => Some(error),
             _ => None,
         }
     }
@@ -83,27 +63,6 @@ impl From<PathSecurityError> for BackendStateError {
 impl From<DocumentError> for BackendStateError {
     fn from(error: DocumentError) -> Self {
         Self::Document(error)
-    }
-}
-
-impl From<TerminalError> for BackendStateError {
-    fn from(error: TerminalError) -> Self {
-        Self::Terminal(error)
-    }
-}
-
-impl From<terminal_state::TerminalStateError> for BackendStateError {
-    fn from(error: terminal_state::TerminalStateError) -> Self {
-        match error {
-            terminal_state::TerminalStateError::Unsupported => Self::Unsupported,
-            terminal_state::TerminalStateError::NotFound => Self::TerminalNotFound,
-            terminal_state::TerminalStateError::NotAttached => Self::TerminalNotAttached,
-            terminal_state::TerminalStateError::NotRunning => Self::TerminalNotRunning,
-            terminal_state::TerminalStateError::NotOwner => Self::TerminalNotOwner,
-            terminal_state::TerminalStateError::InvalidSize => Self::InvalidTerminalSize,
-            terminal_state::TerminalStateError::UnknownProfile => Self::TerminalProfileDenied,
-            terminal_state::TerminalStateError::Backend(error) => Self::Terminal(error),
-        }
     }
 }
 

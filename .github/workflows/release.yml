@@ -55,6 +55,7 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: wasm32-wasip2
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -62,7 +63,10 @@ jobs:
           python-version: "3.12"
 
       - name: Build binaries
-        run: cargo build --locked --release -p lapis -p host -p lapis-launcher --bins
+        run: cargo build --locked --release -p lapis -p host -p lapis-launcher -p extension-runtime --bins
+
+      - name: Build bundled extensions
+        run: python -m scripts.extensions.stage extensions target/bundled-extension-input
 
       - name: Assemble package input
         shell: pwsh
@@ -71,6 +75,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $input | Out-Null
           Copy-Item target/release/lapis.exe $input
           Copy-Item target/release/lapis-host.exe $input
+          Copy-Item target/release/lapis-extension-host.exe $input
           Copy-Item target/release/lapis-launcher.exe $input
           Copy-Item assets/lapis.ico $input
 
@@ -87,6 +92,8 @@ jobs:
       - name: Build package and signed manifest
         shell: pwsh
         run: |
+          python -m scripts.extensions.bundle target/bundled-extension-input target/package/lapis/bundled-extensions
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $url = "https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag }}"
           python -m scripts.release build `
             --version "${{ steps.version.outputs.version }}" `

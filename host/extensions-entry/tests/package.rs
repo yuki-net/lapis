@@ -35,6 +35,486 @@ fn loader() -> ExtensionLoader {
     ExtensionLoader::new(trusted_keys(), HostContracts::current())
 }
 
+#[test]
+fn bundled_first_install_never_overwrites_disabled_or_removed_catalog_entries() {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = workspace.path().join("extensions");
+    let mut first = ExtensionCatalog::open(root.clone()).unwrap();
+    let mut stale = ExtensionCatalog::open(root).unwrap();
+    let manifest = extension_manifest(
+        "dev.example.terminal",
+        &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+    );
+    let package = write_package(
+        workspace.path(),
+        "bundled.lapis",
+        &manifest,
+        &[("extension.wasm", b"\0asm")],
+    );
+    let loader = loader();
+    assert!(
+        loader
+            .install_if_missing(&mut first, &package, true)
+            .unwrap()
+            .is_some()
+    );
+    let id = id("dev.example.terminal");
+    loader.set_enabled(&mut first, &id, false).unwrap();
+    assert!(
+        loader
+            .install_if_missing(&mut stale, &package, true)
+            .unwrap()
+            .is_none()
+    );
+    assert!(!stale.get(&id).unwrap().state.is_enabled());
+    loader.remove(&mut first, &id).unwrap();
+    assert!(
+        loader
+            .install_if_missing(&mut stale, &package, true)
+            .unwrap()
+            .is_none()
+    );
+    assert!(!stale.get(&id).unwrap().state.is_installed());
+}
+
+#[test]
+fn bundled_upgrade_preserves_user_state_and_requires_same_signer_and_newer_version() {
+    let root = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(root.path().join("extensions")).unwrap();
+    let files: &[(&str, &[u8])] = &[("extension.wasm", b"old")];
+    let requirements = &[(EXTENSION_CONTRACT, host_version(), host_version())];
+    let refs: Vec<_> = requirements
+        .iter()
+        .map(|(id, min, max)| (*id, min.as_str(), max.as_str()))
+        .collect();
+    let old = signed_manifest("extension", "dev.example.update", &refs, files, |m| {
+        m["version"] = json!("0.1.0")
+    });
+    let old_path = write_package(root.path(), "old.lapis", &old, files);
+    let loader = loader();
+    loader
+        .install_or_upgrade_bundled(&mut catalog, &old_path, true)
+        .unwrap();
+    let id = id("dev.example.update");
+    loader.set_enabled(&mut catalog, &id, false).unwrap();
+    let new_files: &[(&str, &[u8])] = &[("extension.wasm", b"new")];
+    let new = signed_manifest("extension", "dev.example.update", &refs, new_files, |m| {
+        m["version"] = json!("0.2.0")
+    });
+    let new_path = write_package(root.path(), "new.lapis", &new, new_files);
+    assert!(
+        loader
+            .install_or_upgrade_bundled(&mut catalog, &new_path, true)
+            .unwrap()
+            .unwrap()
+            .is_installed()
+    );
+    let entry = catalog.get(&id).unwrap();
+    assert_eq!(entry.version.as_str(), "0.2.0");
+    assert!(!entry.state.is_enabled());
+    assert_eq!(
+        loader.load_installed(&mut catalog, &id).unwrap().files["extension.wasm"],
+        b"new"
+    );
+    assert!(
+        loader
+            .install_or_upgrade_bundled(&mut catalog, &old_path, true)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        loader
+            .install_or_upgrade_bundled(&mut catalog, &new_path, true)
+            .unwrap()
+            .is_none()
+    );
+    loader.remove(&mut catalog, &id).unwrap();
+    let latest = signed_manifest("extension", "dev.example.update", &refs, new_files, |m| {
+        m["version"] = json!("0.3.0")
+    });
+    let latest_path = write_package(root.path(), "latest.lapis", &latest, new_files);
+    assert!(
+        loader
+            .install_or_upgrade_bundled(&mut catalog, &latest_path, true)
+            .unwrap()
+            .is_none()
+    );
+    assert!(!catalog.get(&id).unwrap().state.is_installed());
+}
+
+#[test]
+fn development_refresh_replaces_same_version_only_for_the_same_signer() {
+    let root = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(root.path().join("extensions")).unwrap();
+    let version = host_version();
+    let requires = &[(EXTENSION_CONTRACT, version.as_str(), version.as_str())];
+    let old_files: &[(&str, &[u8])] = &[("extension.wasm", b"old")];
+    let new_files: &[(&str, &[u8])] = &[("extension.wasm", b"new")];
+    let old = signed_manifest(
+        "extension",
+        "dev.example.refresh",
+        requires,
+        old_files,
+        |_| {},
+    );
+    let new = signed_manifest(
+        "extension",
+        "dev.example.refresh",
+        requires,
+        new_files,
+        |_| {},
+    );
+    let old = write_package(root.path(), "old.lapis", &old, old_files);
+    let new = write_package(root.path(), "new.lapis", &new, new_files);
+    let loader = loader();
+    let id = id("dev.example.refresh");
+    loader
+        .install_or_upgrade_bundled(&mut catalog, &old, true)
+        .unwrap();
+    loader.set_enabled(&mut catalog, &id, false).unwrap();
+    assert!(
+        loader
+            .install_or_upgrade_bundled(&mut catalog, &new, true)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        loader
+            .refresh_development_bundled(&mut catalog, &new, true)
+            .unwrap()
+            .is_some()
+    );
+    assert!(!catalog.get(&id).unwrap().state.is_enabled());
+    assert_eq!(
+        loader.load_installed(&mut catalog, &id).unwrap().files["extension.wasm"],
+        b"new"
+    );
+    assert!(
+        loader
+            .refresh_development_bundled(&mut catalog, &new, true)
+            .unwrap()
+            .is_none()
+    );
+    loader.remove(&mut catalog, &id).unwrap();
+    assert!(
+        loader
+            .refresh_development_bundled(&mut catalog, &old, true)
+            .unwrap()
+            .is_none()
+    );
+    assert!(!catalog.get(&id).unwrap().state.is_installed());
+}
+
+#[test]
+fn bundled_upgrade_does_not_replace_another_signer_or_incompatible_package() {
+    let root = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(root.path().join("extensions")).unwrap();
+    let registry = format!(
+        r#"{{"schema":1,"keys":{{"{KEY_ID}":"{}","other":"{}"}}}}"#,
+        public_key(),
+        public_key()
+    );
+    let loader = ExtensionLoader::new(
+        TrustedKeys::parse(registry.as_bytes()).unwrap(),
+        HostContracts::current(),
+    );
+    let files: &[(&str, &[u8])] = &[("extension.wasm", b"old")];
+    let version = host_version();
+    let requires = &[(EXTENSION_CONTRACT, version.as_str(), version.as_str())];
+    let old = signed_manifest("extension", "dev.example.update", requires, files, |m| {
+        m["version"] = json!("0.1.0")
+    });
+    let path = write_package(root.path(), "old.lapis", &old, files);
+    loader
+        .install_or_upgrade_bundled(&mut catalog, &path, true)
+        .unwrap();
+    let other = signed_manifest("extension", "dev.example.update", requires, files, |m| {
+        m["version"] = json!("0.2.0");
+        m["key_id"] = json!("other");
+    });
+    let path = write_package(root.path(), "other.lapis", &other, files);
+    assert!(
+        loader
+            .install_or_upgrade_bundled(&mut catalog, &path, true)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        loader
+            .refresh_development_bundled(&mut catalog, &path, true)
+            .unwrap()
+            .is_none()
+    );
+    let incompatible = signed_manifest(
+        "extension",
+        "dev.example.update",
+        &[(EXTENSION_CONTRACT, "999.0.0", "999.0.0")],
+        files,
+        |m| m["version"] = json!("0.2.0"),
+    );
+    let path = write_package(root.path(), "incompatible.lapis", &incompatible, files);
+    assert!(matches!(
+        loader
+            .install_or_upgrade_bundled(&mut catalog, &path, true)
+            .unwrap(),
+        Some(InstallOutcome::Incompatible {
+            kept_previous: true,
+            ..
+        })
+    ));
+    assert_eq!(
+        catalog
+            .get(&id("dev.example.update"))
+            .unwrap()
+            .version
+            .as_str(),
+        "0.1.0"
+    );
+}
+
+#[test]
+fn explicit_publisher_key_can_authorize_an_external_package() {
+    let workspace = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
+    let manifest = extension_manifest(
+        "dev.example.terminal",
+        &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+    );
+    let package = write_package(
+        workspace.path(),
+        "terminal.lapis",
+        &manifest,
+        &[("extension.wasm", b"\0asm")],
+    );
+    assert!(
+        ExtensionLoader::repository()
+            .unwrap()
+            .install(&mut catalog, &package, true)
+            .is_err()
+    );
+    let registry = format!(r#"{{"schema":1,"keys":{{"{KEY_ID}":"{}"}}}}"#, public_key());
+    let loader = ExtensionLoader::repository_with_additional_keys(registry.as_bytes()).unwrap();
+    assert!(
+        loader
+            .install(&mut catalog, &package, true)
+            .unwrap()
+            .is_installed()
+    );
+    assert!(
+        loader
+            .load_installed(&mut catalog, &id("dev.example.terminal"))
+            .is_ok()
+    );
+}
+
+#[test]
+fn unsigned_packages_require_explicit_development_mode() {
+    let workspace = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
+    let mut manifest = extension_manifest(
+        "dev.example.terminal",
+        &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+    );
+    manifest.as_object_mut().unwrap().remove("key_id");
+    manifest.as_object_mut().unwrap().remove("signature");
+    let package = write_package(
+        workspace.path(),
+        "terminal.lapis",
+        &manifest,
+        &[("extension.wasm", b"\0asm")],
+    );
+    assert!(loader().install(&mut catalog, &package, true).is_err());
+    let development = loader().allow_unsigned_local_development();
+    assert!(
+        development
+            .refresh_development_bundled(&mut catalog, &package, true)
+            .is_err()
+    );
+    assert!(
+        development
+            .install(&mut catalog, &package, true)
+            .unwrap()
+            .is_installed()
+    );
+    assert!(
+        development
+            .load_installed(&mut catalog, &id("dev.example.terminal"))
+            .is_ok()
+    );
+    assert!(
+        loader()
+            .load_installed(&mut catalog, &id("dev.example.terminal"))
+            .is_err()
+    );
+    manifest["key_id"] = json!(KEY_ID);
+    manifest["signature"] = json!("AA==");
+    let signed = write_package(
+        workspace.path(),
+        "bad-signature.lapis",
+        &manifest,
+        &[("extension.wasm", b"\0asm")],
+    );
+    assert!(development.install(&mut catalog, &signed, true).is_err());
+}
+
+#[test]
+fn independent_source_directory_can_be_packaged_and_installed() {
+    let workspace = tempfile::tempdir().unwrap();
+    let source = workspace.path().join("external-extension");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(source.join("data.json"), br#"{"message":"hello"}"#).unwrap();
+    std::fs::write(
+        source.join("extension.json"),
+        serde_json::to_vec(&json!({
+            "id": "dev.example.external", "version": "0.1.0",
+            "requires": [{"contract": "lapis.extension", "minimum": "1.0.0", "maximum": "1.0.0"}],
+            "files": ["data.json"]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let output = workspace.path().join("external.lapis");
+    let seed_file = workspace.path().join("test-seed");
+    std::fs::write(&seed_file, SEED).unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut command = std::process::Command::new("python");
+    command
+        .current_dir(root)
+        .args(["-m", "scripts.extensions.package"])
+        .arg(&source)
+        .arg(&output)
+        .arg("--seed-file")
+        .arg(&seed_file)
+        .arg("--key-id")
+        .arg(KEY_ID);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    assert!(command.status().unwrap().success());
+    let mut catalog = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
+    let loader = loader();
+    assert!(
+        loader
+            .install(&mut catalog, &output, true)
+            .unwrap()
+            .is_installed()
+    );
+    let verified = loader
+        .load_installed(&mut catalog, &id("dev.example.external"))
+        .unwrap();
+    assert_eq!(verified.files["data.json"], br#"{"message":"hello"}"#);
+}
+
+/// CI が別 workspace の Wasm と worker をビルドした後に実行する。
+#[test]
+#[ignore = "外部 workspace の Wasm と拡張ホストの事前ビルドが必要"]
+fn independent_component_is_packaged_installed_and_activated() {
+    use base64::Engine as _;
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let component = std::fs::read(
+        root.join("target/external-extension/wasm32-wasip2/debug/example_lapis_extension.wasm"),
+    )
+    .unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let source = workspace.path().join("external");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(source.join("extension.wasm"), &component).unwrap();
+    std::fs::write(
+        source.join("extension.json"),
+        serde_json::to_vec(&json!({
+            "id": "dev.example.external", "version": "0.1.0",
+            "requires": [
+                {"contract": "lapis.extension", "minimum": "1.0.0", "maximum": "1.0.0"},
+                {"contract": "lapis.extension.lifecycle", "minimum": "1.0.0", "maximum": "1.0.0"},
+                {"contract": "lapis.extension.dispatch", "minimum": "1.0.0", "maximum": "1.0.0"}
+            ],
+            "files": ["extension.wasm"]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let seed_file = workspace.path().join("seed");
+    std::fs::write(&seed_file, SEED).unwrap();
+    let archive = workspace.path().join("external.lapis");
+    assert!(
+        Command::new("python")
+            .current_dir(&root)
+            .args(["-m", "scripts.extensions.package"])
+            .arg(&source)
+            .arg(&archive)
+            .arg("--seed-file")
+            .arg(seed_file)
+            .args(["--key-id", KEY_ID])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let mut catalog = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
+    let mut contracts = HostContracts::current();
+    contracts.add_version(
+        ContractId::try_new("lapis.extension.lifecycle").unwrap(),
+        semver::Version::new(1, 0, 0),
+    );
+    contracts.add_version(
+        ContractId::try_new("lapis.extension.dispatch").unwrap(),
+        semver::Version::new(1, 0, 0),
+    );
+    let loader = ExtensionLoader::new(trusted_keys(), contracts);
+    loader.install(&mut catalog, &archive, true).unwrap();
+    let verified = loader
+        .load_installed(&mut catalog, &id("dev.example.external"))
+        .unwrap();
+    assert_eq!(verified.files["extension.wasm"], component);
+
+    let executable = root.join("target/debug").join(format!(
+        "lapis-extension-host{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    let mut command = Command::new(executable);
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let mut worker = command.spawn().unwrap();
+    let mut input = worker.stdin.take().unwrap();
+    for request in [
+        json!({"command": "activate", "id": "dev.example.external", "component": base64::engine::general_purpose::STANDARD.encode(&verified.files["extension.wasm"]), "require_dispatch": true}),
+        json!({"command": "dispatch", "id": "dev.example.external", "operation": "echo", "payload": "hello", "context": {"session":"session-1", "workspace":"workspace-1"}}),
+        json!({"command": "deactivate", "id": "dev.example.external"}),
+        json!({"command": "shutdown"}),
+    ] {
+        writeln!(input, "{request}").unwrap();
+    }
+    drop(input);
+    let output = worker.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let responses: Vec<Value> = std::str::from_utf8(&output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(responses.len(), 4);
+    assert!(
+        responses.iter().all(|response| response["ok"] == true),
+        "{responses:?}"
+    );
+    assert_eq!(responses[1]["result"], "hello");
+}
+
 fn host_version() -> String {
     let (major, minor, patch) = HOST_EXTENSION_CONTRACT_VERSION;
     format!("{major}.{minor}.{patch}")
@@ -149,6 +629,177 @@ fn id(value: &str) -> ExtensionPackageId {
 }
 
 #[test]
+fn capability_approval_is_scoped_to_signed_package_and_persists() {
+    use extensions_entry::{CAPABILITY_PACKAGE_SCHEMA, CapabilityApprovals, PackageCapability};
+    let root = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(root.path().join("extensions")).unwrap();
+    let files: &[(&str, &[u8])] = &[("extension.wasm", b"\0asm")];
+    let manifest = signed_manifest(
+        "extension",
+        "dev.example.terminal",
+        &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+        files,
+        |value| {
+            value["schema"] = json!(CAPABILITY_PACKAGE_SCHEMA);
+            value["capabilities"] = json!([{"id":"process.pty", "version":"1.0.0"}]);
+        },
+    );
+    let path = write_package(root.path(), "terminal.lapis", &manifest, files);
+    let loader = loader();
+    loader.install(&mut catalog, &path, true).unwrap();
+    let package = loader
+        .load_installed(&mut catalog, &id("dev.example.terminal"))
+        .unwrap();
+    let capability = package.manifest.capabilities[0].clone();
+    let approvals = CapabilityApprovals::new(catalog.root().to_path_buf());
+    assert!(!approvals.is_granted(&package, &capability).unwrap());
+    approvals.set(&package, &capability, true).unwrap();
+    let reopened = CapabilityApprovals::new(catalog.root().to_path_buf());
+    assert!(reopened.is_granted(&package, &capability).unwrap());
+    let other = PackageCapability {
+        id: capability.id.clone(),
+        version: semver::Version::new(2, 0, 0),
+    };
+    assert!(!reopened.is_granted(&package, &other).unwrap());
+    assert!(reopened.set(&package, &other, true).is_err());
+
+    // 同じ ID・version でも署名対象が変われば承認は引き継がれない。
+    let updated = signed_manifest(
+        "extension",
+        "dev.example.terminal",
+        &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+        files,
+        |value| {
+            value["schema"] = json!(CAPABILITY_PACKAGE_SCHEMA);
+            value["capabilities"] =
+                json!([{"id":"process.pty", "version":"1.0.0"}, {"id":"other", "version":"1.0.0"}]);
+        },
+    );
+    let updated_path = write_package(root.path(), "updated.lapis", &updated, files);
+    assert!(
+        loader
+            .refresh_development_bundled(&mut catalog, &updated_path, true)
+            .unwrap()
+            .is_some()
+    );
+    let updated_package = loader
+        .load_installed(&mut catalog, &id("dev.example.terminal"))
+        .unwrap();
+    assert!(!reopened.is_granted(&updated_package, &capability).unwrap());
+    reopened.set(&package, &capability, false).unwrap();
+    assert!(!reopened.is_granted(&package, &capability).unwrap());
+    reopened.set(&updated_package, &capability, true).unwrap();
+    let other_capability = updated_package
+        .manifest
+        .capabilities
+        .iter()
+        .find(|item| item.id.as_str() == "other")
+        .unwrap();
+    reopened
+        .set(&updated_package, other_capability, true)
+        .unwrap();
+    reopened
+        .revoke_capability(&id("dev.example.terminal"), &capability.id)
+        .unwrap();
+    assert!(!reopened.is_granted(&updated_package, &capability).unwrap());
+    assert!(
+        reopened
+            .is_granted(&updated_package, other_capability)
+            .unwrap()
+    );
+    reopened.set(&updated_package, &capability, true).unwrap();
+    loader
+        .remove(&mut catalog, &id("dev.example.terminal"))
+        .unwrap();
+    loader.install(&mut catalog, &updated_path, true).unwrap();
+    let reinstalled = loader
+        .load_installed(&mut catalog, &id("dev.example.terminal"))
+        .unwrap();
+    assert!(!reopened.is_granted(&reinstalled, &capability).unwrap());
+    std::fs::write(catalog.root().join("capability-approvals.json"), b"broken").unwrap();
+    assert!(reopened.is_granted(&package, &capability).is_err());
+    assert!(
+        loader
+            .remove(&mut catalog, &id("dev.example.terminal"))
+            .is_err()
+    );
+    assert!(
+        catalog
+            .get(&id("dev.example.terminal"))
+            .unwrap()
+            .state
+            .is_installed()
+    );
+}
+
+#[test]
+fn capability_declaration_is_signed_and_legacy_packages_stay_valid() {
+    use extensions_entry::CAPABILITY_PACKAGE_SCHEMA;
+    let root = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(root.path().join("extensions")).unwrap();
+    let files: &[(&str, &[u8])] = &[("extension.wasm", b"\0asm")];
+    let mut manifest = signed_manifest(
+        "extension",
+        "dev.example.terminal",
+        &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+        files,
+        |value| {
+            value["schema"] = json!(CAPABILITY_PACKAGE_SCHEMA);
+            value["capabilities"] = json!([{"id":"process.pty", "version":"1.0.0"}]);
+        },
+    );
+    manifest["capabilities"][0]["version"] = json!("2.0.0");
+    let path = write_package(root.path(), "tampered.lapis", &manifest, files);
+    assert!(loader().install(&mut catalog, &path, true).is_err());
+    let legacy = extension_manifest(
+        "dev.example.legacy",
+        &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+    );
+    let path = write_package(root.path(), "legacy.lapis", &legacy, files);
+    loader().install(&mut catalog, &path, true).unwrap();
+    assert!(
+        loader()
+            .load_installed(&mut catalog, &id("dev.example.legacy"))
+            .unwrap()
+            .manifest
+            .capabilities
+            .is_empty()
+    );
+}
+
+#[test]
+fn invalid_capability_declarations_are_rejected_even_when_signed() {
+    use extensions_entry::CAPABILITY_PACKAGE_SCHEMA;
+    let root = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(root.path().join("extensions")).unwrap();
+    let files: &[(&str, &[u8])] = &[("extension.wasm", b"\0asm")];
+    let malformed = [
+        json!([{"id":"process.pty", "version":"0.1.0"}]),
+        json!([{"id":"process.pty", "version":"1.0.0", "extra":true}]),
+        json!([{"id":"process.pty", "version":"1.0.0"}, {"id":"process.pty", "version":"1.0.0"}]),
+    ];
+    for (index, capabilities) in malformed.into_iter().enumerate() {
+        let manifest = signed_manifest(
+            "extension",
+            "dev.example.terminal",
+            &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+            files,
+            |value| {
+                value["schema"] = json!(CAPABILITY_PACKAGE_SCHEMA);
+                value["capabilities"] = capabilities;
+            },
+        );
+        let path = write_package(
+            root.path(),
+            &format!("invalid-{index}.lapis"),
+            &manifest,
+            files,
+        );
+        assert!(loader().install(&mut catalog, &path, true).is_err());
+    }
+}
+
+#[test]
 fn an_extension_package_is_verified_extracted_and_declared() {
     let workspace = tempfile::tempdir().unwrap();
     let mut catalog = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
@@ -173,7 +824,7 @@ fn an_extension_package_is_verified_extracted_and_declared() {
     assert!(outcome.is_installed());
 
     // 宣言は目録の状態を写す。
-    let entry = catalog.get(&id("dev.example.terminal")).unwrap();
+    let entry = catalog.get(&id("dev.example.terminal")).unwrap().clone();
     assert!(entry.state.is_installed());
     assert!(entry.state.is_enabled());
     assert!(!entry.state.is_incompatible());
@@ -186,6 +837,13 @@ fn an_extension_package_is_verified_extracted_and_declared() {
         std::fs::read(installed.join("extension.wasm")).unwrap(),
         b"\0asm"
     );
+    let installed_manifest: Value =
+        serde_json::from_slice(&std::fs::read(installed.join(MANIFEST_NAME)).unwrap()).unwrap();
+    assert_eq!(installed_manifest, manifest);
+    let verified = loader()
+        .load_installed(&mut catalog, &id("dev.example.terminal"))
+        .unwrap();
+    assert_eq!(verified.files["extension.wasm"], b"\0asm");
     assert!(
         catalog
             .data_directory(&id("dev.example.terminal"))
@@ -195,7 +853,111 @@ fn an_extension_package_is_verified_extracted_and_declared() {
 
     // 再起動しても同じ宣言を読める。
     let reopened = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
-    assert_eq!(reopened.entries().next().unwrap(), entry);
+    assert_eq!(reopened.entries().next().unwrap(), &entry);
+}
+
+#[test]
+fn installed_package_is_rechecked_before_use() {
+    let workspace = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
+    let manifest = extension_manifest(
+        "dev.example.terminal",
+        &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+    );
+    let package = write_package(
+        workspace.path(),
+        "terminal.lapis",
+        &manifest,
+        &[("extension.wasm", b"\0asm")],
+    );
+    let loader = loader();
+    loader.install(&mut catalog, &package, true).unwrap();
+    let directory = catalog
+        .installed_directory(&id("dev.example.terminal"))
+        .unwrap();
+    std::fs::write(directory.join("extension.wasm"), b"tampered").unwrap();
+    assert!(
+        loader
+            .load_installed(&mut catalog, &id("dev.example.terminal"))
+            .is_err()
+    );
+    std::fs::write(directory.join("extension.wasm"), b"\0asm").unwrap();
+    let mut tampered = manifest;
+    tampered["version"] = json!("1.0.0");
+    std::fs::write(
+        directory.join(MANIFEST_NAME),
+        serde_json::to_vec(&tampered).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        loader
+            .load_installed(&mut catalog, &id("dev.example.terminal"))
+            .is_err()
+    );
+    std::fs::remove_file(directory.join(MANIFEST_NAME)).unwrap();
+    assert!(
+        loader
+            .load_installed(&mut catalog, &id("dev.example.terminal"))
+            .is_err()
+    );
+}
+
+#[test]
+fn installed_package_must_match_catalog_and_current_contracts() {
+    let workspace = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
+    let manifest = extension_manifest(
+        "dev.example.terminal",
+        &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+    );
+    let package = write_package(
+        workspace.path(),
+        "terminal.lapis",
+        &manifest,
+        &[("extension.wasm", b"\0asm")],
+    );
+    loader().install(&mut catalog, &package, true).unwrap();
+    let id = id("dev.example.terminal");
+    let incompatible = ExtensionLoader::new(trusted_keys(), HostContracts::new([]));
+    assert!(incompatible.load_installed(&mut catalog, &id).is_err());
+    assert!(incompatible.inspect_installed(&mut catalog, &id).is_ok());
+
+    let directory = catalog.installed_directory(&id).unwrap();
+    let other = extension_manifest(
+        "dev.example.other",
+        &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+    );
+    std::fs::write(
+        directory.join(MANIFEST_NAME),
+        serde_json::to_vec(&other).unwrap(),
+    )
+    .unwrap();
+    assert!(loader().load_installed(&mut catalog, &id).is_err());
+    assert!(incompatible.inspect_installed(&mut catalog, &id).is_err());
+}
+
+#[test]
+fn reinstall_restores_manifest_for_legacy_packages() {
+    let workspace = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
+    let manifest = extension_manifest(
+        "dev.example.terminal",
+        &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+    );
+    let package = write_package(
+        workspace.path(),
+        "terminal.lapis",
+        &manifest,
+        &[("extension.wasm", b"\0asm")],
+    );
+    let loader = loader();
+    let id = id("dev.example.terminal");
+    loader.install(&mut catalog, &package, true).unwrap();
+    let directory = catalog.installed_directory(&id).unwrap();
+    std::fs::remove_file(directory.join(MANIFEST_NAME)).unwrap();
+    assert!(loader.load_installed(&mut catalog, &id).is_err());
+    loader.install(&mut catalog, &package, true).unwrap();
+    assert!(loader.load_installed(&mut catalog, &id).is_ok());
 }
 
 #[test]

@@ -1,0 +1,11 @@
+[package]
+name = "terminal-renderer"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+terminal = { package = "terminal-contract", path = "../contract" }
+wezterm-term.workspace = true
+wezterm-surface.workspace = true

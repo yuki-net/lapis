@@ -9,3 +9,11 @@ license.workspace = true
 process = { path = "../../../contracts/domain/process" }
 editor-core = { path = "../../../contracts/domain/editor-core" }
 sysinfo.workspace = true
+portable-pty.workspace = true
+getrandom.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }

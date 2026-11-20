@@ -33,6 +33,9 @@ use crate::{
 /// manifest の schema。項目を増やすときは schema を上げ、旧 schema は受理しない。
 pub const PACKAGE_SCHEMA: i64 = 1;
 
+/// capability 宣言を含む package schema。schema 1 も読み取る。
+pub const CAPABILITY_PACKAGE_SCHEMA: i64 = 2;
+
 /// package 内で manifest を置く名前。manifest が宣言する file には使えない。
 pub const MANIFEST_NAME: &str = "manifest.json";
 
@@ -88,7 +91,53 @@ pub struct PackageManifest {
     pub id: ExtensionPackageId,
     pub version: ExtensionVersion,
     pub requires: Vec<ContractRequirement>,
+    /// 拡張が利用を希望する能力。宣言だけでは権限を与えない。
+    pub capabilities: Vec<PackageCapability>,
     pub files: Vec<PackageFile>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PackageCapability {
+    pub id: crate::ContractId,
+    pub version: semver::Version,
+}
+
+/// 署名と内容を検証した導入済み package のスナップショット。
+/// 実行側は検証後に path を読み直さず、この bytes を使用する。
+#[derive(Debug)]
+pub struct VerifiedPackage {
+    pub manifest: PackageManifest,
+    pub files: BTreeMap<String, Vec<u8>>,
+    manifest_digest: String,
+    verified_id: ExtensionPackageId,
+    verified_capabilities: Vec<PackageCapability>,
+    signature_verified: bool,
+}
+
+#[derive(Clone, Copy)]
+enum InstallPolicy {
+    Explicit,
+    Missing,
+    BundledUpgrade,
+    DevelopmentRefresh,
+}
+
+impl VerifiedPackage {
+    /// 署名省略の開発用 package と、信頼済み鍵で署名検証した package を区別する。
+    pub fn signature_verified(&self) -> bool {
+        self.signature_verified
+    }
+    /// 署名とファイルを検証した manifest の digest。承認を正確な package に結び付ける。
+    pub fn manifest_digest(&self) -> &str {
+        &self.manifest_digest
+    }
+
+    pub(crate) fn verified_id(&self) -> &ExtensionPackageId {
+        &self.verified_id
+    }
+    pub(crate) fn declares(&self, capability: &PackageCapability) -> bool {
+        self.verified_capabilities.contains(capability)
+    }
 }
 
 /// 読み込みの結果。目録に載った宣言の内容を返す。
@@ -205,6 +254,7 @@ impl From<crate::InvalidExtensionPackageId> for PackageError {
 pub struct ExtensionLoader {
     keys: TrustedKeys,
     contracts: HostContracts,
+    allow_unsigned_development: bool,
 }
 
 impl ExtensionLoader {
@@ -213,12 +263,125 @@ impl ExtensionLoader {
         Ok(Self {
             keys: TrustedKeys::repository()?,
             contracts: HostContracts::current(),
+            allow_unsigned_development: false,
+        })
+    }
+
+    /// Host 管理者が明示した発行者鍵を、組み込みの信頼済み鍵に追加する。
+    pub fn repository_with_additional_keys(raw: &[u8]) -> Result<Self, SignatureError> {
+        let mut keys = TrustedKeys::repository()?;
+        keys.add_registry(raw)?;
+        Ok(Self {
+            keys,
+            contracts: HostContracts::current(),
+            allow_unsigned_development: false,
         })
     }
 
     /// 信頼済み公開鍵と提供する契約を明示して作る。検証規則を確かめるテストが使う。
     pub fn new(keys: TrustedKeys, contracts: HostContracts) -> Self {
-        Self { keys, contracts }
+        Self {
+            keys,
+            contracts,
+            allow_unsigned_development: false,
+        }
+    }
+
+    /// 明示的なローカル開発時のみ署名のない package を許可する。
+    /// 署名がある場合は開発時も必ず検証する。
+    pub fn allow_unsigned_local_development(mut self) -> Self {
+        self.allow_unsigned_development = true;
+        self
+    }
+
+    /// 導入済み package の署名・目録・契約・各 file を再検証する。
+    /// 旧版で manifest を保存していない package は再導入が必要。
+    pub fn load_installed(
+        &self,
+        catalog: &mut ExtensionCatalog,
+        id: &ExtensionPackageId,
+    ) -> Result<VerifiedPackage, PackageError> {
+        self.read_installed(catalog, id, true)
+    }
+
+    /// 署名と内容を検証して能力を表示する。実行互換性は付与しない。
+    pub fn inspect_installed(
+        &self,
+        catalog: &mut ExtensionCatalog,
+        id: &ExtensionPackageId,
+    ) -> Result<VerifiedPackage, PackageError> {
+        self.read_installed(catalog, id, false)
+    }
+
+    /// 表示用に読み取った package が現在の Host で実行可能かを照合する。
+    pub fn is_compatible(&self, package: &VerifiedPackage) -> bool {
+        self.contracts.check(&package.manifest.requires).is_ok()
+    }
+
+    fn read_installed(
+        &self,
+        catalog: &mut ExtensionCatalog,
+        id: &ExtensionPackageId,
+        require_compatible: bool,
+    ) -> Result<VerifiedPackage, PackageError> {
+        let _lock = lock_install(catalog.root())?;
+        crate::journal::recover_locked(catalog)?;
+        catalog.reload()?;
+        let entry = catalog
+            .get(id)
+            .ok_or_else(|| PackageError::Malformed(format!("拡張が目録にありません: {id}")))?;
+        if !entry.state.is_installed() {
+            return Err(PackageError::Malformed(format!(
+                "拡張が導入されていません: {id}"
+            )));
+        }
+        let directory = catalog.installed_directory(id)?;
+        let raw = read_installed_file(&directory, MANIFEST_NAME)?;
+        let manifest = parse_manifest(&raw, &self.keys, self.allow_unsigned_development)?;
+        if manifest.kind != PackageKind::Extension {
+            return Err(PackageError::NotAnExtension(manifest.kind));
+        }
+        if &manifest.id != id || manifest.version != entry.version {
+            return Err(PackageError::Malformed(
+                "目録と manifest が一致しません".to_owned(),
+            ));
+        }
+        if manifest.files.len() >= MAX_FILES {
+            return Err(PackageError::Malformed(
+                "package の file 数が上限を超えています".to_owned(),
+            ));
+        }
+        if require_compatible {
+            self.contracts
+                .check(&manifest.requires)
+                .map_err(|error| PackageError::Malformed(format!("拡張が非互換です: {error}")))?;
+        }
+        let mut total = raw.len() as u64;
+        let mut files = BTreeMap::new();
+        for file in &manifest.files {
+            let bytes = read_installed_file(&directory, &file.path)?;
+            total += bytes.len() as u64;
+            if total > MAX_PACKAGE_BYTES {
+                return Err(PackageError::Malformed(
+                    "package の展開後の大きさが上限を超えています".to_owned(),
+                ));
+            }
+            files.insert(file.path.clone(), bytes);
+        }
+        verify_files(&manifest, &files)?;
+        // parse_manifest は key_id が存在すれば必ず署名を検証する。
+        let signature_verified = serde_json::from_slice::<Value>(&raw)
+            .map_err(|error| PackageError::Malformed(error.to_string()))?
+            .get("key_id")
+            .is_some();
+        Ok(VerifiedPackage {
+            verified_id: manifest.id.clone(),
+            verified_capabilities: manifest.capabilities.clone(),
+            manifest,
+            files,
+            manifest_digest: format!("{:x}", Sha256::digest(&raw)),
+            signature_verified,
+        })
     }
 
     /// package を検証して導入し、目録へ宣言を登録する。
@@ -231,11 +394,63 @@ impl ExtensionLoader {
         package: &Path,
         enabled: bool,
     ) -> Result<InstallOutcome, PackageError> {
+        self.install_inner(catalog, package, enabled, InstallPolicy::Explicit)
+            .map(|outcome| outcome.expect("通常の導入は必ず結果を返す"))
+    }
+
+    /// 同梱の初回導入。削除済みを含む既存の目録を上書きしない。
+    pub fn install_if_missing(
+        &self,
+        catalog: &mut ExtensionCatalog,
+        package: &Path,
+        enabled: bool,
+    ) -> Result<Option<InstallOutcome>, PackageError> {
+        self.install_inner(catalog, package, enabled, InstallPolicy::Missing)
+    }
+
+    /// 同梱物の初回導入、または同じ署名者による新しい SemVer への更新。
+    /// 削除済みを復元せず、導入済み拡張の有効状態を引き継ぐ。
+    pub fn install_or_upgrade_bundled(
+        &self,
+        catalog: &mut ExtensionCatalog,
+        package: &Path,
+        enabled: bool,
+    ) -> Result<Option<InstallOutcome>, PackageError> {
+        self.install_inner(catalog, package, enabled, InstallPolicy::BundledUpgrade)
+    }
+
+    /// 開発時のみ、同じ署名者による同一版の変更も再導入する。
+    pub fn refresh_development_bundled(
+        &self,
+        catalog: &mut ExtensionCatalog,
+        package: &Path,
+        enabled: bool,
+    ) -> Result<Option<InstallOutcome>, PackageError> {
+        self.install_inner(catalog, package, enabled, InstallPolicy::DevelopmentRefresh)
+    }
+
+    fn install_inner(
+        &self,
+        catalog: &mut ExtensionCatalog,
+        package: &Path,
+        mut enabled: bool,
+        policy: InstallPolicy,
+    ) -> Result<Option<InstallOutcome>, PackageError> {
         let archive = read_archive(package)?;
         let manifest_value = archive
             .get(MANIFEST_NAME)
             .ok_or_else(|| PackageError::Malformed(format!("{MANIFEST_NAME} がない")))?;
-        let manifest = parse_manifest(manifest_value, &self.keys)?;
+        let manifest = parse_manifest(manifest_value, &self.keys, self.allow_unsigned_development)?;
+        if matches!(policy, InstallPolicy::DevelopmentRefresh)
+            && serde_json::from_slice::<Value>(manifest_value)
+                .map_err(|error| PackageError::Malformed(error.to_string()))?
+                .get("key_id")
+                .is_none()
+        {
+            return Err(PackageError::Malformed(
+                "開発用同梱物には署名が必要です".into(),
+            ));
+        }
         if manifest.kind != PackageKind::Extension {
             return Err(PackageError::NotAnExtension(manifest.kind));
         }
@@ -247,6 +462,56 @@ impl ExtensionLoader {
         crate::journal::recover_locked(catalog)?;
         // 別の入口が同じ目録を変えている可能性がある。判断の前に file を正本にする。
         catalog.reload()?;
+        if let Some(entry) = catalog.get(&manifest.id) {
+            match policy {
+                InstallPolicy::Explicit => {}
+                InstallPolicy::Missing => return Ok(None),
+                InstallPolicy::BundledUpgrade | InstallPolicy::DevelopmentRefresh => {
+                    if !entry.state.is_installed() {
+                        return Ok(None);
+                    }
+                    let (Ok(old), Ok(new)) = (
+                        semver::Version::parse(entry.version.as_str()),
+                        semver::Version::parse(manifest.version.as_str()),
+                    ) else {
+                        return Ok(None);
+                    };
+                    let order = old.cmp_precedence(&new);
+                    if order.is_gt()
+                        || (order.is_eq() && matches!(policy, InstallPolicy::BundledUpgrade))
+                    {
+                        return Ok(None);
+                    }
+                    let directory = catalog.installed_directory(&manifest.id)?;
+                    let old_raw = match read_installed_file(&directory, MANIFEST_NAME) {
+                        Ok(raw) => raw,
+                        Err(PackageError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
+                            return Ok(None);
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    let old_value: Value = serde_json::from_slice(&old_raw)
+                        .map_err(|error| PackageError::Malformed(error.to_string()))?;
+                    let new_value: Value = serde_json::from_slice(manifest_value)
+                        .map_err(|error| PackageError::Malformed(error.to_string()))?;
+                    let old_key = old_value.get("key_id").and_then(Value::as_str);
+                    let new_key = new_value.get("key_id").and_then(Value::as_str);
+                    if old_key.is_none() || old_key != new_key {
+                        return Ok(None);
+                    }
+                    let old_manifest = parse_manifest(&old_raw, &self.keys, false)?;
+                    if old_manifest.id != manifest.id || old_manifest.version != entry.version {
+                        return Err(PackageError::Malformed(
+                            "目録と導入済み manifest が一致しません".into(),
+                        ));
+                    }
+                    if order.is_eq() && old_raw == *manifest_value {
+                        return Ok(None);
+                    }
+                    enabled = entry.state.is_enabled();
+                }
+            }
+        }
         match self.contracts.check(&manifest.requires) {
             Ok(()) => {
                 // 展開先の実体を先に用意し、目録を書けたときだけ置き換える。目録を
@@ -294,11 +559,11 @@ impl ExtensionLoader {
                             eprintln!("拡張 {} の退避した旧版を消せません: {error}", manifest.id);
                         }
                         crate::journal::finish(catalog.root(), &manifest.id)?;
-                        Ok(InstallOutcome::Installed {
+                        Ok(Some(InstallOutcome::Installed {
                             id: manifest.id,
                             version: manifest.version,
                             enabled,
-                        })
+                        }))
                     }
                     Err(error) => {
                         // 実体を置き換えられなかった。今の段階から回復して、目録と実体を
@@ -334,12 +599,12 @@ impl ExtensionLoader {
                     ))?;
                     remove_directory(&catalog.installed_directory(&manifest.id)?)?;
                 }
-                Ok(InstallOutcome::Incompatible {
+                Ok(Some(InstallOutcome::Incompatible {
                     id: manifest.id,
                     version: manifest.version,
                     reason,
                     kept_previous,
-                })
+                }))
             }
         }
     }
@@ -378,6 +643,10 @@ impl ExtensionLoader {
             .get(id)
             .cloned()
             .ok_or_else(|| PackageError::Malformed(format!("目録に {id} がない")))?;
+        // 除去が途中で失敗しても承認は取り消したままにする（安全側に倒す）。
+        crate::CapabilityApprovals::new(catalog.root().to_owned())
+            .revoke_extension(id)
+            .map_err(PackageError::Io)?;
         // 退避より先に記録する。退避したまま落ちても回復が実体を戻せるようにするため。
         crate::journal::begin(
             catalog.root(),
@@ -437,6 +706,47 @@ fn remove_directory(path: &Path) -> Result<(), PackageError> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(PackageError::Io(error)),
     }
+}
+
+fn read_installed_file(directory: &Path, name: &str) -> Result<Vec<u8>, PackageError> {
+    if name != MANIFEST_NAME {
+        validate_member_path(name)?;
+    }
+    let mut path = directory.to_path_buf();
+    if fs::symlink_metadata(&path)
+        .map_err(PackageError::Io)?
+        .file_type()
+        .is_symlink()
+    {
+        return Err(PackageError::Malformed("導入先が symlink です".to_owned()));
+    }
+    for part in name.split('/') {
+        path.push(part);
+        if fs::symlink_metadata(&path)
+            .map_err(PackageError::Io)?
+            .file_type()
+            .is_symlink()
+        {
+            return Err(PackageError::Malformed(format!(
+                "symlink は読み込めません: {name}"
+            )));
+        }
+    }
+    let file = fs::File::open(&path).map_err(PackageError::Io)?;
+    if !file.metadata().map_err(PackageError::Io)?.is_file() {
+        return Err(PackageError::Malformed(format!(
+            "file ではありません: {name}"
+        )));
+    }
+    let mut bytes = Vec::new();
+    io::Read::read_to_end(&mut io::Read::take(file, MAX_FILE_BYTES + 1), &mut bytes)
+        .map_err(PackageError::Io)?;
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err(PackageError::Malformed(format!(
+            "file が大きすぎます: {name}"
+        )));
+    }
+    Ok(bytes)
 }
 
 /// package の file 名 → 内容。zip member の検証をここで済ませる。
@@ -546,30 +856,46 @@ fn member_name(entry: &zip::read::ZipFile<'_, fs::File>) -> Result<String, Packa
     Ok(name.to_owned())
 }
 
-fn parse_manifest(raw: &[u8], keys: &TrustedKeys) -> Result<PackageManifest, PackageError> {
+fn parse_manifest(
+    raw: &[u8],
+    keys: &TrustedKeys,
+    allow_unsigned: bool,
+) -> Result<PackageManifest, PackageError> {
     let value: Value = serde_json::from_slice(raw)
         .map_err(|error| PackageError::Malformed(format!("manifest が JSON でない: {error}")))?;
     let object = value
         .as_object()
         .ok_or_else(|| PackageError::Malformed("manifest が object でない".to_owned()))?;
-    reject_unknown_and_missing(object, &MANIFEST_FIELDS, "manifest")?;
-    if object["schema"].as_i64() != Some(PACKAGE_SCHEMA) {
+    let unsigned = !object.contains_key("key_id") && !object.contains_key("signature");
+    let schema = object.get("schema").and_then(Value::as_i64);
+    if !matches!(schema, Some(PACKAGE_SCHEMA | CAPABILITY_PACKAGE_SCHEMA)) {
         return Err(PackageError::Malformed(format!(
             "未対応の schema: {}",
-            object["schema"]
+            object.get("schema").unwrap_or(&Value::Null)
         )));
     }
-    let key_id = object["key_id"]
-        .as_str()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| PackageError::Malformed("key_id が空".to_owned()))?;
-    let signature = object["signature"]
-        .as_str()
-        .ok_or_else(|| PackageError::Malformed("signature が文字列でない".to_owned()))?;
-    let mut payload = object.clone();
-    payload.remove("signature");
-    crate::signature::verify_signature(keys, key_id, signature, &Value::Object(payload))
-        .map_err(PackageError::Signature)?;
+    let mut fields = if unsigned && allow_unsigned {
+        MANIFEST_FIELDS[..6].to_vec()
+    } else {
+        MANIFEST_FIELDS.to_vec()
+    };
+    if schema == Some(CAPABILITY_PACKAGE_SCHEMA) {
+        fields.push("capabilities");
+    }
+    reject_unknown_and_missing(object, &fields, "manifest")?;
+    if !unsigned || !allow_unsigned {
+        let key_id = object["key_id"]
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| PackageError::Malformed("key_id が空".to_owned()))?;
+        let signature = object["signature"]
+            .as_str()
+            .ok_or_else(|| PackageError::Malformed("signature が文字列でない".to_owned()))?;
+        let mut payload = object.clone();
+        payload.remove("signature");
+        crate::signature::verify_signature(keys, key_id, signature, &Value::Object(payload))
+            .map_err(PackageError::Signature)?;
+    }
 
     let kind = object["kind"]
         .as_str()
@@ -580,14 +906,63 @@ fn parse_manifest(raw: &[u8], keys: &TrustedKeys) -> Result<PackageManifest, Pac
     let version: ExtensionVersion = serde_json::from_value(object["version"].clone())
         .map_err(|error| PackageError::Malformed(format!("version が不正: {error}")))?;
     let requires = parse_requirements(&object["requires"])?;
+    let capabilities = if schema == Some(CAPABILITY_PACKAGE_SCHEMA) {
+        parse_capabilities(&object["capabilities"])?
+    } else {
+        Vec::new()
+    };
     let files = parse_files(&object["files"])?;
     Ok(PackageManifest {
         kind,
         id,
         version,
         requires,
+        capabilities,
         files,
     })
+}
+
+fn parse_capabilities(value: &Value) -> Result<Vec<PackageCapability>, PackageError> {
+    let entries = value
+        .as_array()
+        .filter(|entries| entries.len() <= 64)
+        .ok_or_else(|| {
+            PackageError::Malformed("capabilities は 64 件以下の配列が必要です".into())
+        })?;
+    let mut capabilities = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let object = entry
+            .as_object()
+            .ok_or_else(|| PackageError::Malformed("capability は object が必要です".into()))?;
+        reject_unknown_and_missing(object, &["id", "version"], "capability")?;
+        let id: crate::ContractId =
+            serde_json::from_value(object["id"].clone()).map_err(|error| {
+                PackageError::Malformed(format!("capability ID が不正です: {error}"))
+            })?;
+        let raw_version = object["version"]
+            .as_str()
+            .ok_or_else(|| PackageError::Malformed("capability version が不正です".into()))?;
+        let version = semver::Version::parse(raw_version).map_err(|error| {
+            PackageError::Malformed(format!("capability version が不正です: {error}"))
+        })?;
+        if version.to_string() != raw_version
+            || !version.pre.is_empty()
+            || !version.build.is_empty()
+            || version.major == 0
+        {
+            return Err(PackageError::Malformed(
+                "capability version は正式な SemVer が必要です".into(),
+            ));
+        }
+        let capability = PackageCapability { id, version };
+        if capabilities.contains(&capability) {
+            return Err(PackageError::Malformed(
+                "capability が重複しています".into(),
+            ));
+        }
+        capabilities.push(capability);
+    }
+    Ok(capabilities)
 }
 
 fn parse_requirements(value: &Value) -> Result<Vec<ContractRequirement>, PackageError> {
@@ -705,6 +1080,11 @@ fn stage(
         .prefix(".staging-")
         .tempdir_in(parent)
         .map_err(PackageError::Io)?;
+    // 起動時に署名と契約を再検証できるよう、検証済み manifest も実体と保存する。
+    let manifest_bytes = archive
+        .get(MANIFEST_NAME)
+        .ok_or_else(|| PackageError::Malformed(format!("{MANIFEST_NAME} がない")))?;
+    fs::write(staging.path().join(MANIFEST_NAME), manifest_bytes).map_err(PackageError::Io)?;
     for file in &manifest.files {
         let bytes = archive
             .get(&file.path)

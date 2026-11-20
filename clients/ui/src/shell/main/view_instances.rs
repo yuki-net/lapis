@@ -21,6 +21,102 @@ struct TabState {
 }
 
 impl Shell {
+    /// 宣言とクライアント描画器を接続する。
+    ///
+    /// 提供元 ID は宣言の識別と有効状態の更新にだけ使う。描画器は
+    /// `content_type` で共有するため、別リポジトリの拡張が同じ種別を宣言しても
+    /// 同じ native 描画器へ接続できる。
+    pub(crate) fn sync_extension_declarations(
+        &mut self,
+        declarations: impl IntoIterator<
+            Item = (
+                String,
+                Vec<(
+                    extension_ui_contract::ContributedView,
+                    extension_ui_contract::UiContribution,
+                )>,
+            ),
+        >,
+        cx: &mut Context<Self>,
+    ) -> Result<(), extension_ui_contract::FeatureId> {
+        let declarations = declarations.into_iter().collect::<Vec<_>>();
+        let removed = self
+            .feature_registry
+            .sync_providers(declarations.iter().cloned())?;
+        for (_, views) in &declarations {
+            for (view, _) in views {
+                let id = ViewId::new(view.id.clone());
+                self.feature_registry.set_view_presentation(
+                    &id,
+                    match view.default_zone {
+                        extension_ui_contract::ContributedZone::Main => ZonePosition::Main,
+                        extension_ui_contract::ContributedZone::Left => ZonePosition::Left,
+                        extension_ui_contract::ContributedZone::Bottom => ZonePosition::Bottom,
+                        extension_ui_contract::ContributedZone::Right => ZonePosition::Right,
+                    },
+                    view.multiple_instances,
+                    view.open_command.clone().map(Into::into),
+                );
+                self.shell.hidden_view_types.remove(&id);
+            }
+        }
+        for view in removed {
+            self.shell.hidden_view_types.insert(view);
+        }
+        let views = self
+            .feature_registry
+            .provider_view_ids()
+            .collect::<Vec<_>>();
+        for view in views {
+            if self.feature_registry.declaration(view).is_some()
+                && self.feature_registry.lifecycle(view).is_some()
+            {
+                self.shell.unregistered_view_types.remove(view);
+            }
+        }
+        self.synchronize_view_instances(cx);
+        self.refresh_feature_activation(cx);
+        cx.notify();
+        Ok(())
+    }
+
+    /// 目録と実際に稼働中の拡張から、公開する View を更新する。
+    pub(crate) fn sync_extension_availability(
+        &mut self,
+        live: impl IntoIterator<Item = String>,
+        catalog: impl IntoIterator<Item = String>,
+        cx: &mut Context<Self>,
+    ) {
+        for view in self
+            .feature_registry
+            .sync_provider_availability(live, catalog)
+        {
+            self.shell.hidden_view_types.insert(view);
+        }
+        self.synchronize_view_instances(cx);
+        self.refresh_feature_activation(cx);
+        cx.notify();
+    }
+
+    /// クライアント native 描画器をコンテンツ種別で登録する。
+    pub(crate) fn register_content_renderer(
+        &mut self,
+        content_type: &str,
+        renderer: Rc<RefCell<dyn ViewLifecycle>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.feature_registry
+            .register_content_renderer(content_type, renderer.clone());
+        let views = self
+            .feature_registry
+            .connect_renderer(content_type, renderer);
+        for view in views {
+            self.shell.unregistered_view_types.remove(&view);
+        }
+        self.synchronize_view_instances(cx);
+        cx.notify();
+    }
+
     /// 個体を所有する機能をレジストリへ登録し、タブとの配線を始める。
     ///
     /// Window ごとに1回だけ呼ぶ。以降のタブの生成・表示・終了は、登録した
@@ -34,6 +130,9 @@ impl Shell {
     ) {
         self.feature_registry
             .register_view_lifecycle(view.clone(), lifecycle);
+        if self.feature_registry.declaration(&view).is_some() {
+            self.shell.unregistered_view_types.remove(&view);
+        }
         // 機能の外部変更通知を、Shell の再同期へ繋ぐ。変更は画面全体ではなく
         // 該当 View の個体だけに配る。
         let shell = cx.entity().downgrade();
@@ -99,12 +198,12 @@ impl Shell {
 
     /// 機能からの要求を Layout に適用する。
     fn apply_view_requests(&mut self, cx: &mut Context<Self>) {
-        for (_, request) in self.feature_registry.take_view_requests() {
+        for (view, request) in self.feature_registry.take_view_requests() {
             match request {
                 ViewRequest::BindResource { instance, resource } => {
                     self.rebind_tab_resource(&instance, resource);
                 }
-                ViewRequest::OpenTab(view) => {
+                ViewRequest::OpenTab => {
                     self.open_new_tab_for_view(view, cx);
                 }
             }
@@ -159,25 +258,53 @@ impl Shell {
     /// 同じ View のタブを、現在のパネルと同じ位置に1つ増やす。
     ///
     /// 個体化する View はタブごとに独立した実体を持つため、2つ目は新しい個体になる。
-    fn open_new_tab_for_view(&mut self, view: ViewId, cx: &mut Context<Self>) {
+    pub(super) fn open_new_tab_for_view(&mut self, view: ViewId, cx: &mut Context<Self>) {
+        let Some(declaration) = self.feature_registry.declaration(&view) else {
+            return;
+        };
+        if !self
+            .feature_registry
+            .can_create_view(&view, declaration.instance_policy)
+        {
+            return;
+        }
+        let policy = declaration.instance_policy;
+        let default_zone = declaration.default_zone.unwrap_or(ZonePosition::Bottom);
         let position = self
             .shell
             .focused_panel
             .as_ref()
             .and_then(|panel| self.shell.layout.zone_for_panel(panel))
             .filter(|position| *position != ZonePosition::Main)
-            .unwrap_or(ZonePosition::Bottom);
-        let Ok(instance) = self.shell.next_tool_instance(&view) else {
-            return;
+            .unwrap_or(default_zone);
+        let tab = match policy {
+            extension_ui_contract::ToolInstancePolicy::Shared => self.shared_tab_for_view(&view),
+            extension_ui_contract::ToolInstancePolicy::Multiple => {
+                let Ok(instance) = self.shell.next_tool_instance(&view) else {
+                    return;
+                };
+                self.new_tab_for(&view, instance, None)
+            }
         };
-        let tab = self.new_tab_for(&view, instance, None);
         if let Ok(panel) = self.shell.layout.open_tab(position, tab) {
+            let actual_zone = self.shell.layout.zone_for_panel(&panel).unwrap_or(position);
             self.shell.layout.set_panel_open(&panel, true);
-            self.shell.layout.set_zone_open(position, true);
+            self.shell.layout.set_zone_open(actual_zone, true);
             self.shell.focused_panel = Some(panel);
         }
         self.refresh_feature_activation(cx);
         cx.notify();
+    }
+
+    /// 単一 View は復元済みの個体を再利用し、Resource を置き換えない。
+    pub(super) fn shared_tab_for_view(&self, view: &ViewId) -> PanelTab {
+        self.shell
+            .layout
+            .placements()
+            .into_iter()
+            .map(|(tab, _)| tab)
+            .find(|tab| tab.view_id() == Some(view))
+            .unwrap_or_else(|| PanelTab::tool(view.clone()))
     }
 
     /// 宣言に従ってタブを作る。外部 Resource を参照する宣言なら Resource を渡す。
@@ -222,6 +349,7 @@ mod tests {
         bound: Vec<(ViewInstanceId, Option<String>, bool)>,
         released: Vec<ViewInstanceId>,
         closed: Vec<ViewInstanceId>,
+        requires_confirmation: bool,
     }
 
     impl ViewLifecycle for RecordingLifecycle {
@@ -249,6 +377,445 @@ mod tests {
         fn release(&mut self, instance: &ViewInstanceId) {
             self.released.push(instance.clone());
         }
+
+        fn requires_close_confirmation(&self, _: &ViewInstanceId, _: &App) -> bool {
+            self.requires_confirmation
+        }
+    }
+
+    #[gpui::test]
+    fn declared_view_rekeys_existing_instance_and_preserves_resource(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx);
+            let lifecycle = Rc::new(RefCell::new(RecordingLifecycle::default()));
+            let document = cx.new(|_| Empty);
+            let shell = cx.new(|cx| {
+                let mut shell = Shell::new(document.into(), HashMap::new(), cx);
+                shell.configure_view_lifecycles(
+                    lifecycle.clone(),
+                    ViewId::new(id::VIEW_TERMINAL),
+                    cx,
+                );
+                shell
+            });
+            shell.update(cx, |shell, cx| {
+                let old = ViewId::new(id::VIEW_TERMINAL);
+                let new = ViewId::new("example.extension.view");
+                shell.open_view_in_zone(ZonePosition::Bottom, old.clone(), cx);
+                let tab = shell
+                    .shell
+                    .layout
+                    .placements()
+                    .into_iter()
+                    .find(|(tab, _)| tab.view_id() == Some(&old))
+                    .unwrap()
+                    .0;
+                let instance = tab.instance_id();
+                shell.rebind_tab_resource(&instance, Some("session".into()));
+                let tab = shell
+                    .shell
+                    .layout
+                    .placements()
+                    .into_iter()
+                    .find(|(tab, _)| tab.instance_id() == instance)
+                    .unwrap()
+                    .0;
+                shell.shell.layout.set_tab_pinned(&tab, true);
+                let created = lifecycle.borrow().created.len();
+                assert!(shell.rekey_extension_view(&old, &new, cx));
+                let tab = shell
+                    .shell
+                    .layout
+                    .placements()
+                    .into_iter()
+                    .find(|(tab, _)| tab.instance_id() == instance)
+                    .unwrap()
+                    .0;
+                assert_eq!(tab.view_id(), Some(&new));
+                assert_eq!(tab.resource(), Some("session"));
+                assert!(shell.shell.layout.tab_is_pinned(&tab));
+                assert_eq!(lifecycle.borrow().created.len(), created);
+                assert!(lifecycle.borrow().closed.is_empty());
+                assert_eq!(shell.feature_registry.resolve_view(&old), new);
+                assert!(!shell.rekey_extension_view(&new, &ViewId::new(id::VIEW_FILES), cx));
+                assert_eq!(tab.view_id(), Some(&new));
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn declared_command_opens_tabs_only_while_view_is_available(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx)
+        });
+        let lifecycle = Rc::new(RefCell::new(RecordingLifecycle::default()));
+        let window = cx.add_window(|_, cx| {
+            let document = cx.new(|_| Empty);
+            let mut shell = Shell::new(document.into(), HashMap::new(), cx);
+            shell.configure_view_lifecycles(lifecycle.clone(), ViewId::new(id::VIEW_TERMINAL), cx);
+            shell.set_extension_view_command(
+                ViewId::new(id::VIEW_TERMINAL),
+                Some("lapis.terminal.open".into()),
+                ZonePosition::Right,
+                true,
+                cx,
+            );
+            shell
+        });
+        window
+            .update(cx, |shell, window, cx| {
+                shell.execute_command("lapis.terminal.open".into(), window, cx);
+                shell.execute_command("lapis.terminal.open".into(), window, cx);
+                let count = || {
+                    shell
+                        .shell
+                        .layout
+                        .placements()
+                        .iter()
+                        .filter(|(tab, _)| {
+                            tab.view_id()
+                                .is_some_and(|v| v.as_str() == id::VIEW_TERMINAL)
+                        })
+                        .count()
+                };
+                assert_eq!(count(), 2);
+                assert!(
+                    shell
+                        .shell
+                        .layout
+                        .placements()
+                        .iter()
+                        .filter(|(tab, _)| tab
+                            .view_id()
+                            .is_some_and(|v| v.as_str() == id::VIEW_TERMINAL))
+                        .all(|(_, panel)| shell.shell.layout.zone_for_panel(panel)
+                            == Some(ZonePosition::Right))
+                );
+                shell.set_view_available(ViewId::new(id::VIEW_TERMINAL), false, cx);
+                shell.execute_command("lapis.terminal.open".into(), window, cx);
+                assert_eq!(
+                    shell
+                        .shell
+                        .layout
+                        .placements()
+                        .iter()
+                        .filter(|(tab, _)| tab
+                            .view_id()
+                            .is_some_and(|v| v.as_str() == id::VIEW_TERMINAL))
+                        .count(),
+                    2
+                );
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn declared_instance_policy_reuses_existing_tabs_without_closing_them(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx)
+        });
+        let lifecycle = Rc::new(RefCell::new(RecordingLifecycle::default()));
+        let window = cx.add_window(|_, cx| {
+            let document = cx.new(|_| Empty);
+            let mut shell = Shell::new(document.into(), HashMap::new(), cx);
+            shell.configure_view_lifecycles(lifecycle.clone(), ViewId::new(id::VIEW_TERMINAL), cx);
+            shell.set_extension_view_command(
+                ViewId::new(id::VIEW_TERMINAL),
+                Some("example.open".into()),
+                ZonePosition::Bottom,
+                false,
+                cx,
+            );
+            shell
+        });
+        window
+            .update(cx, |shell, window, cx| {
+                shell.execute_command("example.open".into(), window, cx);
+                shell.execute_command("example.open".into(), window, cx);
+                let count = |shell: &Shell| {
+                    shell
+                        .shell
+                        .layout
+                        .placements()
+                        .iter()
+                        .filter(|(tab, _)| {
+                            tab.view_id()
+                                .is_some_and(|v| v.as_str() == id::VIEW_TERMINAL)
+                        })
+                        .count()
+                };
+                assert_eq!(count(shell), 1);
+                shell.set_extension_view_command(
+                    ViewId::new(id::VIEW_TERMINAL),
+                    Some("example.open".into()),
+                    ZonePosition::Bottom,
+                    true,
+                    cx,
+                );
+                shell.execute_command("example.open".into(), window, cx);
+                assert_eq!(count(shell), 2);
+                let instance = shell
+                    .shell
+                    .layout
+                    .placements()
+                    .into_iter()
+                    .find(|(tab, _)| {
+                        tab.view_id()
+                            .is_some_and(|v| v.as_str() == id::VIEW_TERMINAL)
+                    })
+                    .unwrap()
+                    .0
+                    .instance_id();
+                shell.rebind_tab_resource(&instance, Some("preserved-resource".into()));
+                shell.set_extension_view_command(
+                    ViewId::new(id::VIEW_TERMINAL),
+                    Some("example.open".into()),
+                    ZonePosition::Bottom,
+                    false,
+                    cx,
+                );
+                shell.execute_command("example.open".into(), window, cx);
+                assert_eq!(count(shell), 2);
+                assert!(
+                    shell
+                        .shell
+                        .layout
+                        .placements()
+                        .iter()
+                        .any(|(tab, _)| tab.instance_id() == instance
+                            && tab.resource() == Some("preserved-resource"))
+                );
+                assert!(lifecycle.borrow().closed.is_empty());
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn unbound_restored_resource_requires_confirmation_until_status_is_known(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx);
+            let lifecycle = Rc::new(RefCell::new(RecordingLifecycle::default()));
+            let document = cx.new(|_| Empty);
+            let shell = cx.new(|cx| {
+                let mut shell = Shell::new(document.into(), HashMap::new(), cx);
+                let view = ViewId::new(id::VIEW_TERMINAL);
+                shell.set_view_available(view.clone(), false, cx);
+                shell.configure_view_lifecycles(lifecycle, view, cx);
+                shell
+            });
+            shell.update(cx, |shell, cx| {
+                let view = ViewId::new(id::VIEW_TERMINAL);
+                let tab = PanelTab::external(view.clone(), "restored:one", Some("resource".into()));
+                shell
+                    .shell
+                    .layout
+                    .open_tab(ZonePosition::Bottom, tab.clone())
+                    .unwrap();
+                assert!(shell.tool_close_requires_confirmation(&tab, cx));
+                assert!(shell.running_work_requires_confirmation(cx));
+                shell.set_view_available(view, true, cx);
+                assert!(!shell.tool_close_requires_confirmation(&tab, cx));
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn window_close_detects_running_work_even_when_tab_is_pinned(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx);
+            let lifecycle = Rc::new(RefCell::new(RecordingLifecycle {
+                requires_confirmation: true,
+                ..Default::default()
+            }));
+            let document = cx.new(|_| Empty);
+            let shell = cx.new(|cx| {
+                let mut shell = Shell::new(document.into(), HashMap::new(), cx);
+                shell.configure_view_lifecycles(
+                    lifecycle.clone(),
+                    ViewId::new(id::VIEW_TERMINAL),
+                    cx,
+                );
+                shell
+            });
+            shell.update(cx, |shell, cx| {
+                assert!(!shell.running_work_requires_confirmation(cx));
+                shell.open_view_in_zone(ZonePosition::Bottom, ViewId::new(id::VIEW_TERMINAL), cx);
+                let tab = shell
+                    .shell
+                    .layout
+                    .placements()
+                    .into_iter()
+                    .find(|(tab, _)| {
+                        tab.view_id()
+                            .is_some_and(|v| v.as_str() == id::VIEW_TERMINAL)
+                    })
+                    .unwrap()
+                    .0;
+                shell.shell.layout.set_tab_pinned(&tab, true);
+                assert!(shell.running_work_requires_confirmation(cx));
+                lifecycle.borrow_mut().requires_confirmation = false;
+                assert!(!shell.running_work_requires_confirmation(cx));
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn closing_running_resource_can_be_cancelled(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx)
+        });
+        let lifecycle = Rc::new(RefCell::new(RecordingLifecycle {
+            requires_confirmation: true,
+            ..Default::default()
+        }));
+        let window = cx.add_window(|_, cx| {
+            let document = cx.new(|_| Empty);
+            let mut shell = Shell::new(document.into(), HashMap::new(), cx);
+            shell.configure_view_lifecycles(lifecycle.clone(), ViewId::new(id::VIEW_TERMINAL), cx);
+            shell
+        });
+        let (panel, tab, cancel, confirm) = window
+            .update(cx, |shell, window, cx| {
+                shell.open_view_in_zone(ZonePosition::Bottom, ViewId::new(id::VIEW_TERMINAL), cx);
+                let (tab, panel) = shell
+                    .shell
+                    .layout
+                    .placements()
+                    .into_iter()
+                    .find(|(tab, _)| {
+                        tab.view_id()
+                            .is_some_and(|view| view.as_str() == id::VIEW_TERMINAL)
+                    })
+                    .unwrap();
+                let labels = (
+                    shell.t("tab.close-resource.cancel"),
+                    shell.t("tab.close-resource.confirm"),
+                );
+                shell.close_tab_in_panel(
+                    panel.clone(),
+                    ZonePosition::Bottom,
+                    tab.clone(),
+                    window,
+                    cx,
+                );
+                (panel, tab, labels.0, labels.1)
+            })
+            .unwrap();
+        cx.simulate_prompt_answer(&cancel);
+        cx.run_until_parked();
+        assert!(
+            window
+                .read_with(cx, |shell, _| shell
+                    .shell
+                    .layout
+                    .panel_for_tab(&tab)
+                    .is_some())
+                .unwrap()
+        );
+        assert!(lifecycle.borrow().closed.is_empty());
+
+        window
+            .update(cx, |shell, window, cx| {
+                shell.close_tab_in_panel(
+                    panel.clone(),
+                    ZonePosition::Bottom,
+                    tab.clone(),
+                    window,
+                    cx,
+                );
+            })
+            .unwrap();
+        cx.simulate_prompt_answer(&confirm);
+        cx.run_until_parked();
+        assert!(
+            window
+                .read_with(cx, |shell, _| shell
+                    .shell
+                    .layout
+                    .panel_for_tab(&tab)
+                    .is_none())
+                .unwrap()
+        );
+        assert_eq!(lifecycle.borrow().closed, vec![tab.instance_id()]);
+    }
+
+    #[gpui::test]
+    fn persistence_can_read_owner_while_feature_is_read(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx)
+        });
+        let lifecycle = Rc::new(RefCell::new(RecordingLifecycle::default()));
+        let shell = cx.new(|cx| {
+            let document = cx.new(|_| Empty);
+            let mut shell = Shell::new(document.into(), HashMap::new(), cx);
+            shell.configure_view_lifecycles(lifecycle.clone(), ViewId::new(id::VIEW_TERMINAL), cx);
+            shell
+        });
+        cx.update(|cx| {
+            let _feature_read = lifecycle.borrow();
+            assert_eq!(
+                shell
+                    .read(cx)
+                    .view_resource_owner(&ViewId::new(id::VIEW_TERMINAL), cx),
+                None
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn extension_view_title_tracks_the_selected_language(cx: &mut gpui::TestAppContext) {
+        struct Memory;
+        impl settings::SettingsRepository for Memory {
+            fn load(&self) -> Result<settings::SettingsDocument, settings::SettingsError> {
+                Ok(settings::SettingsDocument::empty(
+                    settings::SettingsScope::User,
+                ))
+            }
+            fn save(&self, _: &settings::SettingsDocument) -> Result<(), settings::SettingsError> {
+                Ok(())
+            }
+        }
+        let settings = desktop_client::SettingsSession::load(std::sync::Arc::new(Memory)).unwrap();
+        let contributions = settings.extension_contributions();
+        let generation = contributions.begin_reload();
+        contributions.apply(generation, serde_json::from_value(serde_json::json!({
+            "extensions":[{"id":"example.terminal","version":"1.0.0","installed":true,"enabled":true,"active":true}],
+            "contributions":[{"extension_id":"example.terminal",
+                "declaration":{"schema":1,"translations":[
+                    {"target":"example.terminal","locale":"en-US","messages":{"terminal.title":"Console"}},
+                    {"target":"example.terminal","locale":"ja-JP","messages":{"terminal.title":"端末"}}
+                ]},
+                "views":{"schema":1,"views":[{"id":"example.terminal.view","content_type":"example.grid.v1","title":"terminal.title","default_zone":"bottom"}]}}]
+        })).unwrap()).unwrap();
+        let snapshot = contributions.snapshot().unwrap();
+        cx.update(|cx| {
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx)
+        });
+        let shell = cx.new(|cx| {
+            let document = cx.new(|_| Empty);
+            Shell::new(document.into(), HashMap::new(), cx)
+        });
+        shell.update(cx, |shell, cx| {
+            let view = ViewId::new(id::VIEW_TERMINAL);
+            let tab = PanelTab::tool(view.clone());
+            shell.set_extension_view_title(
+                view,
+                snapshot,
+                "example.terminal".into(),
+                "terminal.title".into(),
+                cx,
+            );
+            shell.set_locale("en-US".into(), cx);
+            assert_eq!(shell.tab_title(ZonePosition::Bottom, &tab), "Console");
+            shell.set_locale("ja-JP".into(), cx);
+            assert_eq!(shell.tab_title(ZonePosition::Bottom, &tab), "端末");
+        });
     }
 
     #[gpui::test]
@@ -287,6 +854,72 @@ mod tests {
                     .instance_view(&tab.instance_id())
                     .is_some(),
                 "個体所有者が作った実体を Shell が表示する"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn external_declaration_uses_the_shared_content_renderer_without_provider_binding(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx)
+        });
+        let lifecycle = Rc::new(RefCell::new(RecordingLifecycle::default()));
+        let shell = cx.new(|cx| {
+            let document = cx.new(|_| Empty);
+            let mut shell = Shell::new(document.into(), HashMap::new(), cx);
+            shell.register_content_renderer("example.grid.v1", lifecycle.clone(), cx);
+            shell
+        });
+        shell.update(cx, |shell, cx| {
+            let contributed = extension_ui_contract::ContributedView {
+                id: "example.extension.view".into(),
+                content_type: "example.grid.v1".into(),
+                title: "view.title".into(),
+                default_zone: extension_ui_contract::ContributedZone::Bottom,
+                multiple_instances: true,
+                open_command: Some("example.extension.open".into()),
+            };
+            let contribution = extension_ui_contract::UiContribution::view(
+                contributed.id.clone(),
+                UiSlot::BottomDock,
+                contributed.title.clone(),
+                "grid",
+                10,
+            )
+            .multiple_instances()
+            .references_external_resource();
+            shell
+                .sync_extension_declarations(
+                    [(
+                        "example.extension".to_owned(),
+                        vec![(contributed, contribution)],
+                    )],
+                    cx,
+                )
+                .unwrap();
+            let view = ViewId::new("example.extension.view");
+            shell.open_view_in_zone(ZonePosition::Bottom, view.clone(), cx);
+            let tab = shell
+                .shell
+                .layout
+                .placements()
+                .into_iter()
+                .find(|(tab, _)| tab.view_id() == Some(&view))
+                .map(|(tab, _)| tab)
+                .unwrap();
+            assert_eq!(lifecycle.borrow().created, vec![tab.instance_id()]);
+            shell.rebind_tab_resource(&tab.instance_id(), Some("resource".into()));
+            shell
+                .sync_extension_declarations(Vec::<(String, Vec<_>)>::new(), cx)
+                .unwrap();
+            assert!(shell.feature_registry.declaration(&view).is_none());
+            assert!(
+                shell
+                    .feature_registry
+                    .instance_view(&tab.instance_id())
+                    .is_some()
             );
         });
     }

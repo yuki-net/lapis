@@ -65,6 +65,14 @@ pub(crate) struct Shell {
     document_view: AnyView,
     focus_handle: FocusHandle,
     feature_registry: FeatureRegistry,
+    extension_view_titles: HashMap<
+        ViewId,
+        (
+            desktop_client::ExtensionContributionSnapshot,
+            String,
+            localization::MessageId,
+        ),
+    >,
     notification_center: gpui::Entity<crate::notification::Center>,
     locale: Localizer,
     languages: language::LanguageRegistry,
@@ -242,6 +250,7 @@ impl Shell {
             document_view,
             focus_handle: cx.focus_handle(),
             feature_registry,
+            extension_view_titles: HashMap::new(),
             notification_center: center,
             locale: Localizer::bundled(),
             languages: language::LanguageRegistry::bundled(),
@@ -282,10 +291,10 @@ impl Shell {
     pub(crate) fn with_lifecycle<R>(
         &self,
         view: &ViewId,
-        f: impl FnOnce(&mut dyn crate::extension_ui::ViewLifecycle) -> R,
+        f: impl FnOnce(&dyn crate::extension_ui::ViewLifecycle) -> R,
     ) -> Option<R> {
         let lifecycle = self.feature_registry.lifecycle(view)?;
-        Some(f(&mut *lifecycle.borrow_mut()))
+        Some(f(&*lifecycle.borrow()))
     }
 
     /// タブの Resource を個体へ再適用する。復元したタブと実体を一致させる。
@@ -312,6 +321,36 @@ impl Shell {
     ) -> Option<editor_core::ConversationId> {
         self.with_lifecycle(view, |lifecycle| lifecycle.resource_owner(cx))
             .flatten()
+    }
+
+    pub(crate) fn tool_close_requires_confirmation(&self, tab: &PanelTab, cx: &gpui::App) -> bool {
+        // 復元や再接続が終わる前は Resource の稼働状態を判定できない。
+        if tab.resource().is_some()
+            && (self
+                .feature_registry
+                .instance_view(&tab.instance_id())
+                .is_none()
+                || tab
+                    .view_id()
+                    .is_none_or(|view| self.feature_registry.lifecycle(view).is_none()))
+        {
+            return true;
+        }
+        tab.view_id()
+            .and_then(|view| {
+                self.with_lifecycle(view, |lifecycle| {
+                    lifecycle.requires_close_confirmation(&tab.instance_id(), cx)
+                })
+            })
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn running_work_requires_confirmation(&self, cx: &gpui::App) -> bool {
+        self.shell
+            .layout
+            .placements()
+            .iter()
+            .any(|(tab, _)| self.tool_close_requires_confirmation(tab, cx))
     }
     fn refresh_feature_activation(&mut self, cx: &mut Context<Self>) {
         self.synchronize_view_instances(cx);
@@ -453,6 +492,142 @@ impl Shell {
         let _ = self.locale.set_active(&locale);
         self.notification_center
             .update(cx, |center, cx| center.set_locale(&locale, cx));
+        cx.notify();
+    }
+    /// 新規 View の生成だけを制御する。既存のタブは一時切断で終了しない。
+    pub(crate) fn set_view_available(
+        &mut self,
+        view: ViewId,
+        available: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.feature_registry.set_view_available(view, available);
+        self.synchronize_view_instances(cx);
+        cx.notify();
+    }
+
+    /// View の登録名だけを差し替え、タブ個体と接続中の Resource を維持する。
+    pub(crate) fn can_rekey_extension_view(&self, old: &ViewId, new: &ViewId) -> bool {
+        self.feature_registry.can_rekey_view(old, new)
+    }
+    pub(crate) fn rekey_extension_view(
+        &mut self,
+        old: &ViewId,
+        new: &ViewId,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.feature_registry.rekey_view(old, new) {
+            return false;
+        }
+        let tabs = self
+            .shell
+            .layout
+            .placements()
+            .into_iter()
+            .map(|(tab, _)| tab)
+            .filter(|tab| tab.view_id() == Some(old))
+            .collect::<Vec<_>>();
+        for tab in tabs {
+            self.shell
+                .layout
+                .rebind_tab(&tab, tab.with_view(new.clone()));
+        }
+        if let Some(value) = self.extension_view_titles.remove(old) {
+            self.extension_view_titles.insert(new.clone(), value);
+        }
+        if self.shell.hidden_view_types.remove(old) {
+            self.shell.hidden_view_types.insert(new.clone());
+        }
+        self.shell.unregistered_view_types.remove(old);
+        self.shell.unregistered_view_types.remove(new);
+        self.synchronize_view_instances(cx);
+        self.refresh_feature_activation(cx);
+        cx.notify();
+        true
+    }
+    /// 拡張の表示だけを隠す。Layout の保存値と他の非表示条件は変えない。
+    pub(crate) fn set_view_hidden(&mut self, view: ViewId, hidden: bool, cx: &mut Context<Self>) {
+        let changed = if hidden {
+            self.shell.hidden_view_types.insert(view)
+        } else {
+            self.shell.hidden_view_types.remove(&view)
+        };
+        if changed {
+            self.synchronize_view_instances(cx);
+            self.refresh_feature_activation(cx);
+            cx.notify();
+        }
+    }
+    /// View の表示名は提供元の翻訳を使い、選択言語の変更時にも解決し直す。
+    pub(crate) fn set_extension_view_title(
+        &mut self,
+        view: ViewId,
+        snapshot: desktop_client::ExtensionContributionSnapshot,
+        owner: String,
+        title: localization::MessageId,
+        cx: &mut Context<Self>,
+    ) {
+        self.extension_view_titles
+            .insert(view, (snapshot, owner, title));
+        cx.notify();
+    }
+
+    pub(crate) fn set_extension_view_command(
+        &mut self,
+        view: ViewId,
+        command: Option<extension_ui_contract::CommandId>,
+        default_zone: ZonePosition,
+        multiple_instances: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.feature_registry
+            .set_view_default_zone(&view, default_zone);
+        self.feature_registry.set_view_instance_policy(
+            &view,
+            if multiple_instances {
+                extension_ui_contract::ToolInstancePolicy::Multiple
+            } else {
+                extension_ui_contract::ToolInstancePolicy::Shared
+            },
+        );
+        if !self.feature_registry.set_view_open_command(view, command) {
+            tracing::warn!("拡張の View コマンドが重複しています");
+        }
+        cx.notify();
+    }
+
+    fn contribution_title(&self, contribution: &extension_ui_contract::UiContribution) -> String {
+        contribution
+            .view
+            .as_ref()
+            .and_then(|view| self.extension_view_titles.get(view))
+            .map(|(snapshot, owner, title)| {
+                snapshot.resolve_text(owner, self.locale.active(), title)
+            })
+            .unwrap_or_else(|| self.locale.resolve(&contribution.title))
+    }
+
+    pub(crate) fn command_search_provider(
+        &self,
+        keymap: &crate::keymap::KeymapRegistry,
+    ) -> crate::features::command_search::CommandSearchProvider {
+        crate::features::command_search::CommandSearchProvider::from_registry(
+            &self.feature_registry,
+            &self.locale,
+            keymap,
+            |contribution| self.contribution_title(contribution),
+        )
+    }
+    pub(crate) fn set_locale_packs(
+        &mut self,
+        packs: &[localization::LocalePack],
+        locale: &localization::LocaleId,
+        cx: &mut Context<Self>,
+    ) {
+        let _ = self.locale.replace_external(packs);
+        let _ = self.locale.set_active(locale);
+        self.notification_center
+            .update(cx, |center, cx| center.set_locale_packs(packs, locale, cx));
         cx.notify();
     }
     pub(crate) fn request_document_close(

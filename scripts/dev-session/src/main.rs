@@ -51,6 +51,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let bin = session.join("bin");
     fs::create_dir(&bin)?;
     copy_binary(root, &bin, "lapis-host")?;
+    copy_binary(root, &bin, "lapis-extension-host")?;
     let status = if host_only {
         let mut host = Command::new(bin.join(format!("lapis-host{}", env::consts::EXE_SUFFIX)));
         host.current_dir(root)
@@ -67,8 +68,12 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     } else {
         copy_binary(root, &bin, "lapis-web-bridge")?;
         let desktop = copy_binary(root, &bin, "lapis")?;
-        let hosts = session.join("hosts");
-        fs::create_dir(&hosts)?;
+        let hosts = argument_value(&arguments, "--local-host-directory")?
+            .map(PathBuf::from)
+            .unwrap_or_else(|| session.join("hosts"));
+        if !uses_host_file(&arguments) {
+            prepare_extensions(root, &session, &hosts)?;
+        }
         // Host を別の Run で起動する場合は、招待が現れるまで待ってから接続する。
         wait_for_host_file(root, &arguments)?;
         eprintln!(
@@ -76,6 +81,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
             session.file_name().unwrap().to_string_lossy()
         );
         let mut command = Command::new(desktop);
+        command.env("LAPIS_DEV_BUNDLED_REFRESH", "1");
         if env::var_os("LAPIS_WEB_DIST").is_none() {
             command.env("LAPIS_WEB_DIST", root.join("clients/web/dist"));
         }
@@ -122,6 +128,60 @@ fn has_flag(arguments: &[OsString], flag: &str) -> bool {
     arguments
         .iter()
         .any(|argument| argument.as_os_str() == OsStr::new(flag))
+}
+
+fn argument_value(arguments: &[OsString], flag: &str) -> Result<Option<OsString>, String> {
+    let mut found = None;
+    let mut values = arguments.iter();
+    while let Some(argument) = values.next() {
+        if argument == flag {
+            found = Some(
+                values
+                    .next()
+                    .ok_or_else(|| format!("{flag} の値がありません"))?
+                    .clone(),
+            );
+        }
+    }
+    Ok(found)
+}
+
+fn prepare_extensions(
+    root: &Path,
+    session: &Path,
+    hosts: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let extension_root = root.join("extensions");
+    if !extension_root.is_dir() {
+        // テスト用の隔離 worktree には拡張ソースが無い。Client が空の保存先を
+        // 参照できるようディレクトリだけを用意する。
+        fs::create_dir_all(hosts)?;
+        return Ok(());
+    }
+    let dev_bundle = root.join("scripts/extensions/dev_bundle.py");
+    if !dev_bundle.is_file() {
+        return Err(format!(
+            "development extension helper is missing: {}",
+            dev_bundle.display()
+        )
+        .into());
+    }
+    let python = if cfg!(windows) { "python" } else { "python3" };
+    let status = Command::new(python)
+        .current_dir(root)
+        .args(["-m", "scripts.extensions.dev_bundle"])
+        .arg(&extension_root)
+        .arg(session)
+        .arg(root.join("target/dev-bundled-components"))
+        .arg("--hosts")
+        .arg(hosts)
+        .arg("--key-file")
+        .arg(root.join("target/dev-state/extension-signing-key"))
+        .status()?;
+    if !status.success() {
+        return Err("開発用拡張の準備に失敗しました".into());
+    }
+    Ok(())
 }
 
 /// ランチャー自身のフラグを取り除いた引数を返す。
@@ -180,6 +240,8 @@ fn hot_reload(root: &Path, arguments: &[OsString]) -> Result<i32, Box<dyn std::e
                 "host",
                 "--package",
                 "web-bridge",
+                "--package",
+                "extension-runtime",
                 "--bins",
             ])
             .status();
@@ -201,6 +263,14 @@ fn hot_reload(root: &Path, arguments: &[OsString]) -> Result<i32, Box<dyn std::e
         fs::create_dir(&bin)?;
         let host = bin.join(format!("lapis-host{}", env::consts::EXE_SUFFIX));
         fs::copy(&built, &host)?;
+        let extension_host_name = format!("lapis-extension-host{}", env::consts::EXE_SUFFIX);
+        fs::copy(
+            built
+                .parent()
+                .ok_or("Host build directory is unavailable")?
+                .join(&extension_host_name),
+            bin.join(&extension_host_name),
+        )?;
         let bridge_name = format!("lapis-web-bridge{}", env::consts::EXE_SUFFIX);
         fs::copy(
             built
@@ -209,8 +279,12 @@ fn hot_reload(root: &Path, arguments: &[OsString]) -> Result<i32, Box<dyn std::e
                 .join(&bridge_name),
             bin.join(&bridge_name),
         )?;
-        let hosts = session.join("hosts");
-        fs::create_dir(&hosts)?;
+        let hosts = argument_value(arguments, "--local-host-directory")?
+            .map(PathBuf::from)
+            .unwrap_or_else(|| session.join("hosts"));
+        if !uses_host_file(arguments) {
+            prepare_extensions(root, &session, &hosts)?;
+        }
         // Desktop と同じく、Host を別の Run で起動していれば招待を待ってから接続する。
         wait_for_host_file(root, arguments)?;
         // dx は --args= を空白で分割するため、worktree ルートからの相対パスを使う。
@@ -239,6 +313,7 @@ fn hot_reload(root: &Path, arguments: &[OsString]) -> Result<i32, Box<dyn std::e
             session.file_name().unwrap().to_string_lossy()
         );
         let mut command = Command::new(&dx);
+        command.env("LAPIS_DEV_BUNDLED_REFRESH", "1");
         if env::var_os("LAPIS_WEB_DIST").is_none() {
             command.env("LAPIS_WEB_DIST", root.join("clients/web/dist"));
         }
@@ -377,6 +452,23 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn last_host_directory_is_used_for_extension_trust() {
+        let arguments = vec![
+            OsString::from("--local-host-directory"),
+            OsString::from("first"),
+            OsString::from("--local-host-directory"),
+            OsString::from("second"),
+        ];
+        assert_eq!(
+            argument_value(&arguments, "--local-host-directory").unwrap(),
+            Some("second".into())
+        );
+        assert!(
+            argument_value(&["--local-host-directory".into()], "--local-host-directory").is_err()
+        );
+    }
 
     #[test]
     fn launcher_flags_are_not_forwarded_to_the_app() {

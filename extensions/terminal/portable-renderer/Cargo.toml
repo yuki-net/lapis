@@ -1,0 +1,10 @@
+[package]
+name = "terminal-portable-renderer"
+version = "0.1.0"
+edition = "2024"
+description = "Portable terminal screen model for the terminal extension."
+license = "MIT"
+
+[dependencies]
+terminal = { package = "terminal-contract", path = "../contract" }
+vt100 = "=0.16.2"

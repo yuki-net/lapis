@@ -58,7 +58,7 @@ Desktopは招待ファイルから証明書と一回限りのtokenを取り込�
 - 接続が失われても、実行Host上のTerminalやAgentが終了したとは推測しません。
 - 再接続では権限と実行状態を再確認し、古いClient cacheを最新のsnapshotに整合させます。
 - Documentの変更・保存はrevision等を使って競合を検出し、古い内容で黙って上書きしません。未送信の編集とHostの変更が競合した場合は、Hostの本文でローカル編集を置き換えず、外部変更として記録して復旧できる状態を保ちます。
-- Terminalの画面・mode・端末問い合わせへの応答はHostのTerminal Engineが所有します。ClientはSnapshot / Deltaのrevisionを検証し、欠落時には最新Snapshotへ再同期します。raw VT/ANSIやbyte offsetをClientへ公開しません。
+- Terminal 拡張は Host の汎用 PTY から出力 byte 列を受け取り、Client は出力の offset と欠落を確認して画面モデルへ反映します。端末問い合わせへの応答も Client の描画器が扱います。
 - Messageサイズ、request数、session数、timeoutなど、必要な資源上限を設けます。
 
 ## 最低限の確認項目
@@ -69,7 +69,7 @@ Desktopは招待ファイルから証明書と一回限りのtokenを取り込�
 
 Client は定期ポーリングで状態を取りに行かず、Host のイベントを契機に更新する。
 
-- Workbench は `workbench.changed`、Terminal は `terminal.delta` / `terminal.status`、Document は `document.*` を購読する。
+- Workbench は `workbench.changed`、Document は `document.*` を購読する。Terminal は拡張操作で出力を取得する。
 - 外部ファイル変更は Host の Workspace 監視から `files.changed`、Task の変更は `task.changed` として publish する。どちらも変化の通知だけを運び、状態の正本は各 snapshot とする。
 - 購読は `DocumentConnection::subscribe` / `TaskConnection::subscribe` のように Adapter が通知 channel を返す。購読できない接続では初回取得だけを行う。
 - 通知の欠落・購読の切断時は Snapshot と revision で再同期し、購読を張り直す。再接続待ちの短い backoff はタイマーで持ってよいが、通常時の定期 refresh は行わない。
@@ -153,41 +153,9 @@ delta として受け取る。protocol 0.13 で追加した契約で、Desktop�
 
 ## Terminal の同期契約
 
-Terminal の正規状態は Host が所有する。PTY の raw bytes は Host 内部の
-Terminal Engine にだけ渡し、Client へは `TerminalSnapshot` と
-`TerminalDelta` で構成した Lapis Terminal Model を送る。Client は raw VT/ANSI
-を解釈せず、受信した screen、cursor、mode、revision を表示用 cache に適用する。
+Terminal のセッション操作は `host.extensions.dispatch` で拡張へ送り、`terminal.v1.*` の DTO を使う。PTY は Host の汎用プロセス能力が所有し、拡張がセッションを管理する。Desktop と Web は出力バイト列をそれぞれの描画器で解釈する。
 
-- 初回 attach、再接続、revision gap、状態不一致では Snapshot を使う。
-- 通常更新は連続した `TerminalDelta.revision` の changed rows を使う。
-- `terminal.input` / `terminal.resize` / `terminal.terminate` の応答は受理だけを返し、
-  画面や状態は載せない。状態は `terminal.delta` / `terminal.status` イベントで届く。
-- 入力と resize は操作権を持つ Session だけが行える。`terminal.claim` で取得し、
-  `terminal.release` または接続断で解放する。操作権の変更は `terminal.owner` で通知する。
-  `TerminalSnapshot.owner` も現在の操作権を表すため、Client は Snapshot からの復旧時にも
-  owner を反映し、通知が欠けた場合でも表示を Host と一致させる。
-- Client から Host へは `TerminalInput::Text`、`Key`、`Paste` を送り、PTY bytes
-  への変換と bracketed paste の処理は Host の Terminal Engine 境界で行う。
-- Host は `terminal.list_profiles` で起動可能な `TerminalProfile`（program、args、env）を
-  公開し、`terminal.start` は raw shell ではなく profile ID を受け取る。 Client は一覧に
-  ない profile ID を実行できず、未指定時は Host の既定 profile を使う。 Local も Remote も
-  同じ Host Runtime と Engine を通るため、IME の確定 text、bracketed paste、scrollback の
-  上限と差分再同期は同じ契約になる。
-- attach、表示、focus、別 Client の接続では PTY size を変更しない。Client の
-  panel 幅に追従した resize など、明示的な resize 操作だけが canonical size と
-  Engine size を更新し、全 Client に通知する。
-- Client の切断、Window の close、画面の切替は Terminal process を終了させない。
-  `terminal.terminate` を送るのは Terminal タブを閉じる操作と、右クリックメニューで
-  明示的に「終了」を選ぶ操作で、いずれも Host の PTY を終了させる。
-  Client はこのとき表示中の Terminal を cache から除き、再アタッチの対象に戻さない。
-
-この契約により、Desktop は GPUI Renderer、将来の Mobile は native Renderer として
-同じ Model を描画できる。Agent Session、ACP、Chat UI、provider 固有の handoff は
-Terminal の同期契約に含めない。
-
-Scrollback は Snapshot では bounded な履歴全体を含め、Delta では追加行と削除数を
-送る。履歴の再構成が必要な resize、alternate screen 切替、状態不一致では reset
-Delta または Snapshot を使い、Client 側で履歴が無制限に増えないようにする。
+接続断はセッションの終了を意味しない。再接続時は拡張の一覧と attach で復帰し、タブの明示的な終了では close を送る。詳細な操作と DTO は `extensions/terminal/api` を参照する。
 
 ## Document の編集権
 

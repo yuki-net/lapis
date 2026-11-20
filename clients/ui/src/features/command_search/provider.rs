@@ -1,5 +1,5 @@
 use crate::{extension_ui::FeatureRegistry, keymap::KeymapRegistry, localization::Localizer};
-use extension_ui_contract::{CommandId, UiSlot};
+use extension_ui_contract::{CommandId, UiContribution, UiSlot};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SearchItem {
@@ -22,8 +22,9 @@ impl CommandSearchProvider {
         registry: &FeatureRegistry,
         locale: &Localizer,
         keymap: &KeymapRegistry,
+        view_title: impl Fn(&UiContribution) -> String,
     ) -> Self {
-        let items = registry
+        let mut items: Vec<_> = registry
             .contributions(UiSlot::CommandPalette)
             .into_iter()
             .filter_map(|contribution| {
@@ -35,6 +36,15 @@ impl CommandSearchProvider {
                 })
             })
             .collect();
+        for (view, command) in registry.view_open_commands() {
+            if let Some(contribution) = registry.declaration(view) {
+                items.push(SearchItem {
+                    title: view_title(contribution),
+                    shortcut: keymap.shortcut_label(command),
+                    command: command.clone(),
+                });
+            }
+        }
         Self { items }
     }
 
@@ -82,6 +92,39 @@ impl SearchProvider for CommandSearchProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extension_commands_appear_only_when_the_view_is_available() {
+        use crate::extension_ui::ViewLifecycle;
+        use extension_ui_contract::{FeatureDescriptor, UiContribution, UiSlot, ViewId};
+        use std::{cell::RefCell, rc::Rc};
+
+        struct Lifecycle;
+        impl ViewLifecycle for Lifecycle {}
+        let mut registry = FeatureRegistry::default();
+        let view = ViewId::new("example.view");
+        registry
+            .register(
+                FeatureDescriptor::core("example").contributes(
+                    UiContribution::view(view.clone(), UiSlot::BottomDock, "title", "icon", 0)
+                        .multiple_instances(),
+                ),
+            )
+            .unwrap();
+        registry.register_view_lifecycle(view.clone(), Rc::new(RefCell::new(Lifecycle)));
+        registry.set_view_open_command(view.clone(), Some("example.open".into()));
+        let locale = Localizer::bundled();
+        let keymap = KeymapRegistry::default();
+        let provider = CommandSearchProvider::from_registry(&registry, &locale, &keymap, |_| {
+            "拡張の画面".to_owned()
+        });
+        assert_eq!(provider.search("拡張")[0].command.as_str(), "example.open");
+        registry.set_view_available(view, false);
+        let provider = CommandSearchProvider::from_registry(&registry, &locale, &keymap, |_| {
+            "拡張の画面".to_owned()
+        });
+        assert!(provider.search("拡張").is_empty());
+    }
 
     fn item(id: &str, title: &str) -> SearchItem {
         SearchItem {

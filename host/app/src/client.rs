@@ -40,6 +40,70 @@ pub(crate) enum Client {
     Embedded(EmbeddedClient),
     Quic(QuicConnection),
 }
+
+/// 拡張操作で認証済み Session を共有する接続。Drop は Host の資源を終了しない。
+#[derive(Clone)]
+pub struct ExtensionConnection {
+    client: Client,
+    embedded: Option<BackendHost>,
+    _embedded_guard: Option<Arc<EmbeddedExtensionGuard>>,
+}
+
+struct EmbeddedExtensionGuard {
+    host: BackendHost,
+    session: SessionId,
+    workspace: WorkspaceId,
+}
+
+impl Drop for EmbeddedExtensionGuard {
+    fn drop(&mut self) {
+        self.host
+            .extension_session_disconnected(&self.session, &self.workspace);
+    }
+}
+
+impl ExtensionConnection {
+    pub fn workspace_id(&self) -> &WorkspaceId {
+        self.client.workspace_id()
+    }
+
+    /// 再接続した場合は Host が新しい Session ID を発行する。
+    pub fn session_id(&self) -> Option<SessionId> {
+        self.client.session_id()
+    }
+
+    /// 呼び出しは worker で行う。
+    pub fn dispatch(
+        &self,
+        request: client_api::HostExtensionDispatchRequest,
+    ) -> Result<client_api::HostExtensionDispatchResponse, BackendServiceError> {
+        if let Some(host) = &self.embedded {
+            let session = self
+                .client
+                .session_id()
+                .ok_or(BackendServiceError::Unavailable)?;
+            return host
+                .dispatch_extension(&request, &session, self.client.workspace_id())
+                .map_err(BackendServiceError::Connection);
+        }
+        match self
+            .client
+            .request(RequestBody::HostExtensionDispatch(request.clone()))?
+        {
+            ResponseBody::HostExtensionDispatch(response)
+                if response.id == request.id && response.operation == request.operation =>
+            {
+                Ok(response)
+            }
+            ResponseBody::Error(error) => Err(BackendServiceError::Connection(
+                error
+                    .detail
+                    .unwrap_or_else(|| error.code.as_str().to_owned()),
+            )),
+            _ => Err(BackendServiceError::Unavailable),
+        }
+    }
+}
 impl Client {
     pub(crate) fn workspace_id(&self) -> &WorkspaceId {
         match self {
@@ -168,9 +232,6 @@ impl BackendClient {
     pub fn tasks(&self) -> Arc<dyn task::TaskConnection> {
         Arc::new(crate::features::HostTasks::new(self.clone()))
     }
-    pub fn terminals(&self) -> Arc<dyn terminal::TerminalBackend> {
-        Arc::new(crate::terminal::HostTerminals::new(self.clone()))
-    }
     pub fn processes(&self) -> Arc<dyn process::ProcessConnection> {
         Arc::new(crate::features::HostProcesses::new(self.clone()))
     }
@@ -267,6 +328,127 @@ impl BackendClient {
         }
     }
 
+    /// 拡張の次回起動時の有効状態を保存する。
+    pub fn set_extension_enabled(
+        &self,
+        workspace: WorkspaceId,
+        id: String,
+        enabled: bool,
+    ) -> Result<client_api::HostExtensionSetEnabledResponse, BackendServiceError> {
+        if let Source::Embedded(host) = &self.source {
+            return match host.set_extension_enabled(&id, enabled) {
+                Ok(Some(_)) => Ok(client_api::HostExtensionSetEnabledResponse { id, enabled }),
+                Ok(None) => Err(BackendServiceError::Connection(
+                    "extension not found".to_owned(),
+                )),
+                Err(error) => Err(BackendServiceError::Connection(error)),
+            };
+        }
+        let request = client_api::HostExtensionSetEnabledRequest { id, enabled };
+        match self
+            .connect_workspace(workspace)?
+            .request(RequestBody::HostExtensionSetEnabled(request))?
+        {
+            ResponseBody::HostExtensionSetEnabled(response) => Ok(response),
+            ResponseBody::Error(error) => Err(BackendServiceError::Connection(
+                error
+                    .detail
+                    .unwrap_or_else(|| error.code.as_str().to_owned()),
+            )),
+            _ => Err(BackendServiceError::Unavailable),
+        }
+    }
+
+    pub fn extension_capabilities(
+        &self,
+        workspace: WorkspaceId,
+        id: String,
+    ) -> Result<client_api::HostExtensionCapabilitiesResponse, BackendServiceError> {
+        if let Source::Embedded(host) = &self.source {
+            return host
+                .extension_capabilities(&id)
+                .map_err(BackendServiceError::Connection);
+        }
+        let request = client_api::HostExtensionCapabilitiesRequest { id: id.clone() };
+        match self
+            .connect_workspace(workspace)?
+            .request(RequestBody::HostExtensionCapabilities(request))?
+        {
+            ResponseBody::HostExtensionCapabilities(response) if response.id == id => Ok(response),
+            ResponseBody::Error(error) => Err(BackendServiceError::Connection(
+                error
+                    .detail
+                    .unwrap_or_else(|| error.code.as_str().to_owned()),
+            )),
+            _ => Err(BackendServiceError::Unavailable),
+        }
+    }
+
+    pub fn set_extension_capability(
+        &self,
+        workspace: WorkspaceId,
+        request: client_api::HostExtensionSetCapabilityRequest,
+    ) -> Result<client_api::HostExtensionSetCapabilityResponse, BackendServiceError> {
+        if let Source::Embedded(host) = &self.source {
+            return host
+                .set_extension_capability(&request)
+                .map_err(BackendServiceError::Connection);
+        }
+        match self
+            .connect_workspace(workspace)?
+            .request(RequestBody::HostExtensionSetCapability(request.clone()))?
+        {
+            ResponseBody::HostExtensionSetCapability(response)
+                if response.id == request.id
+                    && response.manifest_digest == request.manifest_digest
+                    && response.capability == request.capability
+                    && response.version == request.version
+                    && response.approved == request.approved =>
+            {
+                Ok(response)
+            }
+            ResponseBody::Error(error) => Err(BackendServiceError::Connection(
+                error
+                    .detail
+                    .unwrap_or_else(|| error.code.as_str().to_owned()),
+            )),
+            _ => Err(BackendServiceError::Unavailable),
+        }
+    }
+
+    /// Host 全体の拡張操作権限を使う。呼び出しは worker で行う。
+    pub fn dispatch_extension(
+        &self,
+        workspace: WorkspaceId,
+        request: client_api::HostExtensionDispatchRequest,
+    ) -> Result<client_api::HostExtensionDispatchResponse, BackendServiceError> {
+        self.open_extension_connection(workspace)?.dispatch(request)
+    }
+
+    /// 複数操作を同一の認証済み接続で行う。接続切断後の再認証では Session ID が変わる。
+    pub fn open_extension_connection(
+        &self,
+        workspace: WorkspaceId,
+    ) -> Result<ExtensionConnection, BackendServiceError> {
+        let client = self.connect_workspace(workspace)?;
+        let embedded = match &self.source {
+            Source::Embedded(host) => Some(host.clone()),
+            _ => None,
+        };
+        let embedded_guard = embedded.as_ref().map(|host| {
+            Arc::new(EmbeddedExtensionGuard {
+                host: host.clone(),
+                session: client.session_id().expect("embedded client has a session"),
+                workspace: client.workspace_id().clone(),
+            })
+        });
+        Ok(ExtensionConnection {
+            client,
+            embedded,
+            _embedded_guard: embedded_guard,
+        })
+    }
+
     /// Local Host の Web 公開を開始する。呼び出しは worker で行う。
     pub fn start_web(
         &self,
@@ -334,6 +516,16 @@ impl BackendClient {
                 .ok_or(BackendServiceError::Unavailable),
             _ => Err(BackendServiceError::Unavailable),
         }
+    }
+
+    /// 表示用パスから、その接続で認証する Workspace と表示 root を解決する。
+    pub fn workspace_for_directory(
+        &self,
+        directory: &Path,
+    ) -> Result<(PathBuf, WorkspaceId), BackendServiceError> {
+        let (root, _) = self.directory(directory)?;
+        let workspace = self.register_workspace(&root)?;
+        Ok((root, workspace))
     }
     pub(crate) fn open_worktree(
         &self,

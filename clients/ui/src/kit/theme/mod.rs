@@ -14,6 +14,7 @@ pub fn colors(cx: &gpui::App) -> ThemeColors {
 }
 
 pub(crate) use registry::init;
+pub(crate) use registry::replace_source;
 
 #[cfg(test)]
 mod tests {

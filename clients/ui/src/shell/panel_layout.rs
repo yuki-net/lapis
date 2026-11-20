@@ -550,9 +550,9 @@ mod tests {
         let json = serde_json::to_string(&saved).unwrap();
         let decoded = serde_json::from_str(&json).unwrap();
         let mut parse = |raw: &desktop_client::TabRef| {
-            if matches!(raw, desktop_client::TabRef::View { id } if id == "shared:a") {
+            if matches!(raw, desktop_client::TabRef::View { id, .. } if id == "shared:a") {
                 Some(a.clone())
-            } else if matches!(raw, desktop_client::TabRef::View { id } if id == "shared:b") {
+            } else if matches!(raw, desktop_client::TabRef::View { id, .. } if id == "shared:b") {
                 Some(b.clone())
             } else {
                 None

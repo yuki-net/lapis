@@ -9,6 +9,9 @@ use std::{
     thread,
 };
 
+pub use client_api::{
+    HostExtensionCapabilitiesResponse, HostExtensionCapability, HostExtensionSetCapabilityRequest,
+};
 pub use document::Encoding;
 use document::{
     Document, DocumentCache, DocumentConnection, DocumentError, ExternalChange, Position, Revision,
@@ -35,9 +38,13 @@ use workspace::{
 };
 
 mod connection_display;
+mod extension_contributions;
+#[cfg(any(target_arch = "wasm32", test))]
+mod extension_management;
 mod extensions;
 mod process;
 mod settings_store;
+pub mod terminal_extension;
 mod update;
 mod view_state;
 mod web_access;
@@ -49,6 +56,7 @@ pub use connection_display::{
     connected_workspace_name, connection_label, host_label, host_name_from_url,
     short_workspace_label, window_title, workspace_label,
 };
+pub use extension_contributions::{ExtensionContributionSession, ExtensionContributionSnapshot};
 pub use extensions::{ExtensionDescriptor, ExtensionId, ExtensionRegistry, git_extension};
 pub use process::ProcessSession;
 pub use session_view::{SessionViewCursor, SessionViewReplica, SessionViewWatch};
@@ -82,6 +90,10 @@ pub struct SettingsSession {
 }
 
 impl SettingsSession {
+    /// Host 接続ごとに独立した宣言の受理先を作る。
+    pub fn extension_contributions(&self) -> ExtensionContributionSession {
+        ExtensionContributionSession::new(Arc::clone(&self.model))
+    }
     /// ユーザースコープだけを持つ Session を作る。
     pub fn load(repository: Arc<dyn SettingsRepository>) -> Result<Self, SettingsError> {
         Self::for_scope(SettingsContext::default(), SettingsScope::User, repository)

@@ -145,6 +145,16 @@ pub(crate) struct QuickSearch {
 }
 
 impl QuickSearch {
+    pub(crate) fn set_locale_packs(
+        &mut self,
+        packs: &[localization::LocalePack],
+        locale: &localization::LocaleId,
+        cx: &mut Context<Self>,
+    ) {
+        let _ = self.locale.replace_external(packs);
+        let _ = self.locale.set_active(locale);
+        cx.notify();
+    }
     pub(crate) fn new(
         cx: &mut Context<Self>,
         on_event: impl Fn(QuickSearchEvent, &mut Window, &mut Context<QuickSearch>) + 'static,

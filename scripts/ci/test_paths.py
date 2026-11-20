@@ -55,8 +55,24 @@ class TestPathRouting(unittest.TestCase):
         )
         self.assertEqual(
             jobs_for_paths(["extensions/acp/contract/src/lib.rs"]),
-            {"rust_core", "host", "desktop", "web"},
+            {"repository", "rust_core", "host", "desktop", "web"},
         )
+
+    def test_new_extension_paths_run_repository_and_all_rust_surfaces(self):
+        """拡張の事前登録がなくても、コードと宣言・アセットを検証する。"""
+        expected = {"repository", "rust_core", "host", "desktop", "web"}
+        for path in (
+            "extensions/new-plugin/manifest.json",
+            "extensions/new-plugin/host/src/lib.rs",
+            "extensions/new-plugin/assets/messages/ja.json",
+            "extensions/terminal/manifest.json",
+            "extensions/terminal/ui/src/lib.rs",
+            "extensions/terminal/assets/messages/ja.json",
+        ):
+            self.assertEqual(jobs_for_paths([path]), expected, path)
+
+    def test_extension_packaging_scripts_also_run_host_tests(self):
+        self.assertEqual(jobs_for_paths(["scripts/extensions/package.py"]), {"repository", "rust_core", "host"})
 
     def test_terminal_extension_runs_only_the_surfaces_it_affects(self):
         """Terminal 拡張は契約と実装で影響する surface が分かれる。"""
@@ -65,9 +81,16 @@ class TestPathRouting(unittest.TestCase):
             jobs_for_paths(["extensions/terminal/contract/src/lib.rs"]),
             {"rust_core", "host", "desktop", "web"},
         )
-        # Host 状態サービスと PTY 実装は wasm でビルドしないため Web を除外する。
+        # 独立ロジックは native と component の両経路で使う。
+        self.assertEqual(
+            jobs_for_paths(["extensions/terminal/logic/src/lib.rs"]),
+            {"repository", "rust_core", "host", "desktop", "web"},
+        )
+        self.assertEqual(
+            jobs_for_paths(["contracts/extension-api/native/src/lib.rs"]),
+            {"rust_core", "host", "desktop"},
+        )
         for path in (
-            "extensions/terminal/host/src/lib.rs",
             "extensions/terminal/adapter/src/lib.rs",
             "extensions/terminal/adapter/Cargo.toml",
         ):
@@ -89,6 +112,16 @@ class TestPathRouting(unittest.TestCase):
     def test_state_path_runs_web_for_wasm_build(self):
         """clients/state は wasm ビルドの依存に入るため Web ジョブも実行する。"""
         self.assertEqual(jobs_for_paths(["clients/state/src/lib.rs"]), {"desktop", "rust_core", "web"})
+
+    def test_web_terminal_extension_runs_windows_integration(self):
+        for path in (
+            "clients/state/src/web_host/extension_terminal.rs",
+            "clients/state/src/terminal_extension/web_projection.rs",
+            "clients/ui/src/web/mod.rs",
+            "clients/ui/wasm-smoke/src/lib.rs",
+            "clients/web/wasm/tests/extension_terminal_smoke.py",
+        ):
+            self.assertIn("host", jobs_for_paths([path]), path)
 
     def test_wasm_build_dependency_paths_run_web(self):
         """desktop-ui の wasm 依存 crate の変更で Web ジョブが選ばれる。"""

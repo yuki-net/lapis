@@ -7,7 +7,7 @@ impl Shell {
         &self,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
-        let commands = self
+        let mut commands = self
             .feature_registry
             .contributions(UiSlot::CommandPalette)
             .into_iter()
@@ -22,6 +22,16 @@ impl Shell {
                 ))
             })
             .collect::<Vec<_>>();
+        for (view, command) in self.feature_registry.view_open_commands() {
+            if let Some(contribution) = self.feature_registry.declaration(view) {
+                commands.push((
+                    commands.len(),
+                    self.contribution_title(contribution),
+                    crate::keymap::KeymapRegistry::active(cx).shortcut_label(command),
+                    command.clone(),
+                ));
+            }
+        }
 
         crate::components::floating_panel(
             "command-palette",
@@ -152,6 +162,11 @@ impl Shell {
             #[cfg(debug_assertions)]
             id::COMMAND_TOGGLE_DEVTOOL => self.toggle_devtool_window(window, cx),
             _ => {
+                if let Some(view) = self.feature_registry.view_for_open_command(&command) {
+                    self.shell.command_palette_open = false;
+                    self.open_new_tab_for_view(view, cx);
+                    return;
+                }
                 self.status = format!("Unknown command: {}", command.as_str());
                 cx.notify();
             }

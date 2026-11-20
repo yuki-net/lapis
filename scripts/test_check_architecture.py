@@ -15,6 +15,19 @@ def package(name, path, dependencies=()):
 
 
 class ArchitectureTests(unittest.TestCase):
+    def test_host_rejects_transitive_terminal_dependency(self):
+        metadata = {
+            "workspace_members": ["host", "client-api", "terminal-contract"],
+            "packages": [
+                package("host", "host/app", ["client-api"]),
+                package("client-api", "contracts/protocol", ["terminal-contract"]),
+                package("terminal-contract", "extensions/terminal/contract"),
+            ],
+        }
+        self.assertTrue(any("host -> terminal-contract" in e for e in check(metadata, {})))
+        metadata["packages"][1]["dependencies"] = []
+        self.assertFalse(any("host -> terminal-contract" in e for e in check(metadata, {})))
+
     def test_desktop_layout_contract_rejects_old_identifiers_and_feature_internals(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

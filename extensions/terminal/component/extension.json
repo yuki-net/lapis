@@ -1,0 +1,15 @@
+{
+  "id": "lapis.terminal",
+  "version": "0.2.0",
+  "requires": [
+    {"contract": "lapis.extension", "minimum": "1.0.0", "maximum": "1.0.0"},
+    {"contract": "lapis.extension.lifecycle", "minimum": "1.0.0", "maximum": "1.0.0"},
+    {"contract": "lapis.extension.dispatch", "minimum": "1.0.0", "maximum": "1.0.0"},
+    {"contract": "lapis.extension.contributions", "minimum": "1.0.0", "maximum": "1.0.0"},
+    {"contract": "lapis.extension.views", "minimum": "1.0.0", "maximum": "1.0.0"},
+    {"contract": "lapis.process.pty", "minimum": "1.0.0", "maximum": "1.0.0"},
+    {"contract": "lapis.process.info", "minimum": "1.0.0", "maximum": "1.0.0"}
+  ],
+  "capabilities": [{"id": "process.pty", "version": "1.0.0"}],
+  "files": ["extension.wasm", "contributions.json", "views.json"]
+}

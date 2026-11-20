@@ -131,6 +131,16 @@ impl UpdateFeature {
             cx.notify();
         }
     }
+    pub(crate) fn set_locale_packs(
+        &mut self,
+        packs: &[localization::LocalePack],
+        locale: &localization::LocaleId,
+        cx: &mut Context<Self>,
+    ) {
+        let _ = self.locale.replace_external(packs);
+        let _ = self.locale.set_active(locale);
+        cx.notify();
+    }
 
     fn t(&self, key: &str) -> String {
         self.locale.resolve(&localization::MessageId::new(key))

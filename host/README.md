@@ -37,7 +37,7 @@ Hostの標準入力で `invite <Clientから到達可能なip:port> <新規の�
 
 `--state-directory` を指定したHostは、秘密鍵と証明書を `<state>/identity` に保存して再利用するため、再起動しても同じ証明書で接続できます。未指定の場合はメモリ内だけで保持するため、再起動後は新しい公開証明書とペアリングが必要です。保存済みの同一性を読めない場合は作り直し、その場合だけ証明書が変わります。credentialは状態ディレクトリの `credentials.sqlite3` に保存し、Host再起動後に復元します。単独起動 Host の credential の期限は100年です。状態ディレクトリを指定したHostは登録済みWorkspaceを再起動後に復元します。見つからないフォルダの登録情報は削除しません。旧形式には登録一覧がないため、既存Workspaceは次に開いたとき一覧へ記録し、従来のWorkbench状態を引き続き使います。Desktopは「ファイル → Hostに接続…」または `cargo run -p lapis -- --host <招待.jsonまたは保存済みprofile.host>` で接続します。取り込んだ証明書とcredentialはWindowsのユーザー単位DPAPIで保護して保存し、以後はprofileから接続します。同じHostへ接続済みなら、使用済みの招待を開いても保存済みprofileを使います。別のHost（証明書が違う）の招待は流用せず、認証・証明書の不一致時に自動で信頼し直しません。
 
-`--state-directory` の `terminal-profiles.json` で、Client が起動できる Terminal profile を制限できます。形式は `{"profiles":[{"id":"bash","name":"bash","program":"/bin/bash","args":["-l"],"env":{"TERM":"xterm-256color"}}],"default":"bash"}` です。未指定なら OS ごとの既定 profile（Windows: PowerShell / cmd、macOS・Linux: login shell と bash / zsh / fish / pwsh）を使います。Host は `terminal.list_profiles` でこの一覧だけを公開し、一覧にない ID の `terminal.start` を拒否します。
+Terminal の profile とセッションは Terminal 拡張が管理します。Host は承認された拡張に汎用 PTY 能力を提供します。
 
 `.lapis` package の読み込みは標準入力の `ext-install <file.lapis> [--disabled]` で行います。manifest の署名・SHA-256・`requires` の契約と版を検証し、合わなければ読み込まずに「非互換」として目録へ宣言します。署名が一致しない package は目録にも載せません。`ext-enable <id>` / `ext-disable <id>` は目録の状態を変えるだけで、反映は Host の再起動です。`ext-remove <id>` は導入済み package を取り除き、拡張データは残します。宣言は `host.extensions.list` に現れます。形式と配置は [拡張の入口](extensions-entry/README.md) を参照してください。
 

@@ -1,5 +1,9 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use desktop_client::{RestoredTerminal, TerminalSession};
 use editor_core::ConversationId;
@@ -13,6 +17,7 @@ pub(crate) struct TerminalSessions {
     inactive_sessions: HashMap<(Option<PathBuf>, ConversationId), TerminalSession>,
     /// 画面の投影順を決める単調増加の版。worker 上で観測した順序を表す。
     version: u64,
+    live_sessions: Arc<AtomicBool>,
 }
 
 impl TerminalSessions {
@@ -21,11 +26,20 @@ impl TerminalSessions {
         root: Option<PathBuf>,
         conversation: ConversationId,
     ) -> Self {
+        let live_sessions = Arc::new(AtomicBool::new(session.terminals().iter().any(
+            |terminal| {
+                matches!(
+                    terminal.status,
+                    terminal::TerminalStatus::Running | terminal::TerminalStatus::Disconnected
+                )
+            },
+        )));
         Self {
             session,
             active_context: (root, conversation),
             inactive_sessions: HashMap::new(),
             version: 0,
+            live_sessions,
         }
     }
 
@@ -40,6 +54,16 @@ impl TerminalSessions {
     }
 
     fn bump(&mut self) {
+        let live = std::iter::once(&self.session)
+            .chain(self.inactive_sessions.values())
+            .flat_map(TerminalSession::terminals)
+            .any(|terminal| {
+                matches!(
+                    terminal.status,
+                    terminal::TerminalStatus::Running | terminal::TerminalStatus::Disconnected
+                )
+            });
+        self.live_sessions.store(live, Ordering::Release);
         self.version = self.version.wrapping_add(1);
     }
 
@@ -199,6 +223,8 @@ impl TerminalRequests {
 
 pub(crate) struct TerminalFeature {
     worker: crate::client_adapter::ClientWorker<TerminalSessions>,
+    live_sessions: Arc<AtomicBool>,
+    extension_settings: Option<desktop_client::ExtensionContributionSession>,
     pub(super) terminals: Vec<terminal::TerminalSnapshot>,
     /// 各 Terminal の操作権。表示に使う。
     pub(super) owners: HashMap<String, Option<String>>,
@@ -243,6 +269,8 @@ pub(crate) struct TerminalFeature {
     tab_visible: bool,
     /// Host の profile 一覧を読み終えたか。読み終えるまで既定 profile は決めない。
     profiles_loaded: bool,
+    /// 非同期 backend が一時的に一覧を返せなかった場合、次の変更通知で再取得する。
+    profiles_retry: bool,
     pub(super) last_metrics: Option<super::view::TerminalMetrics>,
     pub(super) last_size: Option<(terminal::TerminalId, (u16, u16))>,
     /// 行の内容から shaped line を引き当てるキャッシュ。フォント変更時に捨てる。
@@ -263,6 +291,50 @@ pub(crate) struct TerminalFeature {
 }
 
 impl gpui::EventEmitter<TerminalFeatureEvent> for TerminalFeature {}
+
+fn extension_setting<'a>(
+    values: &'a settings::ResolvedSettings,
+    name: &str,
+) -> Option<&'a settings::SettingValue> {
+    values
+        .extension_setting(&format!("extensions/lapis.terminal/{name}"))
+        .and_then(|setting| setting.value())
+}
+
+fn terminal_font_family(values: &settings::ResolvedSettings) -> Option<String> {
+    extension_setting(values, "font-family")
+        .and_then(settings::SettingValue::as_text)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| values.terminal_font_family())
+}
+
+fn terminal_number(
+    values: &settings::ResolvedSettings,
+    name: &str,
+    fallback: impl FnOnce(&settings::ResolvedSettings) -> Option<u8>,
+) -> Option<u8> {
+    extension_setting(values, name)
+        .and_then(settings::SettingValue::as_integer)
+        .and_then(|value| u8::try_from(value).ok())
+        .filter(|value| *value > 0)
+        .or_else(|| fallback(values))
+}
+
+fn terminal_caret(values: &settings::ResolvedSettings) -> Option<settings::TerminalCaretShape> {
+    extension_setting(values, "caret-shape")
+        .and_then(settings::SettingValue::as_text)
+        .and_then(settings::TerminalCaretShape::from_id)
+        .or_else(|| values.terminal_caret_shape())
+}
+
+fn terminal_profile(values: &settings::ResolvedSettings) -> Option<String> {
+    extension_setting(values, "default-profile")
+        .and_then(settings::SettingValue::as_text)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| values.terminal_default_profile())
+}
 
 impl TerminalFeature {
     /// より新しい版だけを画面へ適用する。古い action / poll の結果で上書きしない。
@@ -287,20 +359,23 @@ impl TerminalFeature {
         values: &settings::ResolvedSettings,
         cx: &mut gpui::Context<Self>,
     ) {
-        let family: gpui::SharedString = values
-            .terminal_font_family()
+        let family: gpui::SharedString = terminal_font_family(values)
             .unwrap_or_else(|| super::default_font_family().to_owned())
             .into();
-        let size = values
-            .terminal_font_size()
-            .unwrap_or_else(super::default_font_size) as f32;
-        let line_height_percent = values
-            .terminal_line_height_percent()
-            .unwrap_or_else(super::default_line_height_percent);
-        let caret_shape = values.terminal_caret_shape().unwrap_or_default();
-        let default_profile = values
-            .terminal_default_profile()
-            .map(terminal::TerminalProfileId::new);
+        let size = terminal_number(
+            values,
+            "font-size",
+            settings::ResolvedSettings::terminal_font_size,
+        )
+        .unwrap_or_else(super::default_font_size) as f32;
+        let line_height_percent = terminal_number(
+            values,
+            "line-height-percent",
+            settings::ResolvedSettings::terminal_line_height_percent,
+        )
+        .unwrap_or_else(super::default_line_height_percent);
+        let caret_shape = terminal_caret(values).unwrap_or_default();
+        let default_profile = terminal_profile(values).map(terminal::TerminalProfileId::new);
         if self.font_family == family
             && self.font_size == size
             && self.line_height_percent == line_height_percent
@@ -318,6 +393,16 @@ impl TerminalFeature {
         self.last_size = None;
         self.line_cache.clear();
         cx.notify();
+    }
+
+    pub(crate) fn refresh_extension_settings(&mut self, cx: &mut gpui::Context<Self>) {
+        if let Some(values) = self
+            .extension_settings
+            .as_ref()
+            .and_then(|session| session.resolved())
+        {
+            self.apply_terminal_appearance(&values, cx);
+        }
     }
 
     /// 出力による再描画を frame 単位に集約する。
@@ -409,38 +494,56 @@ impl TerminalFeature {
         root: Option<PathBuf>,
         conversation: ConversationId,
         settings_catalog: std::rc::Rc<std::cell::RefCell<super::TerminalProfileCatalog>>,
+        extension_settings: Option<desktop_client::ExtensionContributionSession>,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let terminals = session.terminals().to_vec();
         let coordinator =
             crate::features::settings_coordinator::SettingsCoordinator::try_shared(cx);
-        let values = coordinator
+        let values = extension_settings
             .as_ref()
-            .map(|coordinator| coordinator.read(cx).values.clone());
+            .and_then(|session| session.resolved())
+            .or_else(|| {
+                coordinator
+                    .as_ref()
+                    .map(|coordinator| coordinator.read(cx).values.clone())
+            });
         let font_family: gpui::SharedString = values
             .as_ref()
-            .and_then(|values| values.terminal_font_family())
+            .and_then(terminal_font_family)
             .unwrap_or_else(|| super::default_font_family().to_owned())
             .into();
         let font_size = values
             .as_ref()
-            .and_then(|values| values.terminal_font_size())
+            .and_then(|values| {
+                terminal_number(
+                    values,
+                    "font-size",
+                    settings::ResolvedSettings::terminal_font_size,
+                )
+            })
             .unwrap_or_else(super::default_font_size) as f32;
         let line_height_percent = values
             .as_ref()
-            .and_then(|values| values.terminal_line_height_percent())
+            .and_then(|values| {
+                terminal_number(
+                    values,
+                    "line-height-percent",
+                    settings::ResolvedSettings::terminal_line_height_percent,
+                )
+            })
             .unwrap_or_else(super::default_line_height_percent);
-        let caret_shape = values
-            .as_ref()
-            .and_then(|values| values.terminal_caret_shape())
-            .unwrap_or_default();
+        let caret_shape = values.as_ref().and_then(terminal_caret).unwrap_or_default();
         let default_profile = values
             .as_ref()
-            .and_then(|values| values.terminal_default_profile())
+            .and_then(terminal_profile)
             .map(terminal::TerminalProfileId::new);
         let sessions = TerminalSessions::new(session, root.clone(), conversation.clone());
+        let live_sessions = Arc::clone(&sessions.live_sessions);
         let mut feature = Self {
             worker: crate::client_adapter::ClientWorker::new(sessions),
+            live_sessions,
+            extension_settings,
             terminals,
             owners: HashMap::new(),
             projected: 0,
@@ -470,6 +573,7 @@ impl TerminalFeature {
             pending_auto_start: false,
             tab_visible: false,
             profiles_loaded: false,
+            profiles_retry: false,
             last_metrics: None,
             last_size: None,
             line_cache: Default::default(),
@@ -484,7 +588,11 @@ impl TerminalFeature {
         };
         if let Some(coordinator) = coordinator {
             cx.observe(&coordinator, |feature, coordinator, cx| {
-                let values = coordinator.read(cx).values.clone();
+                let values = feature
+                    .extension_settings
+                    .as_ref()
+                    .and_then(|session| session.resolved())
+                    .unwrap_or_else(|| coordinator.read(cx).values.clone());
                 feature.apply_terminal_appearance(&values, cx);
             })
             .detach();
@@ -508,6 +616,7 @@ impl TerminalFeature {
             std::rc::Rc::new(std::cell::RefCell::new(
                 super::TerminalProfileCatalog::default(),
             )),
+            None,
             cx,
         )
     }
@@ -517,6 +626,7 @@ impl TerminalFeature {
         self.profiles_loaded = false;
         let Some(root) = self.root.clone() else {
             self.profiles = terminal::TerminalProfiles::default();
+            self.profiles_retry = false;
             super::publish_profile_catalog(&self.profiles, &self.profiles_catalog, cx);
             self.profiles_loaded = true;
             return;
@@ -530,11 +640,18 @@ impl TerminalFeature {
                     return;
                 }
                 match result {
-                    Ok(Ok(profiles)) => feature.profiles = profiles,
-                    Ok(Err(_)) | Err(_) => feature.profiles = terminal::TerminalProfiles::default(),
+                    Ok(Ok(profiles)) => {
+                        feature.profiles = profiles;
+                        feature.profiles_retry = false;
+                        feature.profiles_loaded = true;
+                    }
+                    Ok(Err(_)) | Err(_) => {
+                        feature.profiles = terminal::TerminalProfiles::default();
+                        feature.profiles_retry = true;
+                        feature.profiles_loaded = false;
+                    }
                 }
                 super::publish_profile_catalog(&feature.profiles, &feature.profiles_catalog, cx);
-                feature.profiles_loaded = true;
                 // profile が揃ってから既定 profile を解決する。
                 feature.ensure_auto_start(cx);
                 cx.notify();
@@ -639,6 +756,10 @@ impl TerminalFeature {
     /// Host の変更通知を受けたときに、この実体の表示を更新する。
     /// Shell が1本の通知を全タブへ配るため、複数タブでも購読は1回で済む。
     pub(crate) fn note_change(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.profiles_retry {
+            self.profiles_retry = false;
+            self.load_profiles(cx);
+        }
         self.poll(cx);
     }
 
@@ -732,6 +853,20 @@ impl TerminalFeature {
             self.reset_after_close();
             cx.notify();
         }
+    }
+
+    pub(crate) fn requires_close_confirmation(&self) -> bool {
+        self.live_sessions.load(Ordering::Acquire)
+            || self.requests.pending_actions > 0
+            || self.requests.context_unavailable
+            || (self.pending_auto_start && self.root.is_some())
+            || (self.bound_resource.is_some() && self.terminals.is_empty())
+            || self.terminals.iter().any(|terminal| {
+                matches!(
+                    terminal.status,
+                    terminal::TerminalStatus::Running | terminal::TerminalStatus::Disconnected
+                )
+            })
     }
 
     /// 設定で選ばれた既定 profile。Host が公開していない ID は Host 既定へ倒す。
@@ -1285,6 +1420,49 @@ impl TerminalFeature {
 #[cfg(test)]
 mod tests {
     #[gpui::test]
+    fn close_confirmation_covers_running_and_inactive_sessions(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext;
+        cx.update(|cx| {
+            let (_, backend) = feature();
+            let entity = cx.new(|cx| {
+                TerminalFeature::test_new(
+                    TerminalSession::new(backend),
+                    Some("workspace".into()),
+                    ConversationId::new("task-a"),
+                    cx,
+                )
+            });
+            entity.update(cx, |feature, cx| {
+                feature.requests = TerminalRequests::default();
+                assert!(!feature.requires_close_confirmation());
+                feature.pending_auto_start = true;
+                assert!(feature.requires_close_confirmation());
+                feature.pending_auto_start = false;
+                feature.bound_resource = Some(terminal::TerminalId::new("reconnecting"));
+                assert!(feature.requires_close_confirmation());
+                feature.bound_resource = None;
+                feature.terminals.push(terminal::TerminalSnapshot::empty(
+                    terminal::TerminalId::new("terminal-a"),
+                    "workspace".into(),
+                    TerminalStatus::Exited,
+                    TerminalSize::new(80, 24),
+                ));
+                assert!(!feature.requires_close_confirmation());
+                feature.terminals[0].status = TerminalStatus::Running;
+                assert!(feature.requires_close_confirmation());
+                feature.set_context(
+                    Some("workspace".into()),
+                    ConversationId::new("task-b"),
+                    vec![],
+                    cx,
+                );
+                assert!(feature.terminals.is_empty());
+                assert!(feature.requires_close_confirmation());
+            });
+        });
+    }
+
+    #[gpui::test]
     fn persistence_summary_ignores_output_and_tracks_restore_metadata(
         cx: &mut gpui::TestAppContext,
     ) {
@@ -1410,6 +1588,128 @@ mod tests {
         TerminalBackend, TerminalDelta, TerminalEvent, TerminalInput, TerminalRow,
         TerminalRowUpdate, TerminalSize,
     };
+
+    #[gpui::test]
+    fn terminal_uses_declared_settings_and_falls_back_to_previous_values(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::AppContext;
+        struct Memory(Mutex<settings::SettingsDocument>);
+        impl settings::SettingsRepository for Memory {
+            fn load(&self) -> Result<settings::SettingsDocument, settings::SettingsError> {
+                Ok(self.0.lock().unwrap().clone())
+            }
+            fn save(
+                &self,
+                value: &settings::SettingsDocument,
+            ) -> Result<(), settings::SettingsError> {
+                *self.0.lock().unwrap() = value.clone();
+                Ok(())
+            }
+        }
+        let mut document = settings::SettingsDocument::empty(settings::SettingsScope::User);
+        document.insert(
+            settings::TERMINAL_FONT_SIZE,
+            settings::SettingValue::integer(14),
+        );
+        let settings =
+            desktop_client::SettingsSession::load(Arc::new(Memory(Mutex::new(document)))).unwrap();
+        let extensions = settings.extension_contributions();
+        let generation = extensions.begin_reload();
+        let declaration: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../../extensions/terminal/component/contributions.json"
+        ))
+        .unwrap();
+        extensions.apply(generation, serde_json::from_value(serde_json::json!({
+            "extensions":[{"id":"lapis.terminal","version":"1.0.0","installed":true,"enabled":true,"active":true}],
+            "contributions":[{"extension_id":"lapis.terminal","declaration":declaration.clone()}]
+        })).unwrap()).unwrap();
+        let other = settings.extension_contributions();
+        let generation = other.begin_reload();
+        other.apply(generation, serde_json::from_value(serde_json::json!({
+            "extensions":[{"id":"lapis.terminal","version":"1.0.0","installed":true,"enabled":true,"active":true}],
+            "contributions":[{"extension_id":"lapis.terminal","declaration":declaration}]
+        })).unwrap()).unwrap();
+        let events = extensions.subscribe();
+        let settings_watch = settings.subscribe();
+        cx.update(|cx| {
+            let backend = Arc::new(Backend::default());
+            let entity = cx.new(|cx| {
+                TerminalFeature::new(
+                    TerminalSession::new(backend),
+                    None,
+                    ConversationId::new("task"),
+                    std::rc::Rc::new(std::cell::RefCell::new(
+                        super::super::TerminalProfileCatalog::default(),
+                    )),
+                    Some(extensions.clone()),
+                    cx,
+                )
+            });
+            assert_eq!(entity.read(cx).font_size, 14.0);
+            extensions
+                .update(
+                    settings::SettingsScope::User,
+                    &[
+                        (
+                            "extensions/lapis.terminal/font-size",
+                            Some(settings::SettingValue::integer(18)),
+                        ),
+                        (
+                            "extensions/lapis.terminal/font-family",
+                            Some(settings::SettingValue::text("Example Mono")),
+                        ),
+                        (
+                            "extensions/lapis.terminal/line-height-percent",
+                            Some(settings::SettingValue::integer(140)),
+                        ),
+                        (
+                            "extensions/lapis.terminal/caret-shape",
+                            Some(settings::SettingValue::text("bar")),
+                        ),
+                        (
+                            "extensions/lapis.terminal/default-profile",
+                            Some(settings::SettingValue::text("cmd")),
+                        ),
+                    ],
+                )
+                .unwrap();
+            assert!(events.try_recv().is_ok());
+            assert!(settings_watch.try_recv().is_ok());
+            assert_eq!(
+                terminal_number(
+                    &other.resolved().unwrap(),
+                    "font-size",
+                    settings::ResolvedSettings::terminal_font_size
+                ),
+                Some(18)
+            );
+            entity.update(cx, |feature, cx| feature.refresh_extension_settings(cx));
+            assert_eq!(entity.read(cx).font_size, 18.0);
+            assert_eq!(entity.read(cx).font_family.as_ref(), "Example Mono");
+            assert_eq!(entity.read(cx).line_height_percent, 140);
+            assert_eq!(
+                entity.read(cx).caret_shape,
+                settings::TerminalCaretShape::Bar
+            );
+            assert_eq!(
+                entity
+                    .read(cx)
+                    .default_profile
+                    .as_ref()
+                    .map(|id| id.as_str()),
+                Some("cmd")
+            );
+            extensions
+                .update(
+                    settings::SettingsScope::User,
+                    &[("extensions/lapis.terminal/font-size", None)],
+                )
+                .unwrap();
+            entity.update(cx, |feature, cx| feature.refresh_extension_settings(cx));
+            assert_eq!(entity.read(cx).font_size, 14.0);
+        });
+    }
 
     fn model_row(columns: u16, text: &str) -> TerminalRow {
         let mut row = TerminalRow::empty(columns);
@@ -1764,6 +2064,7 @@ mod tests {
         started_profiles: Mutex<Vec<Option<terminal::TerminalProfileId>>>,
         /// Host が公開する profile 一覧。
         profiles: Mutex<terminal::TerminalProfiles>,
+        fail_profiles: std::sync::atomic::AtomicBool,
     }
 
     impl TerminalBackend for Backend {
@@ -1784,6 +2085,9 @@ mod tests {
             )))
         }
         fn profiles(&self, _: &Path) -> Result<terminal::TerminalProfiles, TerminalError> {
+            if self.fail_profiles.load(Ordering::Relaxed) {
+                return Err(TerminalError::new("profiles unavailable"));
+            }
             Ok(self.profiles.lock().unwrap().clone())
         }
         fn input(&self, id: &TerminalId, input: &TerminalInput) -> Result<(), TerminalError> {
@@ -2364,6 +2668,7 @@ mod tests {
             .start(Path::new("workspace"), 80, 24)
             .unwrap();
         feature.switch_context(Some("workspace".into()), ConversationId::new("second"), &[]);
+        assert!(feature.live_sessions.load(Ordering::Acquire));
         backend.events.lock().unwrap().insert(
             terminal.as_str().to_owned(),
             vec![
@@ -2372,6 +2677,7 @@ mod tests {
             ],
         );
         assert!(feature.refresh().unwrap());
+        assert!(!feature.live_sessions.load(Ordering::Acquire));
         feature.switch_context(Some("workspace".into()), ConversationId::new("first"), &[]);
         assert!(
             feature.session.terminals()[0].screen.rows[0]
@@ -2418,6 +2724,53 @@ mod tests {
     }
 
     #[gpui::test]
+    fn retries_a_temporarily_unavailable_profile_catalog(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext;
+        let (entity, backend) = cx.update(|cx| {
+            let (_, backend) = feature();
+            backend.fail_profiles.store(true, Ordering::Relaxed);
+            *backend.profiles.lock().unwrap() = terminal::TerminalProfiles::new(
+                vec![terminal::TerminalProfile::new(
+                    "cmd",
+                    "Command Prompt",
+                    "cmd.exe",
+                )],
+                Some(terminal::TerminalProfileId::new("cmd")),
+            );
+            let entity = cx.new(|cx| {
+                TerminalFeature::test_new(
+                    TerminalSession::new(backend.clone()),
+                    Some("workspace".into()),
+                    ConversationId::new("task-a"),
+                    cx,
+                )
+            });
+            entity.update(cx, |feature, cx| {
+                feature.default_profile = Some(terminal::TerminalProfileId::new("cmd"));
+                feature.sync_tab_presence(true, cx);
+            });
+            (entity, backend)
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert!(entity.read(cx).profiles_retry);
+            assert!(backend.started_profiles.lock().unwrap().is_empty());
+            backend.fail_profiles.store(false, Ordering::Relaxed);
+            entity.update(cx, |feature, cx| feature.note_change(cx));
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let feature = entity.read(cx);
+            assert!(!feature.profiles_retry);
+            assert_eq!(feature.profiles.profiles[0].id.as_str(), "cmd");
+        });
+        assert_eq!(
+            *backend.started_profiles.lock().unwrap(),
+            vec![Some(terminal::TerminalProfileId::new("cmd"))]
+        );
+    }
+
+    #[gpui::test]
     fn opening_the_terminal_tab_auto_starts_the_configured_default_profile(
         cx: &mut gpui::TestAppContext,
     ) {
@@ -2440,6 +2793,10 @@ mod tests {
                 )
             });
             // 設定で選ばれた既定 profile を Host 公開後に解決できるようにする。
+            assert!(
+                backend.started_profiles.lock().unwrap().is_empty(),
+                "表示前には起動しない"
+            );
             entity.update(cx, |feature, cx| {
                 feature.default_profile = Some(terminal::TerminalProfileId::new("cmd"));
                 feature.load_profiles(cx);

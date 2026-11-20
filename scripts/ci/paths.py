@@ -17,6 +17,10 @@ PATH_RULES = [
     (["scripts/check.py", "scripts/test_check.py", ".github/workflows/"], {"repository", "rust_core", "host", "desktop", "mobile", "web", "dev_windows"}),
     # Desktop関連
     # clients/state と clients/ui は Web の wasm ビルド（desktop-ui）でもコンパイルされる。
+    (["clients/state/src/web_host.rs", "clients/state/src/web_host/extension_terminal.rs",
+      "clients/state/src/terminal_extension/", "clients/state/src/terminal_extension.rs",
+      "clients/ui/src/web/mod.rs", "clients/ui/wasm-smoke/",
+      "clients/web/wasm/tests/extension_terminal_smoke.py"], {"host", "desktop", "rust_core", "web"}),
     (["clients/state/"], {"desktop", "rust_core", "web"}),
     (["clients/desktop/persistence/"], {"desktop", "rust_core"}),
     (["clients/desktop/launcher/"], {"desktop", "rust_core"}),
@@ -46,6 +50,7 @@ PATH_RULES = [
     (["host/"], {"rust_core", "host", "desktop"}),
     
     # Contracts / Client transport
+    (["contracts/extension-api/native/"], {"rust_core", "host", "desktop"}),
     (["contracts/domain/"], {"rust_core", "host", "desktop", "web"}),
     (["contracts/protocol/"], {"rust_core", "host", "desktop", "web"}),
     (["contracts/transport/wire/"], {"rust_core", "host", "desktop", "web"}),
@@ -56,8 +61,9 @@ PATH_RULES = [
     # Terminal 拡張は役割ごとに影響する surface が異なるため、契約と実装を分ける。
     # （実装は PTY を含み wasm でビルドしない）
     (["extensions/terminal/contract/"], {"rust_core", "host", "desktop", "web"}),
-    (["extensions/terminal/"], {"rust_core", "host", "desktop"}),
-    (["extensions/"], {"rust_core", "host", "desktop", "web"}),
+    (["extensions/terminal/adapter/", "extensions/terminal/README.md"], {"rust_core", "host", "desktop"}),
+    # 未登録の拡張・宣言・アセットも Client へ影響し得るため、既知の Host 専用箇所以外は広く検証する。
+    (["extensions/"], {"repository", "rust_core", "host", "desktop", "web"}),
     
     # Mobile
     (["clients/mobile/"], {"mobile"}),
@@ -66,6 +72,8 @@ PATH_RULES = [
     (["clients/web/"], {"web"}),
     
     # CI・scripts
+    # package 生成と Host の読み込みを同じ fixture で検証する。
+    (["scripts/extensions/"], {"repository", "rust_core", "host"}),
     (["scripts/"], {"repository"}),
     # launcher は release/trusted-keys.json を build 時に埋め込む。
     (["release/"], {"repository", "desktop"}),

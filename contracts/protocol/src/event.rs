@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    DocumentId, DocumentSnapshot, DocumentTransaction, Revision, SnapshotReason, TerminalDelta,
-    TerminalId, TerminalStatus, WorkspaceId,
+    DocumentId, DocumentSnapshot, DocumentTransaction, Revision, SnapshotReason, WorkspaceId,
 };
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -58,22 +57,6 @@ pub enum EventBody {
     #[serde(rename = "document.owner")]
     DocumentOwner {
         document_id: DocumentId,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        owner: Option<crate::SessionId>,
-    },
-    #[serde(rename = "terminal.delta")]
-    TerminalDelta {
-        terminal_id: TerminalId,
-        delta: TerminalDelta,
-    },
-    #[serde(rename = "terminal.status")]
-    TerminalStatus {
-        terminal_id: TerminalId,
-        status: TerminalStatus,
-    },
-    #[serde(rename = "terminal.owner")]
-    TerminalOwner {
-        terminal_id: TerminalId,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         owner: Option<crate::SessionId>,
     },
