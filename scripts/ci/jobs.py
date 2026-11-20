@@ -270,6 +270,8 @@ ROUTES: dict[str, Route] = {
         python=PYTHON_VERSION,
         rust=True,
         rust_components=f"{RUSTFMT}, {CLIPPY}",
+        # terminal component の wasm をビルドするため。
+        rust_targets="wasm32-wasip2",
         cache="desktop",
         steps=(
             Step("Check architecture", py("scripts/check.py", "desktop", "architecture")),
