@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.ci.jobs import ORDER, ROUTES
-from scripts.ci.paths import jobs_for_paths, PATH_RULES, ALL_JOBS
+from scripts.ci.paths import ALL_JOBS, jobs_for_paths, PATH_RULES
 from scripts.ci.gate import errors
 from scripts.ci.paths import changed_paths
 
@@ -26,13 +26,17 @@ class TestPathRouting(unittest.TestCase):
     def test_route_names_match_the_workflow(self):
         """route の表示名は CI のジョブ名になるため、jobs.py を正とする。"""
         workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-        for key in ("repository", "rust_core", "host", "desktop"):
+        for key in ORDER:
             self.assertIn(key, ROUTES)
         for key in ORDER:
             self.assertIn(ROUTES[key].name, {route.name for route in ROUTES.values()})
         self.assertIn("name: Plan", workflow)
         self.assertIn("name: Gate", workflow)
         self.assertIn("python -m scripts.ci.run", workflow)
+
+    def test_all_jobs_matches_route_keys(self):
+        """path ルール側の job 名が jobs.py の route key と一致する。"""
+        self.assertEqual(ALL_JOBS, set(ROUTES))
 
     def test_format_steps_install_rustfmt(self):
         """`check.py <route> format` を実行する route は rustfmt を導入する。"""

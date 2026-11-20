@@ -41,20 +41,20 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          selected=$(python -m scripts.ci.plan --selected --base "${BASE_SHA:-invalid}" 2>/dev/null)
-          matrix=$(python -m scripts.ci.plan --github-matrix --base "${BASE_SHA:-invalid}" 2>/dev/null)
-          count=$(python -m scripts.ci.plan --count --base "${BASE_SHA:-invalid}" 2>/dev/null)
-          echo "selected=$selected" >> "$GITHUB_OUTPUT"
-          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
-          echo "count=$count" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          # base が解決できない場合 plan.py が全 route を選び、理由を stderr に出す。
+          python -m scripts.ci.plan --github-outputs --reason \
+            --base "${BASE_SHA:-invalid}" >> "$GITHUB_OUTPUT"
           echo "### Selected routes" >> "$GITHUB_STEP_SUMMARY"
-          echo '`'"$selected"'`' >> "$GITHUB_STEP_SUMMARY"
+          echo '`'"$(python -m scripts.ci.plan --selected --base "${BASE_SHA:-invalid}")"'`' >> "$GITHUB_STEP_SUMMARY"
+
   # 実際の検証。step 列は scripts/ci/jobs.py を持ち、ここは matrix を
   # 展開して run.py に委譲するだけ。
   ci:
     name: ${{ matrix.route.name }}
     needs: plan
-    if: needs.plan.outputs.count != '0'
+    # plan が失敗した場合に空の matrix で落ちないよう、成功と選択の両方を要求する。
+    if: success() && needs.plan.outputs.count != '0' && needs.plan.outputs.matrix != ''
     strategy:
       fail-fast: false
       matrix:
@@ -66,13 +66,13 @@ jobs:
         with:
           fetch-depth: ${{ matrix.route.checkout_depth }}
 
+      # run.py 自体が Python なので、route の python 設定に関わらず必ず入れる。
       - uses: actions/setup-python@v5
-        if: matrix.route.python != ''
         with:
-          python-version: ${{ matrix.route.python }}
+          python-version: ${{ matrix.route.python || '3.12' }}
 
       - uses: actions/setup-node@v4
-        if: matrix.route.node != ''
+        if: matrix.route.node
         with:
           node-version: ${{ matrix.route.node }}
           cache: ${{ matrix.route.node_cache }}
@@ -86,12 +86,12 @@ jobs:
           targets: ${{ matrix.route.rust_targets }}
 
       - uses: taiki-e/install-action@v2
-        if: matrix.route.wasm_bindgen != ''
+        if: matrix.route.wasm_bindgen
         with:
           tool: wasm-bindgen@${{ matrix.route.wasm_bindgen }}
 
       - uses: actions/setup-java@v4
-        if: matrix.route.java != ''
+        if: matrix.route.java
         with:
           distribution: temurin
           java-version: ${{ matrix.route.java }}
@@ -100,7 +100,7 @@ jobs:
         if: matrix.route.gradle
 
       - uses: actions/cache@v4
-        if: matrix.route.cache != ''
+        if: matrix.route.cache
         with:
           path: |
             ~/.cargo/registry/index/

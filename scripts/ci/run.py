@@ -88,6 +88,8 @@ def run_step(route, step, log: report.LocalLog | None) -> dict:
     command = [substitute(part) for part in step.command]
     environment = dict(os.environ)
     environment.update({key: substitute(value) for key, value in step.env.items()})
+    if log is not None:
+        log.begin(route.key, step.name)
 
     attempts = step.retries + 1
     started = time.perf_counter()
@@ -136,6 +138,8 @@ def run_step(route, step, log: report.LocalLog | None) -> dict:
             log.write(output or "")
 
         if ok or attempt == attempts:
+            if log is not None:
+                log.end(route.key, step.name, show=not ok and not report.on_github())
             break
         report.warning(f"{step.name} failed (attempt {attempt}/{attempts}); retrying in {step.retry_delay_seconds}s")
         time.sleep(step.retry_delay_seconds)

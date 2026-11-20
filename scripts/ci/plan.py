@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from scripts.ci.console import configure
-from scripts.ci.jobs import ORDER, ROOT, RUST_TOOLCHAIN, ROUTES, requirements, runner_os, route_for
+from scripts.ci.jobs import ORDER, RUST_TOOLCHAIN, ROUTES, requirements, runner_os, route_for
 from scripts.ci.paths import ALL_JOBS, changed_paths, jobs_for_paths
 
 DEFAULT_BASE = "origin/develop"
@@ -53,8 +53,6 @@ def matrix(keys: list[str]) -> list[dict]:
                 "java": route.java,
                 "gradle": route.gradle,
                 "cache": route.cache,
-                "workdir": route.working_directory,
-                "requires": list(requirements(route)),
             }
         )
     return entries
@@ -67,6 +65,11 @@ def main() -> int:
     parser.add_argument("--github-matrix", action="store_true", help="matrix の JSON を stdout に出す")
     parser.add_argument("--selected", action="store_true", help="実行すべき route key の JSON を stdout に出す")
     parser.add_argument("--count", action="store_true", help="実行すべき route 数を stdout に出す")
+    parser.add_argument(
+        "--github-outputs",
+        action="store_true",
+        help="GITHUB_OUTPUT へ書く selected/matrix/count を 1 つの JSON で出す",
+    )
     parser.add_argument("--reason", action="store_true", help="判定理由を stderr に出す")
     parser.add_argument("--list", action="store_true", help="全 route と前提を表示する")
     parser.add_argument("--no-diff", action="store_true", help="diff を取らずに全 route を対象にする")
@@ -86,7 +89,12 @@ def main() -> int:
         else:
             print(f"{len(paths)} changed path(s) select {len(keys)} route(s)", file=sys.stderr)
 
-    if args.github_matrix:
+    if args.github_outputs:
+        # git diff を 1 回で済ませ、GITHUB_OUTPUT 用の key=value を出す。
+        print(f"selected={json.dumps(keys)}")
+        print(f"matrix={json.dumps(matrix(keys))}")
+        print(f"count={len(keys)}")
+    elif args.github_matrix:
         print(json.dumps(matrix(keys)))
     elif args.selected:
         print(json.dumps(keys))

@@ -35,8 +35,15 @@ class PlanTests(unittest.TestCase):
             self.assertEqual(entry["name"], route.name)
             self.assertEqual(entry["timeout"], route.timeout_minutes)
             self.assertEqual(entry["runs_on"], "windows-2022" if route.os == "windows" else "ubuntu-latest")
-            self.assertEqual(entry["workdir"], route.working_directory)
+            self.assertNotIn("workdir", entry)
+            self.assertNotIn("requires", entry)
             json.dumps(entry)  # matrix は JSON へ直列化できること
+
+    def test_matrix_carries_working_directory_indirectly(self):
+        """作業ディレクトリは matrix ではなく run.py が route から解決する。"""
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertNotIn("matrix.route.workdir", workflow)
+        self.assertNotIn("matrix.route.requires", workflow)
 
     def test_matrix_entries_avoid_shell_injection(self):
         """step は argv で持つので、matrix に shell 文字列を渡さない。"""
