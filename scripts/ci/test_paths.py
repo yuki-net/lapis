@@ -9,9 +9,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts.ci.jobs import ORDER, ROUTES
 from scripts.ci.paths import jobs_for_paths, PATH_RULES, ALL_JOBS
 from scripts.ci.gate import errors
-from scripts.ci.paths import JOB_IDS
 from scripts.ci.paths import changed_paths
 
 
@@ -23,26 +23,32 @@ class TestPathRouting(unittest.TestCase):
         self.assertEqual(jobs_for_paths(["clients/desktop/persistence/src/lib.rs"]), {"desktop", "rust_core"})
         self.assertEqual(jobs_for_paths(["locales/ja-JP/messages/common.json"]), {"repository", "rust_core", "desktop"})
 
-    def test_ci_workflow_uses_final_check_names_and_no_release_validation(self):
+    def test_route_names_match_the_workflow(self):
+        """route の表示名は CI のジョブ名になるため、jobs.py を正とする。"""
         workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-        for name in ("Changes", "Dev Commands / Windows", "Mobile / Android", "Gate"):
-            self.assertIn(f"name: {name}", workflow)
-        self.assertNotIn("Build Release Desktop", workflow)
-        self.assertNotIn("Test Release Inspector boundary", workflow)
+        for key in ("repository", "rust_core", "host", "desktop"):
+            self.assertIn(key, ROUTES)
+        for key in ORDER:
+            self.assertIn(ROUTES[key].name, {route.name for route in ROUTES.values()})
+        self.assertIn("name: Plan", workflow)
+        self.assertIn("name: Gate", workflow)
+        self.assertIn("python -m scripts.ci.run", workflow)
 
-    def test_format_jobs_install_rustfmt(self):
-        workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-        jobs = re.split(r"(?m)^  (?=[a-z_]+:\s*$)", workflow.split("\njobs:\n", 1)[1])
-        format_jobs = [job for job in jobs if re.search(r"scripts/check\.py\s+\w+\s+format", job)]
-        self.assertEqual(len(format_jobs), 3)
-        for job in format_jobs:
-            self.assertRegex(job, r"(?m)^\s+components:\s+[^\n]*\brustfmt\b")
+    def test_format_steps_install_rustfmt(self):
+        """`check.py <route> format` を実行する route は rustfmt を導入する。"""
+        format_routes = [
+            route
+            for route in ROUTES.values()
+            if any(any("format" in part for part in step.command) for step in route.steps)
+        ]
+        self.assertEqual(len(format_routes), 3)
+        for route in format_routes:
+            self.assertRegex(route.rust_components, r"\brustfmt\b", route.key)
 
     def test_rust_core_installs_analyzer_for_platform_tests(self):
-        workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-        rust_core = workflow.split("\n  rust_core:\n", 1)[1].split("\n  host_windows:\n", 1)[0]
-        self.assertRegex(rust_core, r"(?m)^\s+components:\s+[^\n]*\brust-analyzer\b")
-        self.assertRegex(rust_core, r"(?m)^\s+components:\s+[^\n]*\brust-src\b")
+        rust_core = ROUTES["rust_core"]
+        self.assertRegex(rust_core.rust_components, r"\brust-analyzer\b")
+        self.assertRegex(rust_core.rust_components, r"\brust-src\b")
 
     def test_desktop_path_runs_desktop(self):
         self.assertIn("desktop", jobs_for_paths(["clients/desktop/app/src/main.rs"]))
@@ -248,16 +254,18 @@ class TestPathRouting(unittest.TestCase):
 
     def test_gate_checks_mapped_jobs_and_expected_skips(self):
         for route, path in (("desktop", "clients/desktop/app/src/main.rs"), ("host", "host/app/src/main.rs")):
-            selected = list(jobs_for_paths([path]))
-            needs = {"path_filter": {"result": "success"}}
-            needs.update({job: {"result": "success" if name in selected else "skipped"} for name, job in JOB_IDS.items()})
-            self.assertEqual(errors(selected, needs), [])
+            selected = sorted(jobs_for_paths([path]))
+            needs = {"plan": {"result": "success"}, "ci": {"result": "success"}}
+            self.assertEqual(errors(selected, needs, len(selected)), [])
+            if not selected:
+                self.assertTrue(errors(selected, needs, 1))
+                continue
             for result in ("failure", "cancelled", "timed_out", "skipped"):
-                needs[JOB_IDS[route]]["result"] = result
-                self.assertTrue(errors(selected, needs), result)
-            needs[JOB_IDS[route]]["result"] = "success"
-            needs["path_filter"]["result"] = "failure"
-            self.assertTrue(errors(selected, needs))
+                needs["ci"]["result"] = result
+                self.assertTrue(errors(selected, needs, len(selected)), result)
+            needs["ci"]["result"] = "success"
+            needs["plan"]["result"] = "failure"
+            self.assertTrue(errors(selected, needs, len(selected)))
 
     def test_diff_uses_given_parent_for_stacked_pr_and_push(self):
         with tempfile.TemporaryDirectory() as directory:

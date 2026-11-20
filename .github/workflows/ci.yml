@@ -15,424 +15,122 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  RUST_TOOLCHAIN: 1.96.0
+  # job 定義は scripts/ci/jobs.py が唯一の正本。ここは実行の器だけ。
+  PYTHON_VERSION: "3.12"
 
 jobs:
-  # 変更pathから実行すべきjobを判定
-  path_filter:
-    name: Changes
+  # 変更 path から実行すべき route を決める。routing の判定は
+  # scripts/ci/plan.py -> scripts/ci/paths.py。
+  plan:
+    name: Plan
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      selected: ${{ steps.plan.outputs.selected }}
+      count: ${{ steps.plan.outputs.count }}
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-      - name: List jobs
-        id: paths
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Select routes
+        id: plan
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          jobs=$(python scripts/ci/paths.py list "${BASE_SHA:-invalid}")
-          echo "jobs=$jobs" >> $GITHUB_OUTPUT
-    outputs:
-      jobs: ${{ steps.paths.outputs.jobs }}
+          selected=$(python -m scripts.ci.plan --selected --base "${BASE_SHA:-invalid}" 2>/dev/null)
+          matrix=$(python -m scripts.ci.plan --github-matrix --base "${BASE_SHA:-invalid}" 2>/dev/null)
+          count=$(python -m scripts.ci.plan --count --base "${BASE_SHA:-invalid}" 2>/dev/null)
+          echo "selected=$selected" >> "$GITHUB_OUTPUT"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "### Selected routes" >> "$GITHUB_STEP_SUMMARY"
+          echo '`'"$selected"'`' >> "$GITHUB_STEP_SUMMARY"
+  # 実際の検証。step 列は scripts/ci/jobs.py を持ち、ここは matrix を
+  # 展開して run.py に委譲するだけ。
+  ci:
+    name: ${{ matrix.route.name }}
+    needs: plan
+    if: needs.plan.outputs.count != '0'
+    strategy:
+      fail-fast: false
+      matrix:
+        route: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.route.runs_on }}
+    timeout-minutes: ${{ matrix.route.timeout }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: ${{ matrix.route.checkout_depth }}
 
-  dev_windows:
-    name: Dev Commands / Windows
-    runs-on: windows-2022
-    needs: path_filter
-    if: contains(fromJSON(needs.path_filter.outputs.jobs), 'dev_windows')
+      - uses: actions/setup-python@v5
+        if: matrix.route.python != ''
+        with:
+          python-version: ${{ matrix.route.python }}
+
+      - uses: actions/setup-node@v4
+        if: matrix.route.node != ''
+        with:
+          node-version: ${{ matrix.route.node }}
+          cache: ${{ matrix.route.node_cache }}
+          cache-dependency-path: ${{ matrix.route.node_cache_path }}
+
+      - uses: dtolnay/rust-toolchain@master
+        if: matrix.route.rust
+        with:
+          toolchain: ${{ matrix.route.toolchain }}
+          components: ${{ matrix.route.rust_components }}
+          targets: ${{ matrix.route.rust_targets }}
+
+      - uses: taiki-e/install-action@v2
+        if: matrix.route.wasm_bindgen != ''
+        with:
+          tool: wasm-bindgen@${{ matrix.route.wasm_bindgen }}
+
+      - uses: actions/setup-java@v4
+        if: matrix.route.java != ''
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.route.java }}
+
+      - uses: gradle/actions/setup-gradle@v4
+        if: matrix.route.gradle
+
+      - uses: actions/cache@v4
+        if: matrix.route.cache != ''
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+            target/
+          key: ${{ matrix.route.cache }}-${{ runner.os }}-rust-${{ matrix.route.toolchain }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ matrix.route.cache }}-${{ runner.os }}-rust-${{ matrix.route.toolchain }}-
+
+      - name: Run ${{ matrix.route.name }}
+        working-directory: ${{ github.workspace }}
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: python -m scripts.ci.run ${{ matrix.route.job }} --no-prerequisite-check
+
+  gate:
+    name: Gate
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [plan, ci]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-      - run: python -m unittest discover -s scripts -p test_dev_commands.py
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          components: rustfmt
-      - run: cargo fmt --manifest-path scripts/dev-session/Cargo.toml -- --check
-      - run: python -m unittest discover -s scripts -p test_dev_session.py
-
-  repository:
-    name: Repository
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    needs: path_filter
-    if: >-
-      needs.path_filter.outputs.jobs != '[]' &&
-      contains(needs.path_filter.outputs.jobs, 'repository')
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Run repository checks
-        run: python scripts/check.py repository architecture
-
-  rust_core:
-    name: Rust Core
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    needs: path_filter
-    if: >-
-      needs.path_filter.outputs.jobs != '[]' &&
-      contains(needs.path_filter.outputs.jobs, 'rust_core')
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          components: rustfmt, clippy, rust-analyzer, rust-src
-          targets: wasm32-wasip2
-
-      - name: Cache Cargo artifacts
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            ~/.cargo/git/checkouts/
-            target/
-          key: rust-core-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            rust-core-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-
-
-      - name: Check architecture
-        run: python3 scripts/check.py rust_core architecture
-
-      - name: Check formatting
-        run: python3 scripts/check.py rust_core format
-
-      - name: Test Rust Core
-        run: python3 scripts/check.py rust_core test
-
-      - name: Test external extension component
-        run: |
-          cargo build --locked -p lapis-terminal-native
-          python3 -m scripts.extensions.smoke_native_terminal
-          cargo test --locked -p extension-runtime --lib native::tests
-          cargo test --locked -p extension-runtime --test native -- --ignored
-          cargo build --locked --manifest-path examples/external-extension/Cargo.toml --target wasm32-wasip2 --target-dir target/external-extension
-          cargo build --locked -p extension-runtime --bin lapis-extension-host
-          python3 -m scripts.extensions.smoke
-          python3 -m scripts.extensions.smoke_pty
-          python3 -m scripts.extensions.smoke_terminal
-          python3 -m scripts.extensions.stage extensions "$RUNNER_TEMP/lapis-bundled-input" --target-dir target/terminal-component --debug
-          cargo fmt --manifest-path extensions/terminal/component/Cargo.toml -- --check
-          cargo clippy --locked --manifest-path extensions/terminal/component/Cargo.toml --target wasm32-wasip2 --target-dir target/terminal-component -- -D warnings
-          cargo test --locked -p extensions-entry --test package independent_component_is_packaged_installed_and_activated -- --ignored
-
-      - name: Lint Rust Core
-        run: python3 scripts/check.py rust_core lint
-
-  host_windows:
-    name: Host / Windows
-    runs-on: windows-2022
-    timeout-minutes: 50
-    needs: path_filter
-    if: >-
-      needs.path_filter.outputs.jobs != '[]' &&
-      contains(needs.path_filter.outputs.jobs, 'host')
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          components: rustfmt, clippy
-          targets: wasm32-wasip2, wasm32-unknown-unknown
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-
-      - name: Install wasm-bindgen
-        uses: taiki-e/install-action@v2
-        with:
-          tool: wasm-bindgen@0.2.129
-
-      - name: Cache Cargo artifacts
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            ~/.cargo/git/checkouts/
-            target/
-          key: host-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            host-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-
-
-      - name: Check architecture
-        run: python scripts/check.py host architecture
-
-      - name: Check formatting
-        run: python scripts/check.py host format
-
-      - name: Test Host
-        shell: pwsh
-        timeout-minutes: 20
-        run: |
-          $process = Start-Process python -ArgumentList @('scripts/check.py', 'host', 'test') -NoNewWindow -PassThru
-          if (-not $process.WaitForExit(1200000)) {
-            & taskkill /F /T /PID $process.Id 2>$null
-            throw 'Host tests exceeded 20 minutes'
-          }
-          exit $process.ExitCode
-
-      - name: Test approved extension PTY
-        shell: pwsh
-        run: |
-          cargo build --locked -p lapis-terminal-native
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -m scripts.extensions.stage extensions "$env:RUNNER_TEMP/lapis-native-input" --target-dir target --debug
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -m scripts.extensions.smoke_native_terminal
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked -p extension-runtime --lib native::tests
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked -p extension-runtime --lib staged_image_is_locked_until_extension_is_unloaded -- --ignored
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked -p extension-runtime --test supervisor native_image_runs_in_worker_and_preserves_invocation_context -- --ignored
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked -p extension-runtime --test native -- --ignored
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked -p local-process pty::tests
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo build --locked -p extension-runtime --bin lapis-extension-host
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked -p host signed_native_package_runs_in_extension_host -- --ignored
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked -p host --test quic native_terminal_survives_quic_disconnect_and_can_be_claimed -- --ignored
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo build --locked --manifest-path examples/pty-extension/Cargo.toml --target wasm32-wasip2 --target-dir target/pty-extension
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked -p host approved_wasm_uses_host_pty_and_shutdown_reclaims_it -- --ignored
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo build --locked --manifest-path extensions/terminal/component/Cargo.toml --target wasm32-wasip2 --target-dir target/terminal-component
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked -p host terminal_component_uses_approved_host_pty -- --ignored
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked -p lapis desktop_terminal_runs_real_extension_pty -- --ignored
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Test Web extension terminal against Host
-        shell: pwsh
-        run: |
-          cargo build --locked -p host -p web-bridge --bins
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo build --locked -p web-terminal-smoke --target wasm32-unknown-unknown --profile web
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python clients/web/wasm/tests/extension_terminal_smoke.py
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Test managed Web publication
-        shell: pwsh
-        run: |
-          cargo build --locked -p web-bridge
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $env:LAPIS_TEST_WEB_BRIDGE = (Resolve-Path target/debug/lapis-web-bridge.exe).Path
-          cargo test --locked -p host --test managed_web_auth managed_host_owns_web_publication_and_stops_it_on_exit -- --ignored
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Lint Host
-        run: python scripts/check.py host lint
-
-      - name: Build Host
-        run: python scripts/check.py host build
-
-  desktop_windows:
-    name: Desktop / Windows
-    runs-on: windows-2022
-    timeout-minutes: 60
-    needs: path_filter
-    if: >-
-      needs.path_filter.outputs.jobs != '[]' &&
-      contains(needs.path_filter.outputs.jobs, 'desktop')
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          components: rustfmt, clippy
-
-      - name: Cache Cargo artifacts
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            ~/.cargo/git/checkouts/
-            target/
-          key: desktop-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            desktop-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-
-
-      - name: Check architecture
-        run: python scripts/check.py desktop architecture
-
-      - name: Check formatting
-        run: python scripts/check.py desktop format
-
-      - name: Test Desktop
-        shell: pwsh
-        timeout-minutes: 20
-        run: |
-          cargo build --locked -p extension-runtime --bin lapis-extension-host
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo build --locked -p lapis-terminal-native
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $process = Start-Process python -ArgumentList @('scripts/check.py', 'desktop', 'test') -NoNewWindow -PassThru
-          if (-not $process.WaitForExit(1200000)) {
-            & taskkill /F /T /PID $process.Id 2>$null
-            throw 'Desktop tests exceeded 20 minutes'
-          }
-          if ($process.ExitCode -ne 0) { exit $process.ExitCode }
-
-      - name: Lint Desktop
-        run: python scripts/check.py desktop lint
-
-      - name: Build Desktop
-        run: python scripts/check.py desktop build
-
-      - name: Verify GPUI patches
-        shell: pwsh
-        run: |
-          foreach ($patch in @('external-inspector', 'windows', 'drag')) {
-            git apply --unidiff-zero --ignore-space-change --check --reverse --directory=vendor/gpui "patches/gpui-0.2.2-$patch.patch"
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
-
-  mobile:
-    name: Mobile / Android
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    needs: path_filter
-    if: >-
-      needs.path_filter.outputs.jobs != '[]' &&
-      contains(needs.path_filter.outputs.jobs, 'mobile')
-    defaults:
-      run:
-        working-directory: clients/mobile
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "21"
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Make Gradle wrapper executable
-        run: chmod +x ./gradlew
-
-      - name: Test shared KMP code
-        run: |
-          for attempt in 1 2 3; do
-            ./gradlew :sharedUi:testDebugUnitTest --stacktrace && exit 0
-            echo "gradle test attempt ${attempt} failed; retrying"
-            sleep 15
-          done
-          exit 1
-
-      - name: Build Android app
-        run: |
-          for attempt in 1 2 3; do
-            ./gradlew :androidApp:assembleDebug --stacktrace && exit 0
-            echo "gradle build attempt ${attempt} failed; retrying"
-            sleep 15
-          done
-          exit 1
-
-  web:
-    name: Web
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    needs: path_filter
-    if: >-
-      needs.path_filter.outputs.jobs != '[]' &&
-      contains(needs.path_filter.outputs.jobs, 'web')
-
-    defaults:
-      run:
-        working-directory: clients/web
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: clients/web/package-lock.json
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          targets: wasm32-unknown-unknown
-
-      - name: Install wasm-bindgen
-        uses: taiki-e/install-action@v2
-        with:
-          tool: wasm-bindgen@0.2.129
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build Web
-        run: npm run build
-
-      - name: Test Web connection handling
-        run: npm test
-
-  ci_gate:
-    name: Gate
-    runs-on: ubuntu-latest
-    if: always()
-    needs:
-      - path_filter
-      - repository
-      - rust_core
-      - host_windows
-      - desktop_windows
-      - dev_windows
-      - mobile
-      - web
-    steps:
-      - uses: actions/checkout@v4
+          python-version: ${{ env.PYTHON_VERSION }}
       - name: Check results
         env:
-          SELECTED_JOBS: ${{ needs.path_filter.outputs.jobs }}
+          SELECTED_ROUTES: ${{ needs.plan.outputs.selected }}
+          SELECTED_COUNT: ${{ needs.plan.outputs.count }}
           NEEDS_JSON: ${{ toJSON(needs) }}
         run: python -m scripts.ci.gate

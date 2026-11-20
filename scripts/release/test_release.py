@@ -1207,10 +1207,16 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.workflow.count("persist-credentials: false"), 2)
 
     def test_existing_workflows_still_gate_on_repository_checks(self):
+        # CI は scripts/ci/jobs.py を実行するだけなので、repository 検証の
+        # 定義は jobs.py 側にあることを確認する。
+        jobs = (
+            Path(__file__).resolve().parents[2] / "scripts" / "ci" / "jobs.py"
+        ).read_text(encoding="utf-8")
         ci = (
             Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
         ).read_text(encoding="utf-8")
-        self.assertIn("python scripts/check.py repository architecture", ci)
+        self.assertIn('"scripts/check.py", "repository", "architecture"', jobs)
+        self.assertIn("python -m scripts.ci.run", ci)
 
 
 class SigningKeyTests(TempDirTest):
