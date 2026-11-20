@@ -214,7 +214,10 @@ mod tests {
     fn desktop_terminal_runs_real_extension_pty() {
         use client_api::HostExtensionSetCapabilityRequest;
         use desktop_client::TerminalSession;
-        use std::{process::Command, time::Instant};
+        use std::{
+            process::{Command, Stdio},
+            time::Instant,
+        };
 
         const CHILD: &str = "LAPIS_TERMINAL_INTEGRATION_CHILD";
         if std::env::var_os(CHILD).is_none() {
@@ -228,17 +231,34 @@ mod tests {
                 temp.path().join("lapis-extension-host.exe"),
             )
             .unwrap();
-            let status = Command::new(copied_test)
+            let mut child = Command::new(copied_test)
                 .args([
-                    "--exact",
                     "extension_terminal::tests::desktop_terminal_runs_real_extension_pty",
+                    "--exact",
                     "--ignored",
                     "--nocapture",
+                    "--test-threads=1",
                 ])
                 .env(CHILD, "1")
-                .status()
+                .env_remove("RUST_TEST_NOCAPTURE")
+                .stdin(Stdio::null())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .spawn()
                 .unwrap();
-            assert!(status.success());
+            let deadline = Instant::now() + Duration::from_secs(60);
+            let status = loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    break status;
+                }
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("desktop extension PTY child test did not finish");
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            };
+            assert!(status.success(), "desktop extension PTY child test failed");
             return;
         }
 
