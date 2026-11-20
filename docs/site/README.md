@@ -4,7 +4,7 @@ Lapis の利用者向けドキュメントサイトです。Astro Starlight を�
 
 ## ローカルで実行
 
-Node.js 22.22 以上（CI とデプロイは Node.js 24）を使用します。依存は `package-lock.json` で固定しているため、初回と更新時は `npm install`、再現したいときは `npm ci` を使います。
+Node.js 24（CI とデプロイ）を使用します。ローカルでは、依存する Astro 7.4 が要求する 22.23.4 以上を使ってください（`package.json` の `engines` は既存の `>=22.22.0` を維持しています）。依存は `package-lock.json` で固定しているため、初回と更新時は `npm install`、再現したいときは `npm ci` を使います。
 
 ```sh
 cd docs/site
@@ -20,7 +20,7 @@ IntelliJ / RustRover では `.run/Run Docs Site.run.xml` と `.run/Build Docs Si
 
 ## Cloudflare Pages へのデプロイ
 
-デプロイは `.github/workflows/deploy-docs.yml` が行います。`develop` への `docs/site/**` の push と手動実行が対象です。
+デプロイは `.github/workflows/deploy-docs.yml` が行います。`develop` への `docs/site/**` の push と手動実行の両方が対象で、`wrangler types` による設定検証の後に Pages へアップロードします。`.github/workflows/docs.yml` はビルドとテストだけで、アップロードは行いません。
 
 ### リポジトリに置かない値
 
@@ -49,7 +49,7 @@ Pages の設定は `account_id` を受け付けないため、アカウントは
 
 ### 手元で確認する
 
-secrets が無い環境では実際のアップロードまで検証できません。設定生成とビルド、wrangler の設定読み込みまでを次で確認します。
+secrets が無い環境ではアップロードまで検証できません。手元では設定生成とビルド、wrangler の設定読み込みまでを次で確認します。
 
 ```sh
 cd docs/site
@@ -59,4 +59,4 @@ npm run build
 npx wrangler types --include-runtime=false <一時ファイルのパス>.d.ts
 ```
 
-`wrangler pages deploy` は `--dry-run` を持たず、認証情報が無ければすぐに API 呼び出しで失敗します。そのため CI では上の `wrangler types` で `wrangler.json` を読み込めることまでを確認し、アップロードは行いません。実デプロイは Environment の secrets を設定した後に `Deploy Docs` を手動実行して確認してください。
+`wrangler pages deploy` は `--dry-run` を持たず、認証情報が無ければすぐに API 呼び出しで失敗します。そのため手元で確認できるのは `wrangler.json` を wrangler が読み込めることまでです。実デプロイは Environment の secrets を設定した後に `Deploy Docs` を手動実行して確認してください。
