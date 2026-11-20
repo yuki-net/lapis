@@ -14,7 +14,13 @@ Windows で Desktop と Web を起動して確認する手順の正本です。�
 
 `Run Desktop (Hot Reload)` は `Run Desktop` の起動方法だけを変えたもので、Host の招待待ちと `target/dev-desktop/state` は共通です。
 
-`.run` のその他は、`Run Web (Bridge)`、デモ用の `Run Web (Page)`、`Build Web`、`Run Android`、`Build Android` です。`Run Web (Page)` だけを起動して `http://127.0.0.1:4747/?demo=1` を開くと、Host と bridge なしで UI を確認できます。
+`.run` のその他は、`Run Web (Bridge)`、デモ用の `Run Web (Page)`、`Build Web`、`Run Android`、`Build Android`、ドキュメントサイト用の `Run Docs Site` と `Build Docs Site` です。`Run Web (Page)` だけを起動して `http://127.0.0.1:4747/?demo=1` を開くと、Host と bridge なしで UI を確認できます。
+
+## ドキュメントサイト
+
+利用者向けドキュメントサイト（`docs/site`）は Astro Starlight で作っており、`Run Docs Site`（`npm run dev`）で `http://localhost:4321` を開けます。`Build Docs Site` は `npm run build` で `docs/site/dist` を出力します。
+
+`Run Host` などと違い、この2つは `docs/site` の `node_modules` を前提にします。初回は `cd docs\site; npm install` を実行してください。Node.js は Astro 7.4 が要求する 22.23.4 以上（CI は 24）が必要です。公開先と必要な secrets、生成される `wrangler.json` は [docs/site/README.md](site/README.md) にまとめています。
 
 ## Host と Desktop の接続
 

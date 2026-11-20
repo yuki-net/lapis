@@ -1,11 +1,154 @@
-/* Site presentation belongs here; keep content Markdown renderer-agnostic. */
+/*
+ * サイトの見た目はここで所有する。本文 Markdown には Starlight 固有の
+ * コンポーネントを埋め込まず、表示の調整は CSS と設定側で行う。
+ */
+
+/* ---- アクセント色（ライト / ダーク） ---- */
 :root {
   --sl-color-accent-low: #122442;
   --sl-color-accent: #92b8fc;
   --sl-color-accent-high: #e0ecff;
+  --lapis-border: color-mix(in srgb, var(--sl-color-accent) 24%, transparent);
+  --lapis-surface: color-mix(in srgb, var(--sl-color-accent) 8%, transparent);
 }
 :root[data-theme='light'] {
   --sl-color-accent-low: #eaf2ff;
   --sl-color-accent: #2858b8;
   --sl-color-accent-high: #163577;
+  --lapis-border: color-mix(in srgb, var(--sl-color-accent) 24%, transparent);
+  --lapis-surface: color-mix(in srgb, var(--sl-color-accent) 6%, transparent);
+}
+
+/* ---- 日本語の読みやすさ ---- */
+:root {
+  --sl-content-width: 48rem;
+  --sl-text-body: 1rem;
+  --sl-line-height: 1.9;
+}
+
+body {
+  font-feature-settings: 'palt' 1;
+  letter-spacing: 0.01em;
+  line-height: var(--sl-line-height);
+}
+
+/* 見出しは字間を詰め、本文との余白を広めに取る。 */
+.sl-markdown-content :is(h1, h2, h3, h4) {
+  letter-spacing: -0.01em;
+  line-height: 1.5;
+  text-wrap: balance;
+}
+.sl-markdown-content h2 {
+  margin-top: 2.75rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--lapis-border);
+}
+.sl-markdown-content h3 {
+  margin-top: 2rem;
+}
+.sl-markdown-content p,
+.sl-markdown-content li {
+  line-height: var(--sl-line-height);
+  text-wrap: pretty;
+}
+.sl-markdown-content li + li {
+  margin-top: 0.4rem;
+}
+
+/* リンクはアクセント色の下線で示す。 */
+.sl-markdown-content a:not(:where(.not-content *)) {
+  text-underline-offset: 0.22em;
+  text-decoration-thickness: 1px;
+  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+}
+.sl-markdown-content a:not(:where(.not-content *)):hover {
+  text-decoration-color: currentColor;
+}
+
+/* ---- コードブロック ---- */
+.sl-markdown-content :not(pre) > code {
+  border: 1px solid var(--lapis-border);
+  background: var(--lapis-surface);
+  padding: 0.12em 0.36em;
+  border-radius: 0.3rem;
+}
+.sl-markdown-content pre {
+  border: 1px solid var(--lapis-border);
+  border-radius: 0.6rem;
+  line-height: 1.7;
+  box-shadow: 0 1px 2px color-mix(in srgb, #000 12%, transparent);
+}
+
+/* 導入文（先頭段落）は本文より大きく、行間を広く取る。 */
+.sl-markdown-content > p:first-child {
+  font-size: 1.0625rem;
+  line-height: 1.95;
+}
+
+/* サイドバーの現在地をアクセント色で示す。 */
+.sidebar-content a[aria-current='page'],
+.sidebar-content a[aria-current='page']:hover {
+  background: var(--lapis-surface);
+  color: var(--sl-color-accent-high);
+}
+
+/* ---- トップページ（splash） ---- */
+.hero {
+  padding-block: clamp(2rem, 6vw, 4.5rem);
+}
+.hero h1 {
+  letter-spacing: -0.02em;
+  font-size: clamp(2.4rem, 6vw, 3.6rem);
+}
+.hero .tagline {
+  max-width: 44rem;
+  line-height: 1.85;
+  color: var(--sl-color-gray-3);
+}
+:root[data-theme='light'] .hero .tagline {
+  color: var(--sl-color-gray-2);
+}
+.hero .actions {
+  gap: 0.75rem;
+}
+.hero .actions a {
+  border-radius: 0.5rem;
+}
+
+/* トップのリンクカード（本文 Markdown のリストを体裁する）。 */
+.sl-markdown-content ul:has(> li > a:only-child) {
+  display: grid;
+  gap: 0.85rem;
+  padding: 0;
+  margin-block: 1.5rem;
+  list-style: none;
+}
+.sl-markdown-content ul:has(> li > a:only-child) > li {
+  border: 1px solid var(--lapis-border);
+  border-radius: 0.65rem;
+  background: var(--lapis-surface);
+  padding: 0.9rem 1.1rem;
+  transition: border-color 120ms ease, transform 120ms ease;
+}
+.sl-markdown-content ul:has(> li > a:only-child) > li:hover {
+  border-color: var(--sl-color-accent);
+  transform: translateY(-1px);
+}
+.sl-markdown-content ul:has(> li > a:only-child) > li > a {
+  display: block;
+  font-weight: 600;
+  text-decoration: none;
+  color: var(--sl-color-accent-high);
+}
+.sl-markdown-content ul:has(> li > a:only-child) > li > a:hover {
+  text-decoration: underline;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sl-markdown-content ul:has(> li > a:only-child) > li {
+    transition: none;
+  }
+  .sl-markdown-content ul:has(> li > a:only-child) > li:hover {
+    transform: none;
+  }
 }
