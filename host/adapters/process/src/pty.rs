@@ -203,7 +203,18 @@ impl Drop for Process {
         if self.exit.is_none() {
             let _ = self.child.kill();
         }
+        if let Some(master) = self.master.take() {
+            let _ = drop_in_background(master);
+        }
     }
+}
+
+/// ConPTY の master は、接続中の端末が終了するまで破棄が待つことがある。
+/// dispatch や session lock を保持したまま破棄せず、終了処理だけを分離する。
+fn drop_in_background<T: Send + 'static>(value: T) -> std::io::Result<thread::JoinHandle<()>> {
+    thread::Builder::new()
+        .name("lapis-pty-master-close".into())
+        .spawn(move || drop(value))
 }
 
 impl Process {
@@ -215,7 +226,9 @@ impl Process {
             if self.exit.is_some() {
                 // Windows ConPTY は master を閉じるまで出力が EOF にならない。
                 // 出力 mutex は保持せず、reader が残りの bytes を読み切れるようにする。
-                drop(self.master.take());
+                if let Some(master) = self.master.take() {
+                    let _ = drop_in_background(master);
+                }
             }
         }
         Ok(self.exit)
@@ -576,6 +589,7 @@ impl Drop for Reservation<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex, mpsc};
 
     #[test]
     fn output_limit_exposes_lost_bytes_and_ordered_offsets() {
@@ -592,6 +606,38 @@ mod tests {
         assert_eq!(rest.lost_before, None);
         assert!(output.read(8, 1).is_err());
         assert!(output.read(7, 0).is_err());
+    }
+
+    #[test]
+    fn blocking_resource_drop_does_not_block_the_caller() {
+        struct BlockingDrop {
+            started: mpsc::Sender<()>,
+            release: Arc<Mutex<mpsc::Receiver<()>>>,
+        }
+
+        impl Drop for BlockingDrop {
+            fn drop(&mut self) {
+                let _ = self.started.send(());
+                let _ = self
+                    .release
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .recv();
+            }
+        }
+
+        let (started, observed) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let worker = drop_in_background(BlockingDrop {
+            started,
+            release: Arc::new(Mutex::new(released)),
+        })
+        .unwrap();
+        observed
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("resource drop did not start in the background");
+        release.send(()).unwrap();
+        worker.join().unwrap();
     }
 
     fn command() -> PtySpawn {
