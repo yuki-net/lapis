@@ -33,7 +33,7 @@ Wrangler の設定はリポジトリにコミットしません。ビルド時�
 | `CLOUDFLARE_PAGES_PROJECT` | vars | 必須 | Pages プロジェクト名（英小文字・数字・ハイフン） |
 | `CLOUDFLARE_PAGES_BRANCH` | vars | 任意 | デプロイ先ブランチ名。未設定なら push 元のブランチ名 |
 
-これらは GitHub の Environment `cloudflare-pages` にだけ登録します。Environment が無い、または値が空の場合は設定生成の段階で停止するため、原因がそのままログに残ります。
+これらは GitHub の Environment `cloudflare-pages` にだけ登録します。Environment が無い、または値が空の場合は設定生成の段階で停止するため、原因がそのままログに残ります。初回はリポジトリの Settings → Environments で `cloudflare-pages` を作成してから登録してください。
 
 ### 生成される設定
 
