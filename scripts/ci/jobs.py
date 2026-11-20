@@ -279,10 +279,16 @@ ROUTES: dict[str, Route] = {
                 ["cargo", "build", "--locked", "-p", "extension-runtime", "--bin", "lapis-extension-host"],
             ),
             Step("Build lapis-terminal-native", ["cargo", "build", "--locked", "-p", "lapis-terminal-native"]),
+            # terminal component の wasm は、拡張 package を作るテストの前提。
+            Step(
+                "Build terminal component",
+                ["cargo", "build", "--locked", "--manifest-path", "extensions/terminal/component/Cargo.toml",
+                 "--target", "wasm32-wasip2", "--target-dir", "target/terminal-component"],
+            ),
             Step("Test Desktop", py("scripts/check.py", "desktop", "test"), timeout_minutes=20),
-            # Desktop を丸ごとビルドする必要があるテストは、Desktop のビルド済み
-            # 環境でだけ実行する。Host ジョブで走らせると lapis のビルドが
-            # 間に合わず job の上限まで張り付く（旧 CI も Desktop 側で実行していた）。
+            # lapis（Desktop 全体）をビルドする必要があるテスト。Desktop の
+            # ビルド済み環境でだけ実行する。Host ジョブでは lapis のビルドが
+            # job の上限を超える。
             Step(
                 "Test desktop terminal pty",
                 ["cargo", "test", "--locked", "-p", "lapis", "desktop_terminal_runs_real_extension_pty", "--", "--ignored"],
