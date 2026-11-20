@@ -83,7 +83,13 @@ def missing_prerequisites(route) -> list[str]:
 
 
 def run_step(route, step, log: report.LocalLog | None) -> dict:
-    """1 step を実行し、結果を返す。失敗は例外にせず結果に落とす。"""
+    """1 step を実行し、結果を返す。失敗は例外にせず結果に落とす。
+
+    出力はパイプではなくファイルへ直接書かせる。パイプだと、cargo やテストが
+    起動した孫プロセスが書き込み端を掴んだままになり、直接の子が終了しても
+    `communicate()` が EOF を待ち続けて step がハングする（実際に CI の
+    `Test desktop terminal pty` が 18 分止まった）。
+    """
     directory = ROOT / (route.working_directory or "") / (step.directory or "")
     command = [substitute(part) for part in step.command]
     environment = dict(os.environ)
@@ -98,17 +104,14 @@ def run_step(route, step, log: report.LocalLog | None) -> dict:
     for attempt in range(1, attempts + 1):
         report.group(step.name)
         started = time.perf_counter()
-        process = None
-        try:
+        with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as capture:
             process = subprocess.Popen(
                 command,
                 cwd=directory,
                 env=environment,
-                stdout=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
+                stdout=capture,
                 stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
                 # タイムアウト時に子孫まで止められるよう、独立した
                 # プロセスグループ / セッションで起動する。
                 start_new_session=(os.name != "nt"),
@@ -117,25 +120,27 @@ def run_step(route, step, log: report.LocalLog | None) -> dict:
                 ),
             )
             try:
-                output, _ = process.communicate(
-                    timeout=(step.timeout_minutes * 60) if step.timeout_minutes else None
-                )
-                ok = process.returncode == 0
+                process.wait(timeout=(step.timeout_minutes * 60) if step.timeout_minutes else None)
+                timed_out = False
             except subprocess.TimeoutExpired:
                 terminate_tree(process)
-                output, _ = process.communicate()
-                output = (output or "") + f"\nstep exceeded {step.timeout_minutes} minutes\n"
-                ok = False
-        finally:
-            report.endgroup()
+                timed_out = True
+            ok = not timed_out and process.returncode == 0
+
+            capture.seek(0)
+            output = capture.read()
+        report.endgroup()
+
+        if timed_out:
+            output += f"\nstep exceeded {step.timeout_minutes} minutes\n"
 
         # GitHub は step 単位でログを畳んで見せるため全行を出す。
         # ローカルは失敗した step だけ抜粋し、成功 step の出力は捨てる。
         if report.on_github() or not ok:
-            for line in (output or "").splitlines():
+            for line in output.splitlines():
                 print(line, flush=True)
         if log is not None:
-            log.write(output or "")
+            log.write(output)
 
         if ok or attempt == attempts:
             if log is not None:
@@ -148,7 +153,7 @@ def run_step(route, step, log: report.LocalLog | None) -> dict:
         "name": step.name,
         "ok": ok,
         "seconds": report.elapsed(started),
-        "output": output or "",
+        "output": output,
     }
 
 

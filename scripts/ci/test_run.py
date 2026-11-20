@@ -42,6 +42,24 @@ class RunTests(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertLess(time.perf_counter() - started, 20)
 
+    def test_grandchild_holding_output_does_not_hang_the_step(self):
+        """孫プロセスが出力を握ったままでも step が待ち続けないこと。
+
+        パイプを渡すと EOF 待ちで 18 分止まった（CI の desktop terminal pty）。
+        出力は一時ファイルへ書かせる。
+        """
+        script = (
+            "import subprocess, sys\n"
+            "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+            "print('parent done')\n"
+        )
+        step = Step("spawns-grandchild", [sys.executable, "-c", script], timeout_minutes=0.2)
+        started = time.perf_counter()
+        payload = run.execute(route_with(step), None, quiet=True)
+        elapsed = time.perf_counter() - started
+        self.assertTrue(payload["ok"], payload)
+        self.assertLess(elapsed, 15)
+
     def test_step_failure_stops_the_route(self):
         route = route_with(
             Step("fail", [sys.executable, "-c", "import sys; print('boom'); sys.exit(3)"]),
