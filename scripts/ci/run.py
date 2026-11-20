@@ -17,7 +17,17 @@ import time
 from pathlib import Path
 
 from scripts.ci import report
+from scripts.ci.console import configure
 from scripts.ci.jobs import ROOT, ORDER, local_os, requirements, route_for
+
+
+def configure_output() -> None:
+    """日本語を含むログを Windows の既定コードページでも落とさない。
+
+    CI の Windows runner は cp1252 で、日本語の step ログを print すると
+    UnicodeEncodeError で step ごと落ちる。
+    """
+    configure()
 
 # 前提を判定するためのコマンド。値を返せば充足。
 PREREQUISITES = {
@@ -237,6 +247,7 @@ def list_routes() -> None:
 
 
 def main() -> int:
+    configure_output()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("route", nargs="?", help="実行する route（--list で一覧）")
     parser.add_argument("--list", action="store_true", help="route 一覧と前提を表示する")

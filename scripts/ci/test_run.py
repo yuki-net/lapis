@@ -70,19 +70,22 @@ class RunTests(unittest.TestCase):
 
     def test_missing_prerequisite_skips_without_failing(self):
         route = route_for_os("linux")
-        with patch.object(run, "route_for", return_value=route), \
-             patch.object(run, "missing_prerequisites", return_value=["wasm-bindgen"]):
-            with redirect_stdout(io.StringIO()):
-                self.assertEqual(invoke(["test"]), 0)
-        with patch.object(run, "route_for", return_value=route), \
-             patch.object(run, "missing_prerequisites", return_value=["wasm-bindgen"]):
-            with redirect_stdout(io.StringIO()):
-                self.assertEqual(invoke(["test", "--strict"]), 1)
+        # 前提確認はローカル専用。CI 上でテストするため明示的に切る。
+        with patch.object(run.report, "on_github", return_value=False):
+            with patch.object(run, "route_for", return_value=route), \
+                 patch.object(run, "missing_prerequisites", return_value=["wasm-bindgen"]):
+                with redirect_stdout(io.StringIO()):
+                    self.assertEqual(invoke(["test"]), 0)
+            with patch.object(run, "route_for", return_value=route), \
+                 patch.object(run, "missing_prerequisites", return_value=["wasm-bindgen"]):
+                with redirect_stdout(io.StringIO()):
+                    self.assertEqual(invoke(["test", "--strict"]), 1)
 
     def test_other_ci_os_still_runs_with_local_toolchain(self):
         """CI の runner OS と違っても、前提が揃えば同じ検証を回す。"""
         route = route_for_os("windows" if os.name != "nt" else "linux")
-        with patch.object(run, "route_for", return_value=route), \
+        with patch.object(run.report, "on_github", return_value=False), \
+             patch.object(run, "route_for", return_value=route), \
              patch.object(run, "missing_prerequisites", return_value=[]), \
              patch.object(run, "execute", return_value={"route": "test", "ok": True, "steps": []}):
             with redirect_stdout(io.StringIO()):
@@ -104,10 +107,11 @@ class RunTests(unittest.TestCase):
 
     def test_local_summary_is_written_to_stdout_only(self):
         route = route_with(Step("ok", [sys.executable, "-c", "pass"]))
-        with redirect_stdout(io.StringIO()) as buffer:
-            run.execute(route, None, quiet=True)
+        # CI 上では GitHub 向けの出力になるため、ローカル表示を明示する。
+        with patch.object(report, "on_github", return_value=False):
+            with redirect_stdout(io.StringIO()) as buffer:
+                run.execute(route, None, quiet=True)
         self.assertIn("| step | result | time |", buffer.getvalue())
-        self.assertFalse(report.on_github())
 
 
 def route_for_os(name: str, **kwargs) -> Route:

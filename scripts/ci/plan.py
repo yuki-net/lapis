@@ -9,6 +9,7 @@ import json
 import sys
 from pathlib import Path
 
+from scripts.ci.console import configure
 from scripts.ci.jobs import ORDER, ROOT, RUST_TOOLCHAIN, ROUTES, requirements, runner_os, route_for
 from scripts.ci.paths import ALL_JOBS, changed_paths, jobs_for_paths
 
@@ -60,6 +61,7 @@ def matrix(keys: list[str]) -> list[dict]:
 
 
 def main() -> int:
+    configure()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", default=DEFAULT_BASE, help="diff の基準 ref")
     parser.add_argument("--github-matrix", action="store_true", help="matrix の JSON を stdout に出す")

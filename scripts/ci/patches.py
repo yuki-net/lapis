@@ -8,11 +8,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+from scripts.ci.console import configure
+
 ROOT = Path(__file__).resolve().parents[2]
 PATCHES = ("external-inspector", "windows", "drag")
 
 
 def main() -> int:
+    configure()
     for patch in PATCHES:
         command = [
             "git", "apply",

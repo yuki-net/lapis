@@ -9,6 +9,7 @@ import json
 import os
 import sys
 
+from scripts.ci.console import configure
 from scripts.ci.jobs import ORDER
 
 
@@ -28,6 +29,7 @@ def errors(selected, needs, count):
 
 
 def main() -> int:
+    configure()
     try:
         selected = json.loads(os.environ["SELECTED_ROUTES"])
         count = int(os.environ["SELECTED_COUNT"])
