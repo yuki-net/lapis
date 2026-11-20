@@ -43,7 +43,7 @@ jobs:
       - name: Build site
         run: npm run build
       - name: Validate wrangler configuration
-        run: npx wrangler types --include-runtime=false .astro/wrangler-types.d.ts
+        run: npx wrangler types --include-runtime=false "$RUNNER_TEMP/wrangler-types.d.ts"
       - name: Deploy to Cloudflare Pages
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

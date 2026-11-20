@@ -56,7 +56,7 @@ cd docs/site
 CLOUDFLARE_ACCOUNT_ID=<id> CLOUDFLARE_API_TOKEN=<token> \
   CLOUDFLARE_PAGES_PROJECT=lapis-docs npm run wrangler:config
 npm run build
-npx wrangler types --include-runtime=false .astro/wrangler-types.d.ts
+npx wrangler types --include-runtime=false "$TMPDIR/wrangler-types.d.ts"
 ```
 
 `wrangler pages deploy` は `--dry-run` を持たず、認証情報が無ければすぐに API 呼び出しで失敗します。そのため CI では上の `wrangler types` で `wrangler.json` を読み込めることまでを確認し、アップロードは行いません。実デプロイは Environment の secrets を設定した後に `Deploy Docs` を手動実行して確認してください。
