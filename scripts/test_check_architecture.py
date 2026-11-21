@@ -40,6 +40,19 @@ class ArchitectureTests(unittest.TestCase):
             source.write_text('use crate::shell::panel_layout::PanelLayout;\n', encoding="utf-8")
             self.assertTrue(any("Feature" in error for error in check_desktop_layout(root)))
 
+    def test_desktop_layout_scans_apps_entry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "apps/desktop/app/src/desktop.rs"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                '// TabGroupId was removed\nconst TEXT: &str = "DropZone";\n',
+                encoding="utf-8",
+            )
+            self.assertEqual(check_desktop_layout(root), [])
+            source.write_text('fn use_old(_: TabGroupId) {}\n', encoding="utf-8")
+            self.assertTrue(any("TabGroupId" in error for error in check_desktop_layout(root)))
+
     def test_feature_viewport_and_user_agent_access_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
