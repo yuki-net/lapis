@@ -242,7 +242,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --locked -p web-terminal-smoke --target wasm32-unknown-unknown --profile web
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python clients/web/wasm/tests/extension_terminal_smoke.py
+          python apps/web/wasm/tests/extension_terminal_smoke.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Test managed Web publication
@@ -383,7 +383,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: clients/web
+        working-directory: apps/web
 
     steps:
       - name: Check out repository
@@ -394,7 +394,7 @@ jobs:
         with:
           node-version: "24"
           cache: npm
-          cache-dependency-path: clients/web/package-lock.json
+          cache-dependency-path: apps/web/package-lock.json
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master

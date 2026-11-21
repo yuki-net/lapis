@@ -92,6 +92,7 @@ ALLOWED = {
     "desktop_persistence": {"desktop_persistence", "desktop_client", "models"},
     "desktop_entry": {"desktop_entry", "ui", "desktop_client", "desktop_persistence", "desktop_launcher", "host", "runtime", "application", "infrastructure", "transport", "models", "protocol"},
     "desktop_launcher": {"desktop_launcher"},
+    "web_entry": {"web_entry", "ui", "desktop_client", "models", "protocol", "client_core"},
     "client": {"client", "models", "protocol", "client_core"},
     "client_core": {"client_core", "models", "protocol"},
 }
@@ -122,6 +123,7 @@ def layer(manifest, root):
         ("host/tasks/", "runtime"),
         ("host/transport/", "transport"),
         ("host/app/", "host"), ("clients/ui/", "ui"),
+        ("apps/web/", "web_entry"),
         ("clients/state/", "desktop_client"),
         ("clients/desktop/persistence/", "desktop_persistence"),
         ("clients/desktop/launcher/", "desktop_launcher"),
@@ -161,7 +163,7 @@ def crate_name_of(path, root):
 
 def check_duplicate_type_names(root=ROOT):
     """crate をまたいだ同名の公開型を検出する。"""
-    source = root / "clients", root / "host", root / "contracts", root / "extensions"
+    source = root / "apps", root / "clients", root / "host", root / "contracts", root / "extensions"
     found = {}
     for base in source:
         if not base.exists():

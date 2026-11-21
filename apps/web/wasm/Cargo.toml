@@ -1,0 +1,55 @@
+[package]
+name = "web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+bridge-smoke = []
+
+[dependencies]
+desktop-client = { path = "../../../clients/state" }
+document = { path = "../../../contracts/domain/document" }
+editor-core = { path = "../../../contracts/domain/editor-core" }
+git = { package = "git-contract", path = "../../../extensions/git/contract" }
+lsp = { path = "../../../contracts/domain/lsp" }
+settings = { path = "../../../contracts/domain/settings" }
+task = { path = "../../../contracts/domain/task" }
+terminal = { package = "terminal-contract", path = "../../../extensions/terminal/contract" }
+workspace = { path = "../../../contracts/domain/workspace" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+client-api = { path = "../../../contracts/protocol" }
+client-core = { path = "../../../clients/transport" }
+console_error_panic_hook = "0.1"
+desktop-ui = { path = "../../../clients/ui" }
+futures-channel = "0.3"
+futures-util = "0.3"
+gloo-timers = { version = "0.3", features = ["futures"] }
+gpui_preview = { package = "gpui-pre", version = "=0.3.9", default-features = false }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.9", default-features = false }
+gpui_web = { package = "gpui-pre-web", version = "=0.3.9", default-features = false }
+js-sys = "0.3"
+serde.workspace = true
+serde_json.workspace = true
+wasm-bindgen = "=0.2.129"
+wasm-bindgen-futures = "=0.4.79"
+web-sys = { version = "=0.3.106", features = [
+    "CustomEvent",
+    "CustomEventInit",
+    "ErrorEvent",
+    "Event",
+    "EventTarget",
+    "Location",
+    "MessageEvent",
+    "WebSocket",
+    "Window",
+    "console",
+] }
+wire = { path = "../../../contracts/transport/wire" }
+workbench = { path = "../../../contracts/domain/workbench" }
+zeroize.workspace = true

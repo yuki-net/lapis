@@ -29,18 +29,19 @@ use tokio::{
 use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 
 const DEFAULT_LISTEN: &str = "127.0.0.1:4747";
-const DEFAULT_DIST: &str = "clients/web/dist";
+const DEFAULT_DIST: &str = "apps/web/dist";
 /// Wasm UI の依存が収まるディレクトリ。ここにある `.rs` を監視する。
-const WATCHED_DIRECTORIES: [&str; 6] = [
+const WATCHED_DIRECTORIES: [&str; 7] = [
     "clients/ui",
     "clients/state",
     "clients/transport",
     "contracts",
     "extensions",
-    "clients/web/src",
+    "apps/web/src",
+    "apps/web/wasm/src",
 ];
 /// ページ本体。`.ts` や CSS の変更も再ビルドの対象にする。
-const WATCHED_FILES: [&str; 1] = ["clients/web/index.html"];
+const WATCHED_FILES: [&str; 1] = ["apps/web/index.html"];
 const DEBOUNCE: Duration = Duration::from_millis(250);
 const BUILD_TIMEOUT: Duration = Duration::from_secs(300);
 const FAILURE_LINES: usize = 20;
@@ -336,7 +337,7 @@ async fn build(root: &Path) -> Result<(), String> {
     let npm = if cfg!(windows) { "npm.cmd" } else { "npm" };
     let child = Command::new(npm)
         .args(["run", "build"])
-        .current_dir(root.join("clients/web"))
+        .current_dir(root.join("apps/web"))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
@@ -379,7 +380,7 @@ mod tests {
     fn defaults_match_the_documented_port_and_dist() {
         let options = Options::parse(&[]).unwrap();
         assert_eq!(options.listen.to_string(), "127.0.0.1:4747");
-        assert_eq!(options.dist, PathBuf::from("clients/web/dist"));
+        assert_eq!(options.dist, PathBuf::from("apps/web/dist"));
         assert!(!options.dev);
     }
 
@@ -401,12 +402,13 @@ mod tests {
     #[test]
     fn generated_artifacts_do_not_trigger_rebuilds() {
         assert!(is_relevant(Path::new("clients/ui/src/lib.rs")));
+        assert!(is_relevant(Path::new("apps/web/wasm/src/lib.rs")));
         assert!(!is_relevant(Path::new(
-            "clients/web/src/generated/wasm/lapis_ui.js"
+            "apps/web/src/generated/wasm/lapis_ui.js"
         )));
-        assert!(!is_relevant(Path::new("clients/web/dist/main.js")));
+        assert!(!is_relevant(Path::new("apps/web/dist/main.js")));
         assert!(!is_relevant(Path::new(
-            "clients/web/node_modules/typescript/lib/tsc.js"
+            "apps/web/node_modules/typescript/lib/tsc.js"
         )));
     }
 
