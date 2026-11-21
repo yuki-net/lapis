@@ -88,12 +88,9 @@ PATH_RULES = [
     (["locales/"], {"repository", "rust_core", "desktop"}),
 ]
 
-JOB_IDS = {
-    "repository": "repository", "rust_core": "rust_core", "host": "host_windows",
-    "desktop": "desktop_windows", "mobile": "mobile", "web": "web",
-    "dev_windows": "dev_windows",
-}
-ALL_JOBS = set(JOB_IDS)
+# pathルールの job 名は scripts/ci/jobs.py の route key。GitHub の job 名
+# （matrix の表示名）への変換は jobs.py が持ち、ここでは持たない。
+ALL_JOBS = {"repository", "rust_core", "host", "desktop", "mobile", "web", "dev_windows"}
 
 
 def changed_paths(base_ref: str = "origin/develop") -> list[str]:
