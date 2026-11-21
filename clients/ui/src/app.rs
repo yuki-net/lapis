@@ -2,7 +2,7 @@ use desktop_client::{
     ConversationSession, EditorSession, GitSession, LspSession, ProcessSession, SettingsSession,
     TaskSession, TerminalSession, WorkspaceSearchSession,
 };
-use gpui::{App, AppContext, actions};
+use gpui::{App, AppContext, Application, actions};
 
 use crate::root::DesktopRoot;
 
@@ -324,6 +324,52 @@ pub struct InitialView {
     pub show_problems: bool,
 }
 
+/// ネイティブ Desktop のイベントループを開始するための Application を作る。
+#[cfg(not(target_family = "wasm"))]
+pub fn desktop_application() -> Application {
+    Application::new().with_assets(crate::components::IconAssets)
+}
+
+/// 診断ログの tracing subscriber を初期化する（Debug は Console 用 store も含む）。
+#[cfg(not(target_family = "wasm"))]
+pub fn init_tracing() {
+    #[cfg(debug_assertions)]
+    let _ = crate::devtools::console::init_subscriber();
+    // Release でも保存失敗などのエラーを stderr に残す
+    #[cfg(not(debug_assertions))]
+    init_release_tracing();
+}
+
+/// Desktop UI がイベントループ開始時に必要とする App Global と Keymap を初期化する。
+#[cfg(not(target_family = "wasm"))]
+pub fn initialize(cx: &mut App, services: &DesktopServices) {
+    let settings = services.settings.settings();
+    crate::theme::init(
+        &extension_ui_contract::ThemeId::new(settings.theme().to_owned()),
+        settings.syntax_theme(),
+        cx,
+    );
+    crate::features::settings_coordinator::SettingsCoordinator::init(services.settings.clone(), cx);
+    #[cfg(all(feature = "hot-reload", debug_assertions))]
+    crate::hot_reload::init(cx);
+    crate::keymap::gpui::bind_keys(cx);
+    #[cfg(debug_assertions)]
+    crate::devtools::init(cx);
+}
+
+/// 最後の Window が閉じたときに、保留中の保存完了後にアプリを終了する。
+#[cfg(not(target_family = "wasm"))]
+pub fn on_last_window_closed(cx: &mut App) {
+    cx.on_window_closed(|cx| {
+        if cx.windows().is_empty() {
+            let coordinator =
+                crate::features::settings_coordinator::SettingsCoordinator::shared(cx);
+            coordinator.update(cx, |coordinator, cx| coordinator.quit_after_pending(cx));
+        }
+    })
+    .detach();
+}
+
 /// Release ビルドでも tracing のエラーを stderr に出力する。
 #[cfg(all(not(debug_assertions), not(target_family = "wasm")))]
 pub(crate) fn init_release_tracing() {
@@ -433,7 +479,7 @@ impl WindowFactory {
     }
 }
 /// Opens an independent root window; an opening failure leaves no new window and is not returned.
-pub(crate) fn open_desktop_window(
+pub fn open_desktop_window(
     editor: EditorSession,
     services: DesktopServices,
     initial: InitialView,

@@ -24,10 +24,10 @@ package (zip) + manifest.json (+ Ed25519 署名)
 別の manifest や別の読み込み処理を作らない。実装は `scripts/release/` に集約し、
 `publish.py` が入り口（ローカル / Releases）だけを分岐させる。
 
-`scripts/release/` は生成・配置・検証の tool である。launcher（`clients/desktop/launcher/`）
+`scripts/release/` は生成・配置・検証の tool である。launcher（`apps/desktop/launcher/`）
 は同じ manifest schema と検証規則を使い、staging 済み package の適用と本体の起動だけを行う。
 manifest の取得・download・更新の同意画面といった変わりうる処理はアプリ側に置き、
-launcher には置かない。アプリ側の取得・検証・staging も `clients/desktop/launcher/` の
+launcher には置かない。アプリ側の取得・検証・staging も `apps/desktop/launcher/` の
 library（`Verifier`）を共用し、署名・SHA-256・layout の規則を 1 か所に保つ。
 
 ## manifest schema v1
@@ -122,7 +122,7 @@ Host 実行ファイルに隣接する `bundled-extensions/` に収める。Host
 ## インストール layout
 
 per-user 配置とし、管理者権限を要求しない。初回は package を置いて launcher を起動する
-形で、インストーラのウィザードを持たない。launcher は `clients/desktop/launcher/`。
+形で、インストーラのウィザードを持たない。launcher は `apps/desktop/launcher/`。
 
 ```
 <install root>/
@@ -197,7 +197,7 @@ manifest の解釈・更新モードの設定を持たず、変更のたびに�
 
 ## アプリ側の更新 UX
 
-`clients/desktop/app/` が manifest の取得・download・検証・staging と同意画面を持つ。
+`apps/desktop/app/` が manifest の取得・download・検証・staging と同意画面を持つ。
 検証と staging は launcher の library（`Verifier`）を共用する。
 
 - 起動時とセッション中（既定 6 時間間隔）に manifest を確認する。取得元は設定

@@ -224,7 +224,7 @@ class ArchitectureTests(unittest.TestCase):
     def test_desktop_entry_can_compose_backend(self):
         self.metadata["workspace_members"].extend(["desktop", "infra"])
         self.metadata["packages"].extend([
-            package("desktop", "clients/desktop/app", ["ui", "runtime", "infra"]),
+            package("desktop", "apps/desktop/app", ["ui", "runtime", "infra"]),
             package("infra", "host/adapters/local"),
         ])
         self.assertEqual(check(self.metadata, {}), [])
@@ -265,7 +265,7 @@ class ArchitectureTests(unittest.TestCase):
     def test_only_desktop_composition_root_can_depend_on_host(self):
         self.metadata["workspace_members"].extend(["desktop", "cli", "host"])
         self.metadata["packages"].extend([
-            package("desktop", "clients/desktop/app", ["host"]),
+            package("desktop", "apps/desktop/app", ["host"]),
             package("cli", "clients/cli"),
             package("host", "host/app", ["runtime"]),
         ])
@@ -282,9 +282,9 @@ class ArchitectureTests(unittest.TestCase):
     def test_desktop_client_and_persistence_are_not_backend_or_ui(self):
         self.metadata["workspace_members"].extend(["desktop", "adapter", "store", "infra"])
         self.metadata["packages"].extend([
-            package("desktop", "clients/desktop/app", ["ui", "adapter", "store"]),
+            package("desktop", "apps/desktop/app", ["ui", "adapter", "store"]),
             package("adapter", "clients/state", ["model"]),
-            package("store", "clients/desktop/persistence", ["adapter", "model"]),
+            package("store", "apps/desktop/persistence", ["adapter", "model"]),
             package("infra", "host/adapters/local", ["runtime"]),
         ])
         self.metadata["packages"][2]["dependencies"].append({"name": "adapter"})
@@ -298,7 +298,7 @@ class ArchitectureTests(unittest.TestCase):
                 self.assertIn(f"{source} -> {target}", "\n".join(check(metadata, {})))
 
     def test_client_adapter_and_store_cannot_import_gpui_or_native_dialog(self):
-        for path in ("clients/state", "clients/desktop/persistence"):
+        for path in ("clients/state", "apps/desktop/persistence"):
             for dependency in ("gpui", "rfd"):
                 with self.subTest(path=path, dependency=dependency):
                     metadata = copy.deepcopy(self.metadata)

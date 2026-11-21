@@ -123,9 +123,10 @@ def layer(manifest, root):
         ("host/transport/", "transport"),
         ("host/app/", "host"), ("clients/ui/", "ui"),
         ("clients/state/", "desktop_client"),
-        ("clients/desktop/persistence/", "desktop_persistence"),
-        ("clients/desktop/launcher/", "desktop_launcher"),
-        ("clients/desktop/app/", "desktop_entry"), ("clients/", "client"),
+        ("apps/desktop/persistence/", "desktop_persistence"),
+        ("apps/desktop/launcher/", "desktop_launcher"),
+        ("apps/desktop/app/", "desktop_entry"),
+        ("apps/", "client"), ("clients/", "client"),
     ]:
         if relative.startswith(prefix):
             return value
@@ -161,7 +162,7 @@ def crate_name_of(path, root):
 
 def check_duplicate_type_names(root=ROOT):
     """crate をまたいだ同名の公開型を検出する。"""
-    source = root / "clients", root / "host", root / "contracts", root / "extensions"
+    source = root / "apps", root / "clients", root / "host", root / "contracts", root / "extensions"
     found = {}
     for base in source:
         if not base.exists():

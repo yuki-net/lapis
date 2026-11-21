@@ -20,7 +20,7 @@ class TestPathRouting(unittest.TestCase):
 
     def test_client_persistence_and_locales_select_rust_core(self):
         self.assertEqual(jobs_for_paths(["clients/state/src/lib.rs"]), {"desktop", "rust_core", "web"})
-        self.assertEqual(jobs_for_paths(["clients/desktop/persistence/src/lib.rs"]), {"desktop", "rust_core"})
+        self.assertEqual(jobs_for_paths(["apps/desktop/persistence/src/lib.rs"]), {"desktop", "rust_core"})
         self.assertEqual(jobs_for_paths(["locales/ja-JP/messages/common.json"]), {"repository", "rust_core", "desktop"})
 
     def test_ci_workflow_uses_final_check_names_and_no_release_validation(self):
@@ -45,7 +45,7 @@ class TestPathRouting(unittest.TestCase):
         self.assertRegex(rust_core, r"(?m)^\s+components:\s+[^\n]*\brust-src\b")
 
     def test_desktop_path_runs_desktop(self):
-        self.assertIn("desktop", jobs_for_paths(["clients/desktop/app/src/main.rs"]))
+        self.assertIn("desktop", jobs_for_paths(["apps/desktop/app/src/main.rs"]))
 
     def test_extension_paths_run_both_backends(self):
         """ACP などの拡張は Host と Client の両方から参照するため両方の job を実行する。"""
@@ -216,7 +216,7 @@ class TestPathRouting(unittest.TestCase):
         self.assertEqual(jobs_for_paths(["release/trusted-keys.json"]), {"repository", "desktop"})
 
     def test_launcher_runs_desktop_and_rust_core(self):
-        self.assertEqual(jobs_for_paths(["clients/desktop/launcher/src/main.rs"]), {"desktop", "rust_core"})
+        self.assertEqual(jobs_for_paths(["apps/desktop/launcher/src/main.rs"]), {"desktop", "rust_core"})
 
     def test_ci_workflow_runs_repository(self):
         self.assertIn("repository", jobs_for_paths([".github/workflows/ci.yml"]))
@@ -227,7 +227,7 @@ class TestPathRouting(unittest.TestCase):
     def test_multiple_paths_combine_jobs(self):
         """複数のpathが異なるjobを要求する場合、合体される。"""
         jobs = jobs_for_paths([
-            "clients/desktop/app/src/main.rs",
+            "apps/desktop/app/src/main.rs",
             "host/app/src/main.rs",
         ])
         self.assertIn("desktop", jobs)
@@ -247,7 +247,7 @@ class TestPathRouting(unittest.TestCase):
         self.assertNotIn("dev_windows", jobs_for_paths(["scripts/other.py"]))
 
     def test_gate_checks_mapped_jobs_and_expected_skips(self):
-        for route, path in (("desktop", "clients/desktop/app/src/main.rs"), ("host", "host/app/src/main.rs")):
+        for route, path in (("desktop", "apps/desktop/app/src/main.rs"), ("host", "host/app/src/main.rs")):
             selected = list(jobs_for_paths([path]))
             needs = {"path_filter": {"result": "success"}}
             needs.update({job: {"result": "success" if name in selected else "skipped"} for name, job in JOB_IDS.items()})
