@@ -20,7 +20,7 @@ Windows で Desktop と Web を起動して確認する手順の正本です。�
 
 利用者向けドキュメントサイト（`docs/site`）は Astro Starlight で作っており、`Run Docs Site`（`npm run dev`）で `http://localhost:4321` を開けます。`Build Docs Site` は `npm run build` で `docs/site/dist` を出力します。
 
-`Run Host` などと違い、この2つは `docs/site` の `node_modules` を前提にします。初回は `cd docs\site; npm install` を実行してください。Node.js は Astro 7.4 が要求する 22.23.4 以上（CI は 24）が必要です。公開先と必要な secrets、生成される `wrangler.json` は [docs/site/README.md](site/README.md) にまとめています。
+`Run Host` などと違い、この2つは `docs/site` の `node_modules` を前提にします。初回は `cd docs\site; npm install` を実行してください。Node.js は Astro 7.4 が要求する 22.23.4 以上（CI は 24）が必要です。
 
 ## Host と Desktop の接続
 

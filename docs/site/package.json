@@ -6,10 +6,7 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
-    "preview": "astro preview",
-    "wrangler:config": "node scripts/write-wrangler.mjs",
-    "deploy": "npm run wrangler:config && wrangler pages deploy",
-    "test": "node --test scripts/write-wrangler.test.mjs"
+    "preview": "astro preview"
   },
   "dependencies": {
     "@astrojs/starlight": "^0.42.6",
@@ -18,8 +15,5 @@
   },
   "engines": {
     "node": ">=22.22.0"
-  },
-  "devDependencies": {
-    "wrangler": "^4.166.0"
   }
 }
