@@ -3,13 +3,13 @@
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=../../../assets/lapis.ico");
+    println!("cargo:rerun-if-changed=../../assets/lapis.ico");
     // `include_str!` の依存は cargo が自動で追跡しないため、明示する。
-    println!("cargo:rerun-if-changed=../../../release/trusted-keys.json");
+    println!("cargo:rerun-if-changed=../../release/trusted-keys.json");
     embed(
         "Lapis Launcher",
         "lapis-launcher.exe",
-        "../../../assets/lapis.ico",
+        "../../assets/lapis.ico",
     );
 }
 

@@ -830,7 +830,7 @@ fn read_archive(package: &Path) -> Result<BTreeMap<String, Vec<u8>>, PackageErro
 
 /// entry 名を検証して返す。directory entry の末尾 `/` は除く。
 ///
-/// 規則は launcher（`apps/desktop/launcher/src/archive.rs`）が package に課すものと
+/// 規則は launcher（`apps/launcher/src/archive.rs`）が package に課すものと
 /// 同じで、絶対 path・`..`・drive 指定・`\` を拒否する。
 fn member_name(entry: &zip::read::ZipFile<'_, fs::File>) -> Result<String, PackageError> {
     let raw = std::str::from_utf8(entry.name_raw())

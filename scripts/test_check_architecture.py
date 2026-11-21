@@ -229,6 +229,16 @@ class ArchitectureTests(unittest.TestCase):
         ])
         self.assertEqual(check(self.metadata, {}), [])
 
+    def test_launcher_is_an_independent_entry(self):
+        self.metadata["workspace_members"].extend(["launcher", "infra"])
+        self.metadata["packages"].extend([
+            package("launcher", "apps/launcher"),
+            package("infra", "host/adapters/local"),
+        ])
+        self.assertEqual(check(self.metadata, {}), [])
+        self.metadata["packages"][-2]["dependencies"].append({"name": "infra"})
+        self.assertIn("launcher -> infra", "\n".join(check(self.metadata, {})))
+
     def test_extension_role_directories_keep_their_layer(self):
         """自己完結した拡張でも `host` は runtime、`adapter` は infrastructure として検査する。"""
         self.metadata["workspace_members"].extend(

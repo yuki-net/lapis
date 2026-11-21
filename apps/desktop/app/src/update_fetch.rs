@@ -237,7 +237,7 @@ mod tests {
 
     fn distribution(name: &str) -> PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../launcher/tests/fixtures")
+            .join("../../launcher/tests/fixtures")
             .join(name)
     }
 

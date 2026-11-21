@@ -216,7 +216,7 @@ class TestPathRouting(unittest.TestCase):
         self.assertEqual(jobs_for_paths(["release/trusted-keys.json"]), {"repository", "desktop"})
 
     def test_launcher_runs_desktop_and_rust_core(self):
-        self.assertEqual(jobs_for_paths(["apps/desktop/launcher/src/main.rs"]), {"desktop", "rust_core"})
+        self.assertEqual(jobs_for_paths(["apps/launcher/src/main.rs"]), {"desktop", "rust_core"})
 
     def test_ci_workflow_runs_repository(self):
         self.assertIn("repository", jobs_for_paths([".github/workflows/ci.yml"]))

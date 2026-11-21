@@ -6,9 +6,9 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 
 | 領域 | 所有するもの | 所有しないもの |
 | --- | --- | --- |
-| `apps/desktop/` | Desktop の起動 entry・Composition Root・更新 launcher・表示状態の保存 | 共通 UI の Window / Panel 実装、Host 上の実行資源 |
+| `apps/desktop/` | Desktop の起動 entry・Composition Root・表示状態の保存 | 共通 UI の Window / Panel 実装、Host 上の実行資源 |
 | `clients/` | Client の Window、Panel、Tab、focus、selection、表示 cache | Host 上の実行資源 |
-| `apps/desktop/launcher/` | staging 済み package の適用と本体の起動、および検証・staging の共通実装 | 更新モードの設定、同意の判断、アプリの実行 |
+| `apps/launcher/` | staging 済み package の適用と本体の起動、および検証・staging の共通実装 | 更新モードの設定、同意の判断、アプリの実行 |
 | `contracts/domain/` | Transport 非依存の値・ドメイン規則・port | GPUI、通信、外部プロセスの具体実装 |
 | `contracts/domain/extension-ui/` | 拡張が公開する UI 宣言の語彙（配置・表示名・アイコン・表示条件、`UiContribution` / `FeatureDescriptor`） | GPUI の View・Entity 生成、表示状態の解決、Feature の実装 |
 | `contracts/protocol/` | request/response/event、revision、認可可能な操作契約 | OS 実装、Client の画面構成 |
@@ -108,7 +108,7 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 - 応答の適用には要求順序と対象の世代を検証する。楽観編集の先行操作が失敗したら、数値 revision が偶然一致しても依存する後続編集を適用しない。未確定入力は明示的な復旧まで保持する。
 - Window 終了時は受付済み入力と表示状態の保存を完了させる。購読・表示 worker の破棄によって Host の Terminal・Agent を終了しない。保存先や Workspace が失われても、復元用 draft を無言で破棄しない。
 
-- 更新の適用は `apps/desktop/launcher/` が行い、Desktop の Composition Root と状態を共有しない。更新の検出・download・同意はアプリ側の責務であり、launcher は `staging/` と `current.json` の契約だけを使う（[配布と更新の内部契約](release.md)）。
+- 更新の適用は `apps/launcher/` が行い、Desktop の Composition Root と状態を共有しない。更新の検出・download・同意はアプリ側の責務であり、launcher は `staging/` と `current.json` の契約だけを使う（[配布と更新の内部契約](release.md)）。
 - アプリ側の更新は `apps/desktop/app/` が所有し、manifest の取得・検証・staging は launcher の library を共用する。状態は `clients/state` の `UpdateWatch` / `UpdateController` で共有し、UI は描画と操作の入口だけを持つ。data 世代の決定は `app/` の `install.rs` が行い、Feature から layout を直接読まない。
 
 ## Desktop の WindowGroup

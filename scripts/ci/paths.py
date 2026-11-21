@@ -23,7 +23,7 @@ PATH_RULES = [
       "clients/web/wasm/tests/extension_terminal_smoke.py"], {"host", "desktop", "rust_core", "web"}),
     (["clients/state/"], {"desktop", "rust_core", "web"}),
     (["apps/desktop/persistence/"], {"desktop", "rust_core"}),
-    (["apps/desktop/launcher/"], {"desktop", "rust_core"}),
+    (["apps/launcher/"], {"desktop", "rust_core"}),
     (["apps/desktop/"], {"desktop"}),
     (["clients/ui/"], {"desktop", "web"}),
     (["vendor/gpui/"], {"desktop"}),

@@ -16,7 +16,7 @@ desktop-client = { path = "../../../clients/state" }
 desktop-ui = { path = "../../../clients/ui" }
 terminal = { package = "terminal-contract", path = "../../../extensions/terminal/contract" }
 futures-channel = "0.3"
-lapis-launcher = { path = "../launcher" }
+lapis-launcher = { path = "../../launcher" }
 platform = { path = "../../../host/adapters/local" }
 local-process = { path = "../../../host/adapters/process" }
 process = { path = "../../../contracts/domain/process" }

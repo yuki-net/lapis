@@ -17,7 +17,7 @@ Wasm component の実行はこの crate の対象外で、別プロセスの `ex
 - `compatibility.rs`：`ContractRequirement` / `HostContracts` / `Incompatibility`。
   manifest が要求する契約と版の範囲を Host の提供値と突き合わせる。
 - `signature.rs`：`TrustedKeys`。リリース署名（`scripts/release`、
-  `apps/desktop/launcher`）と同じ Ed25519 の規則で manifest を検証する。
+  `apps/launcher`）と同じ Ed25519 の規則で manifest を検証する。
 - `package.rs`：`ExtensionLoader`。zip + manifest の読み込み、SHA-256 照合、展開、
   目録への登録、package の取り除き。
 - `declaration.rs`：`ExtensionDeclarations`。目録を Client へ見せる宣言へ集約する。

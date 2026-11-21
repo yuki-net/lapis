@@ -124,7 +124,7 @@ def layer(manifest, root):
         ("host/app/", "host"), ("clients/ui/", "ui"),
         ("clients/state/", "desktop_client"),
         ("apps/desktop/persistence/", "desktop_persistence"),
-        ("apps/desktop/launcher/", "desktop_launcher"),
+        ("apps/launcher/", "desktop_launcher"),
         ("apps/desktop/app/", "desktop_entry"),
         ("apps/", "client"), ("clients/", "client"),
     ]:
