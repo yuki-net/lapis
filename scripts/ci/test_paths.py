@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.ci.jobs import ORDER, ROUTES
-from scripts.ci.paths import ALL_JOBS, jobs_for_paths, PATH_RULES
+from scripts.ci.paths import ALL_JOBS, PATH_RULES, jobs_for_paths
 from scripts.ci.gate import errors
 from scripts.ci.paths import changed_paths
 
@@ -244,7 +244,7 @@ class TestPathRouting(unittest.TestCase):
         self.assertIn("host", jobs)
 
     def test_path_rules_are_exhaustive(self):
-        """PATH_RULESのpatternが重複していないことを確認。"""
+        """PATH_RULES の pattern が重複していないことを確認。"""
         seen = set()
         for patterns, _ in PATH_RULES:
             for pattern in patterns:
@@ -253,8 +253,8 @@ class TestPathRouting(unittest.TestCase):
 
     def test_windows_dev_commands_are_selected(self):
         for path in ("scripts/stop_dev_host.ps1", "scripts/test_dev_commands.py", "scripts/test_dev_session.py", "scripts/dev-session/src/main.rs", ".run/Lapis.run.xml", ".cargo/config.toml"):
-            self.assertIn("dev_windows", jobs_for_paths([path]))
-        self.assertNotIn("dev_windows", jobs_for_paths(["scripts/other.py"]))
+            self.assertIn("dev_commands", jobs_for_paths([path]))
+        self.assertNotIn("dev_commands", jobs_for_paths(["scripts/other.py"]))
 
     def test_gate_checks_mapped_jobs_and_expected_skips(self):
         for route, path in (("desktop", "clients/desktop/app/src/main.rs"), ("host", "host/app/src/main.rs")):

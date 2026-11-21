@@ -290,11 +290,12 @@ def missing_prerequisites_for_step(step) -> list[str]:
 
 
 def list_routes() -> None:
-    print(f"{'route':12} {'name':24} {'os':8} {'matches this os':16} requires")
+    print(f"{'route':12} {'name':20} {'runs_on':20} {'matches this os':16} requires")
     for key in ORDER:
         route = route_for(key)
-        matches = "yes" if route.os == local_os() else "no (same steps)"
-        print(f"{key:12} {route.name:24} {route.os:8} {matches:16} {', '.join(requirements(route)) or '-'}")
+        runs_on = ",".join(route.runs_on)
+        matches = "yes" if local_os() in route.runs_on else "no (same steps)"
+        print(f"{key:12} {route.name:20} {runs_on:20} {matches:16} {', '.join(requirements(route)) or '-'}")
     print()
     print("usage: python -m scripts.ci.run <route> [--list] [--step <name>] [--json]")
 
@@ -318,8 +319,11 @@ def main() -> int:
     route = route_for(args.route)
 
     if not report.on_github() and not args.no_prerequisite_check:
-        if route.os != local_os():
-            report.warning(f"{route.key} runs on {route.os} in CI; verifying with this machine's toolchain instead")
+        if local_os() not in route.runs_on:
+            runs_on = ", ".join(route.runs_on)
+            report.warning(
+                f"{route.key} runs on {runs_on} in CI; verifying with this machine's toolchain instead"
+            )
         missing = missing_prerequisites(route)
         if missing:
             message = f"{route.key} needs {', '.join(missing)} on this machine"

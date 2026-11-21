@@ -12,7 +12,9 @@ from unittest.mock import patch
 
 from scripts.ci import plan
 from scripts.ci.jobs import ORDER, ROOT, ROUTES, RUST_TOOLCHAIN, route_for
+from scripts.ci.model import RUNNERS
 from scripts.ci.paths import PATH_RULES
+from scripts.ci.routes import job_name
 
 WORKFLOW = ROOT / ".github/workflows/ci.yml"
 
@@ -29,15 +31,43 @@ class PlanTests(unittest.TestCase):
 
     def test_matrix_entries_only_reference_known_routes(self):
         entries = plan.matrix(list(ORDER))
+        # 1 route が複数 OS で走る場合は route × OS のエントリになる。
         self.assertEqual([entry["job"] for entry in entries], list(ORDER))
         for entry in entries:
             route = route_for(entry["job"])
-            self.assertEqual(entry["name"], route.name)
+            self.assertIn(entry["os"], route.runs_on)
+            expected = job_name(route, entry["os"])
+            self.assertEqual(entry["name"], expected)
             self.assertEqual(entry["timeout"], route.timeout_minutes)
-            self.assertEqual(entry["runs_on"], "windows-2022" if route.os == "windows" else "ubuntu-latest")
+            self.assertEqual(entry["runs_on"], RUNNERS[entry["os"]])
             self.assertNotIn("workdir", entry)
             self.assertNotIn("requires", entry)
             json.dumps(entry)  # matrix は JSON へ直列化できること
+
+    def test_matrix_expands_every_os_a_route_runs_on(self):
+        """`runs_on` の全 OS が matrix のエントリになる。"""
+        for key in ORDER:
+            route = route_for(key)
+            entries = plan.matrix([key])
+            self.assertEqual([entry["os"] for entry in entries], list(route.runs_on), key)
+
+    def test_matrix_can_be_filtered_by_os(self):
+        """runner を切り替えるときは `--only-os` で OS を絞る。"""
+        entries = plan.matrix(list(ORDER), only_os="linux")
+        self.assertTrue(entries)
+        self.assertEqual({entry["os"] for entry in entries}, {"linux"})
+        self.assertEqual([entry["job"] for entry in entries], [
+            key for key in ORDER if "linux" in route_for(key).runs_on
+        ])
+        windows = [entry["job"] for entry in plan.matrix(list(ORDER), only_os="windows")]
+        self.assertEqual(windows, [key for key in ORDER if "windows" in route_for(key).runs_on])
+        self.assertEqual(plan.matrix([], only_os="linux"), [])
+
+    def test_job_name_uses_target_when_the_runner_os_is_not_the_subject(self):
+        """Mobile は Linux runner で Android を検証するので job 名に Android を出す。"""
+        self.assertEqual(plan.matrix(["mobile"])[0]["name"], "Mobile / Android")
+        self.assertEqual(plan.matrix(["host"])[0]["name"], "Host / Windows")
+        self.assertEqual(plan.matrix(["repository"])[0]["name"], "Repository / Linux")
 
     def test_matrix_carries_working_directory_indirectly(self):
         """作業ディレクトリは matrix ではなく run.py が route から解決する。"""

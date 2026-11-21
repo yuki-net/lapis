@@ -19,7 +19,8 @@ from scripts.ci.jobs import Route, Step
 
 
 def route_with(*steps, **kwargs) -> Route:
-    return Route(key="test", name="Test", os=kwargs.pop("os", "linux"), timeout_minutes=5, steps=steps, **kwargs)
+    runs_on = kwargs.pop("runs_on", ("linux",))
+    return Route(key="test", name="Test", runs_on=runs_on, timeout_minutes=5, steps=steps, **kwargs)
 
 
 def invoke(argv) -> int:
@@ -133,7 +134,7 @@ class RunTests(unittest.TestCase):
 
 
 def route_for_os(name: str, **kwargs) -> Route:
-    return Route(key="test", name="Test", os=name, timeout_minutes=5,
+    return Route(key="test", name="Test", runs_on=(name,), timeout_minutes=5,
                  steps=(Step("ok", [sys.executable, "-c", "pass"]),), **kwargs)
 
 

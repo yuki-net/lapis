@@ -18,7 +18,7 @@ OLD_WORKFLOW = ".github/workflows/ci.yml"
 # 旧 job 名 → 新 route。判定用の job（path_filter / ci_gate）は対象外。
 JOB_TO_ROUTE = {
     "repository": "repository",
-    "dev_windows": "dev_windows",
+    "dev_windows": "dev_commands",
     "rust_core": "rust_core",
     "host_windows": "host",
     "desktop_windows": "desktop",

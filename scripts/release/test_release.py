@@ -1208,14 +1208,12 @@ class WorkflowTests(unittest.TestCase):
 
     def test_existing_workflows_still_gate_on_repository_checks(self):
         # CI は scripts/ci/jobs.py を実行するだけなので、repository 検証の
-        # 定義は jobs.py 側にあることを確認する。
-        jobs = (
-            Path(__file__).resolve().parents[2] / "scripts" / "ci" / "jobs.py"
-        ).read_text(encoding="utf-8")
-        ci = (
-            Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
-        ).read_text(encoding="utf-8")
-        self.assertIn('"scripts/check.py", "repository", "architecture"', jobs)
+        # 定義は route 定義（scripts/ci/routes/repository.py）側にあることを
+        # 確認する。
+        root = Path(__file__).resolve().parents[2]
+        repository = (root / "scripts" / "ci" / "routes" / "repository.py").read_text(encoding="utf-8")
+        ci = (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        self.assertIn('"scripts/check.py", "repository", "architecture"', repository)
         self.assertIn("python -m scripts.ci.run", ci)
 
 

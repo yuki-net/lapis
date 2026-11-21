@@ -6,29 +6,44 @@ CI で走る検証は、ローカルでも同じものが同じコマンドで�
 
 | 場所 | 所有するもの |
 | --- | --- |
-| `scripts/ci/jobs.py` | **唯一の正本**。route 名・OS・タイムアウト・必要な toolchain・step 列 |
-| `scripts/ci/paths.py` | 変更 path → route の対応 |
-| `scripts/ci/plan.py` | 上 2 つを繋ぎ、実行すべき route を matrix 形式にする |
+| `scripts/ci/routes/<route>.py` | **route の検証内容の正本**。route 名・走らせる OS（`runs_on`）・タイムアウト・必要な toolchain・step 列（1 route 1 ファイル） |
+| `scripts/ci/model.py` | `Step` / `Route` の型、runner 名と OS 表示名、toolchain などの固定値 || `scripts/ci/routes/__init__.py` | route の集合と実行順（`ROUTES` / `ORDER`）、job 名の組み立て |
+| `scripts/ci/routes/platforms/` | OS ごとに検証内容が違う場合の差分 step（無い OS のファイルは作らない） |
+| `scripts/ci/paths.py` | **変更 path → route の対応の正本**。1 つの path が複数 route を要求する関係を持つ |
+| `scripts/ci/jobs.py` | 上記の再エクスポート（従来の import 先を保つ） |
+| `scripts/ci/plan.py` | 上 2 つを繋ぎ、実行すべき route を route × OS の matrix にする |
 | `scripts/ci/run.py` | 1 route をローカル / GitHub 共通で実行 |
 | `scripts/ci/report.py` | ログ装飾・失敗注釈・実行サマリ |
 | `scripts/ci/gate.py` | plan と matrix の結果から CI の成否を決める |
+| `scripts/ci/measure.py` | route の step 別所要時間を測る |
 | `.github/workflows/ci.yml` | `plan` / `ci`（matrix）/ `gate` の 3 job のみ。step 列は持たない |
 
-`.github/workflows/ci.yml` に step を書き足さないこと。検証を追加するときは `jobs.py` を編集する（`scripts/ci/test_plan.py` が YAML への直書きを検出して落とす）。
+`.github/workflows/ci.yml` に step を書き足さないこと。検証を追加するときは `scripts/ci/routes/<route>.py` を、path の振り分けを変えるときは `scripts/ci/paths.py` を編集する（`scripts/ci/plan.py` のテストが YAML への直書きを検出して落とす）。
+
+## route と OS
+
+ファイル名・route key・`name` に OS は書かない。走らせる OS は `Route.runs_on` に持ち、GitHub の job 名（`Host / Windows`）は `runs_on` から組み立てる。検証対象が runner の OS と違う場合（`Mobile / Android`）だけ `Route.target` で対象を表示する。
+
+- OS を増やすときは `runs_on` に足すだけ。ファイル名も `paths.py` も変えなくてよい
+- OS ごとに step が違う場合だけ `scripts/ci/routes/platforms/<route>_<os>.py` に差分を置く（共通 step は `routes/<route>.py`）
+- `runs_on` に無い OS では job 自体が生まれない。**skip で緑にならない**
+- runner を絞りたいときは `python -m scripts.ci.plan --only-os linux`。`ci.yml` も route 定義も変えずに、その OS の job だけを matrix に入れられる
 
 ## route 一覧
 
 `python -m scripts.ci.run --list` で確認できる。
 
-| route | CI の runner | 主な検証 |
+| route | `runs_on` | 主な検証 |
 | --- | --- | --- |
-| `repository` | ubuntu-latest | `scripts/check.py repository architecture`（CI・拡張・開発コマンドの Python テスト、アーキテクチャ検査） |
-| `dev_windows` | windows-2022 | 開発起動コマンド・`dev-session` の整形とテスト |
-| `rust_core` | ubuntu-latest | backend 全体の architecture / format / test / lint と外部拡張 component |
-| `host` | windows-2022 | Host の architecture / format / test / lint / build と承認済み拡張 PTY・Web 公開 |
-| `desktop` | windows-2022 | Desktop の architecture / format / test / lint / build と GPUI patch 検証 |
-| `mobile` | ubuntu-latest | KMP のユニットテストと Android ビルド |
-| `web` | ubuntu-latest | Web のビルドと接続処理テスト |
+| `repository` | linux | `scripts/check.py repository architecture`（CI・拡張・開発コマンドの Python テスト、アーキテクチャ検査） |
+| `dev_commands` | windows | 開発起動コマンド・`dev-session` の整形とテスト |
+| `rust_core` | linux | backend 全体の architecture / format / test / lint と外部拡張 component |
+| `host` | windows | Host の architecture / format / test / lint / build と承認済み拡張 PTY・Web 公開 |
+| `desktop` | windows | Desktop の architecture / format / test / lint / build と GPUI patch 検証 |
+| `mobile` | linux | KMP のユニットテストと Android ビルド（job 名は `Mobile / Android`） |
+| `web` | linux | Web のビルドと接続処理テスト |
+
+GitHub の job 名は `name` と `runs_on`（または `target`）から作る（例 `Host / Windows`, `Mobile / Android`）。
 
 ## ローカルで回す
 
@@ -37,6 +52,7 @@ python -m scripts.ci.run --list                  # route と前提を確認
 python -m scripts.ci.run repository              # route 全体
 python -m scripts.ci.run rust_core --step lint   # step を絞る
 python -m scripts.ci.run desktop --json          # エージェント向け（ログを抑制）
+python -m scripts.ci.measure host                # step 別の所要時間を並べる
 ```
 
 - 成功した step の出力は捨てる。失敗した step だけ末尾 40 行を表示し、全文は `.ci/logs/<route>/<step>.log` に残る
@@ -61,9 +77,17 @@ Actions UI の step 単位プログレスバーだけは失われる。代替は
 
 ## 検証を追加する
 
-1. `scripts/ci/jobs.py` の該当 `Route.steps` に `Step` を足す
+1. `scripts/ci/routes/<route>.py` の `Route.steps` に `Step` を足す
 2. 必要なら `Route` の前提（`rust` / `node` / `wasm_bindgen` / `java` / `gradle`）を埋める
-3. `python -m scripts.ci.run <route> --step <新しい step 名>` でローカル確認
-4. 新しい path を検証対象にするなら `scripts/ci/paths.py` の `PATH_RULES` も更新する
+3. OS 固有の step なら `runs_on` にその OS を足し、`routes/platforms/` に置く
+4. `python -m scripts.ci.run <route> --step <新しい step 名>` でローカル確認
+5. 新しい path を検証対象にするなら `scripts/ci/paths.py` の `PATH_RULES` も更新する
 
 step は shell 文字列ではなく argv で書く。`&&` や `$LASTEXITCODE` に頼ると失敗の検出が抜ける。
+
+## route を追加する
+
+1. `scripts/ci/routes/<new>.py` に `Route` を書く（`runs_on` を必ず埋める）
+2. `scripts/ci/routes/__init__.py` の import と `ORDER` に足す
+3. `scripts/ci/paths.py` の `PATH_RULES` に、その route を選ぶ path を足す
+4. OS ごとに step が違う場合だけ `scripts/ci/routes/platforms/<route>_<os>.py` を作る
