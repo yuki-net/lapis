@@ -1,0 +1,19 @@
+---
+// タブで選んだセクションのサイドバーだけを描画する。
+// サイドバーの構成自体は astro.config.mjs が正本で、ここではグループ単位で絞り込む。
+import MobileMenuFooter from '@astrojs/starlight/components/MobileMenuFooter.astro';
+import SidebarPersister from '@astrojs/starlight/components/SidebarPersister.astro';
+import SidebarSublist from '@astrojs/starlight/components/SidebarSublist.astro';
+import { currentSection } from '../data/nav';
+
+const { sidebar } = Astro.locals.starlightRoute;
+const section = currentSection(Astro.url.pathname);
+const group = section
+  ? sidebar.find((entry) => entry.type === 'group' && entry.label === section.group)
+  : undefined;
+const entries = group?.type === 'group' ? group.entries : sidebar;
+---
+
+<SidebarPersister><SidebarSublist sublist={entries} /></SidebarPersister>
+
+<div class="md:sl-hidden"><MobileMenuFooter /></div>

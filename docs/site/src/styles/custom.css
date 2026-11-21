@@ -152,3 +152,94 @@ body {
     transform: none;
   }
 }
+
+/* =====================================================================
+ * レイアウト試作（比較用）
+ * Antigravity 風の「広い 3 カラム + 落ち着いたダーク + 大きめ本文」に
+ * CSS だけでどこまで寄せられるかの確認用。不要ならこのブロックごと削除する。
+ * ===================================================================== */
+:root {
+  --sl-color-bg: #202124;
+  --sl-color-bg-nav: #202124;
+  --sl-color-bg-sidebar: #202124;
+  --sl-color-bg-inline-code: #2a2b2e;
+  --sl-color-hairline: #3c4043;
+  --sl-color-hairline-light: #3c4043;
+  --sl-color-gray-1: #f1f3f4;
+  --sl-color-gray-2: #e3e5e8;
+  --sl-color-gray-3: #bdc1c6;
+  --sl-color-gray-4: #9aa0a6;
+  --sl-color-gray-5: #3c4043;
+  --sl-color-gray-6: #2a2b2e;
+  --sl-color-accent-low: #1f2c46;
+  --sl-color-accent: #8ab4f8;
+  --sl-color-accent-high: #8ab4f8;
+  --lapis-border: #3c4043;
+  --lapis-surface: #2a2b2e;
+
+  --sl-nav-height: 7.5rem;
+  --sl-nav-pad-y: 0rem;
+  --sl-sidebar-width: 21rem;
+  --sl-content-width: 50rem;
+  --sl-text-body: 1.0625rem;
+  --sl-line-height: 1.75;
+}
+
+@media (min-width: 72rem) {
+  :root {
+    --sl-content-pad-x: 2.5rem;
+  }
+}
+
+main h1#_top {
+  font-size: clamp(2.25rem, 1.6vw + 1.6rem, 2.75rem);
+  letter-spacing: -0.02em;
+}
+
+/* サイドバー: 行を広げ、現在地を面で示す */
+.sidebar-content a {
+  border-radius: 0.5rem;
+  padding-block: 0.5rem;
+  font-size: 0.95rem;
+}
+.sidebar-content a[aria-current='page'],
+.sidebar-content a[aria-current='page']:hover {
+  background: color-mix(in srgb, var(--sl-color-accent) 16%, transparent);
+  color: #d3e3fd;
+}
+.sidebar-content .group-label > .large {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sl-color-gray-3);
+}
+
+/* 右カラム: 「このページの内容」を読み物として立てる */
+.right-sidebar nav > h2 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--sl-color-gray-1);
+  margin-block: 0.25rem 1rem;
+}
+.right-sidebar nav a {
+  font-size: 0.9375rem;
+  color: var(--sl-color-gray-3);
+  padding-block: 0.4rem;
+  border-radius: 0;
+}
+.right-sidebar nav a:hover {
+  color: var(--sl-color-gray-1);
+}
+.right-sidebar nav a[aria-current='true'] {
+  color: var(--sl-color-accent);
+  box-shadow: inset 2px 0 0 var(--sl-color-accent);
+  border-radius: 0;
+}
+
+/* トップのリンク一覧を 2 カラムのカードに */
+@media (min-width: 60rem) {
+  .sl-markdown-content ul:has(> li > a:only-child) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

@@ -11,9 +11,23 @@ export default defineConfig({
         { icon: 'github', label: 'GitHub', href: 'https://github.com/yuki-net/lapis' },
       ],
       customCss: ['./src/styles/custom.css'],
+      components: {
+        Header: './src/components/Header.astro',
+        Sidebar: './src/components/Sidebar.astro',
+        Pagination: './src/components/Pagination.astro',
+      },
       sidebar: [
-        { slug: 'index' },
-        { label: 'ガイド', items: [{ autogenerate: { directory: 'guide' } }] },
+        {
+          label: 'はじめに',
+          items: [
+            { label: '概要', slug: 'index' },
+            { autogenerate: { directory: 'guide' } },
+          ],
+        },
+        {
+          label: 'リファレンス',
+          items: [{ autogenerate: { directory: 'reference' } }],
+        },
       ],
     }),
   ],

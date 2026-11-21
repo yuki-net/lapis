@@ -1,0 +1,111 @@
+---
+// 2 段ヘッダーの試作。Starlight の既定 Header を 1 段目に残し、
+// 2 段目にセクションのタブを足す（既定機能ではなくコンポーネント差し替え）。
+import Default from '@astrojs/starlight/components/Header.astro';
+import { currentSection, sections } from '../data/nav';
+
+const current = currentSection(Astro.url.pathname);
+const links = [
+  { label: '変更履歴', href: 'https://github.com/yuki-net/lapis/pulls' },
+  { label: 'Issues', href: 'https://github.com/yuki-net/lapis/issues' },
+];
+---
+
+<div class="lapis-header">
+  <div class="lapis-header-row"><Default /></div>
+  <nav class="lapis-tabs" aria-label="セクション">
+    <ul>
+      {
+        sections.map((section) => (
+          <li>
+            <a
+              href={section.href}
+              aria-current={current?.label === section.label ? 'page' : undefined}
+            >
+              {section.label}
+            </a>
+          </li>
+        ))
+      }
+    </ul>
+    <div class="lapis-tabs-links">
+      {
+        links.map((link) => (
+          <a href={link.href} target="_blank" rel="noreferrer">
+            {link.label}
+          </a>
+        ))
+      }
+    </div>
+  </nav>
+</div>
+
+<style>
+  @layer starlight.core {
+    .lapis-header {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      min-height: 0;
+    }
+    .lapis-header-row {
+      display: flex;
+      flex: 1 1 auto;
+      align-items: center;
+      min-height: 0;
+    }
+    .lapis-header-row :global(.header) {
+      width: 100%;
+    }
+    .lapis-tabs {
+      display: flex;
+      flex: 0 0 auto;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      height: 3.25rem;
+      border-top: 1px solid var(--sl-color-hairline);
+    }
+    .lapis-tabs ul {
+      display: flex;
+      gap: 0.25rem;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .lapis-tabs a {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.45rem 0.9rem;
+      border-radius: 0.55rem;
+      color: var(--sl-color-gray-2);
+      font-size: 0.95rem;
+      text-decoration: none;
+    }
+    .lapis-tabs a:hover {
+      background: var(--lapis-surface);
+      color: var(--sl-color-white);
+    }
+    .lapis-tabs a[aria-current='page'] {
+      background: var(--sl-color-gray-5);
+      color: var(--sl-color-white);
+    }
+    .lapis-tabs-links {
+      display: flex;
+      gap: 1.25rem;
+    }
+    .lapis-tabs-links a {
+      padding-inline: 0;
+      color: var(--sl-color-gray-3);
+      font-size: 0.875rem;
+    }
+    @media (max-width: 50rem) {
+      .lapis-tabs {
+        overflow-x: auto;
+      }
+      .lapis-tabs-links {
+        display: none;
+      }
+    }
+  }
+</style>
