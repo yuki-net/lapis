@@ -16,6 +16,8 @@ CI で走る検証は、ローカルでも同じものが同じコマンドで�
 | `scripts/ci/report.py` | ログ装飾・失敗注釈・実行サマリ |
 | `scripts/ci/gate.py` | plan と matrix の結果から CI の成否を決める |
 | `scripts/ci/measure.py` | route の step 別所要時間を測る |
+| `scripts/ci/watch.py` | route × OS を並列に実行し、進捗を 1 画面で描く |
+| `scripts/ci/state.py` | 実行中の route の状態（`.ci/state/<job>.json`） |
 | `.github/workflows/ci.yml` | `plan` / `ci`（matrix）/ `gate` の 3 job のみ。step 列は持たない |
 
 `.github/workflows/ci.yml` に step を書き足さないこと。検証を追加するときは `scripts/ci/routes/<route>.py` を、path の振り分けを変えるときは `scripts/ci/paths.py` を編集する（`scripts/ci/plan.py` のテストが YAML への直書きを検出して落とす）。
@@ -62,6 +64,32 @@ python -m scripts.ci.measure host                # step 別の所要時間を並
 - 手元の OS が `runs_on` に無い route は**実行せず失敗する**。CI で走らない検証を手元で緑にしても意味がないため。`--os` を明示したときだけ実行する
 - `--os` は CI の matrix からも渡す。ローカルで別 OS の検証を試すときにも使う
 - step の上限は `Step.timeout_minutes`、無指定なら `Route.timeout_minutes` から 10 分（後処理のキャッシュ保存分）を引いた値
+
+## まとめて回す（GitHub と同じ並列）
+
+```powershell
+python -m scripts.ci.watch                  # 変更 path から選ぶ
+python -m scripts.ci.watch --no-diff        # 全 route
+python -m scripts.ci.watch host desktop     # route を指定
+python -m scripts.ci.watch --jobs 2         # 同時実行数を絞る
+```
+
+route × OS の job を GitHub の matrix と同じように並列で起動し、1 画面に進捗を出す。
+
+```
+CI
+
+OK Host / Windows       [########--] 14/18   12m03s  Lint Host
+>> Desktop / Windows    [#####-----]  9/18    7m41s  Test Desktop      no output 12s
+.. Web                  [----------]  0/3      -      (waiting)
+```
+
+- 実行中は**最終出力からの経過**を出すので、止まっていないか分かる
+- `Ctrl+C` で起動した job を子孫ごと止める（終了コード 130）
+- `OK` は緑、`NG` は赤、`>>` は黄、`..` は待機。記号は ASCII なので cp932 の端末でも崩れない（色は TTY のときだけ付く）
+- 全部通れば 0、1 つでも失敗すれば 1。前提不足で実行しなかった job は skip 扱いで失敗にしない
+- `--json` で最後に job ごとの成否を出し、`--no-color` で色と上書き描画を切る
+- 状態は `.ci/state/<job>.json`、step のログは `.ci/logs/<route>/<step>.log`
 
 ## GitHub での見え方
 

@@ -50,6 +50,8 @@ def matrix(keys: list[str], only_os: str | None = None) -> list[dict]:
                     "os": os_name,
                     "runs_on": RUNNERS[os_name],
                     "timeout": route.timeout_minutes,
+                    # watch.py が待機中の job の総 step 数を出すのに使う。
+                    "steps": len(route.steps) + len(route.platform_steps.get(os_name, ())),
                     # 以降は ci.yml のセットアップ step の条件に使う。
                     "checkout_depth": route.checkout_depth,
                     "toolchain": RUST_TOOLCHAIN,

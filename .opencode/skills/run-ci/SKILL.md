@@ -23,6 +23,8 @@ python -m scripts.ci.run rust_core --json
 3. 失敗したら、その step のログだけ読む。全文は `.ci/logs/<route>/<step>.log` に落ちている。
 4. 直したら同じ route を再実行する。全 route を回す必要はない。
 
+複数 route をまとめて回すときは `python -m scripts.ci.watch` を使う。GitHub の matrix と同じく route × OS を並列で起動し、進捗・経過・成否を 1 画面に出す。`Ctrl+C` で起動した job ごと止まる。
+
 所要時間の内訳が要るときは `python -m scripts.ci.measure <route>` を使う（step 別の分数と占有比が出る）。
 
 ## 判断の指針

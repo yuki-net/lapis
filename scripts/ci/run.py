@@ -16,7 +16,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from scripts.ci import report
+from scripts.ci import report, state
 from scripts.ci.console import configure
 from scripts.ci.jobs import ROOT, ORDER, local_os, requirements, route_for
 from scripts.ci.model import RUNNERS
@@ -87,7 +87,7 @@ def missing_prerequisites(route) -> list[str]:
     return missing
 
 
-def run_step(route, step, log: report.LocalLog | None) -> dict:
+def run_step(route, step, log: report.LocalLog | None, writer=None) -> dict:
     """1 step を実行し、結果を返す。失敗は例外にせず結果に落とす。
 
     出力はパイプではなく実ファイルへ書かせ、待ちながら追記分を表示する。
@@ -116,7 +116,7 @@ def run_step(route, step, log: report.LocalLog | None) -> dict:
     for attempt in range(1, attempts + 1):
         report.group(step.name)
         started = time.perf_counter()
-        output, ok = execute_step(command, directory, environment, limit)
+        output, ok = execute_step(command, directory, environment, limit, writer)
         report.endgroup()
 
         if log is not None:
@@ -138,7 +138,11 @@ def run_step(route, step, log: report.LocalLog | None) -> dict:
 
 
 def execute_step(
-    command: list[str], directory: Path, environment: dict[str, str], limit: float | None
+    command: list[str],
+    directory: Path,
+    environment: dict[str, str],
+    limit: float | None,
+    writer=None,
 ) -> tuple[str, bool]:
     """コマンドを実行し、(出力, 成功したか) を返す。
 
@@ -171,6 +175,8 @@ def execute_step(
             except subprocess.TimeoutExpired:
                 pass
             position = pump_output(capture.name, position)
+            if writer is not None:
+                writer.pulse()
             if deadline is not None and time.perf_counter() > deadline:
                 terminate_tree(process)
                 timed_out = True
@@ -246,23 +252,33 @@ def execute(route, only: list[str] | None, quiet: bool, os_name: str | None = No
             raise SystemExit(f"no step matched {only}\navailable: {available}")
 
     log = None if report.on_github() else report.LocalLog(ROOT / ".ci" / "logs")
+    writer = state.Writer(state.directory(), route.key, route.name, os_name, len(steps))
     results = []
-    for step in steps:
-        if step.requires and missing_prerequisites_for_step(step):
-            report.notice(f"skip {step.name} (requires {', '.join(step.requires)})")
-            results.append({"name": step.name, "ok": True, "skipped": True, "seconds": 0.0, "output": ""})
-            continue
-        report.notice(f"run {step.name}: {' '.join(step.command)}")
-        result = run_step(route, step, log)
-        if not result["ok"]:
-            report.error(f"{route.name}: {step.name} failed")
-            if not quiet and not report.on_github():
-                print(tail(result["output"]), file=sys.stderr, flush=True)
+    try:
+        for step in steps:
+            if step.requires and missing_prerequisites_for_step(step):
+                report.notice(f"skip {step.name} (requires {', '.join(step.requires)})")
+                results.append({"name": step.name, "ok": True, "skipped": True, "seconds": 0.0, "output": ""})
+                continue
+            report.notice(f"run {step.name}: {' '.join(step.command)}")
+            writer.begin(step.name)
+            result = run_step(route, step, log, writer)
+            writer.end(step.name, result["ok"])
+            if not result["ok"]:
+                report.error(f"{route.name}: {step.name} failed")
+                if not quiet and not report.on_github():
+                    print(tail(result["output"]), file=sys.stderr, flush=True)
+                results.append(result)
+                break
             results.append(result)
-            break
-        results.append(result)
 
-    ok = all(result["ok"] for result in results)
+        ok = all(result["ok"] for result in results)
+        writer.finish(ok)
+    except BaseException:
+        # 中断（Ctrl+C など）でも、watch 側が「実行中」のまま残らないようにする。
+        writer.data["status"] = state.CANCELLED
+        writer.flush()
+        raise
     payload = {
         "route": route.key,
         "name": route.name,
@@ -353,6 +369,10 @@ def main() -> int:
             if args.strict:
                 report.error(message)
                 return 1
+            # watch から起動されている場合に「失敗」に見えないよう記録する。
+            state.Writer(
+                state.directory(), route.key, route.name, args.os or local_os(), 0
+            ).skip(f"missing {', '.join(missing)}")
             print(json.dumps({"route": route.key, "ok": True, "skipped": True, "reason": f"missing {missing}"}))
             return 0
 
