@@ -10,11 +10,11 @@ import sys
 import tempfile
 import time
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.ci import report, run
+from scripts.ci import model, report, run
 from scripts.ci.jobs import Route, Step
 
 
@@ -91,24 +91,107 @@ class RunTests(unittest.TestCase):
         route = route_for_os("linux")
         # 前提確認はローカル専用。CI 上でテストするため明示的に切る。
         with patch.object(run.report, "on_github", return_value=False):
-            with patch.object(run, "route_for", return_value=route), \
+            with patch.object(run, "local_os", return_value="linux"), \
+                 patch.object(run, "route_for", return_value=route), \
                  patch.object(run, "missing_prerequisites", return_value=["wasm-bindgen"]):
                 with redirect_stdout(io.StringIO()):
                     self.assertEqual(invoke(["test"]), 0)
-            with patch.object(run, "route_for", return_value=route), \
+            with patch.object(run, "local_os", return_value="linux"), \
+                 patch.object(run, "route_for", return_value=route), \
                  patch.object(run, "missing_prerequisites", return_value=["wasm-bindgen"]):
                 with redirect_stdout(io.StringIO()):
                     self.assertEqual(invoke(["test", "--strict"]), 1)
 
-    def test_other_ci_os_still_runs_with_local_toolchain(self):
-        """CI の runner OS と違っても、前提が揃えば同じ検証を回す。"""
-        route = route_for_os("windows" if os.name != "nt" else "linux")
+    def test_local_os_outside_runs_on_is_refused(self):
+        """CI で走らない OS では、黙って別 OS の検証を回さない。"""
+        route = route_for_os("windows")
         with patch.object(run.report, "on_github", return_value=False), \
+             patch.object(run, "local_os", return_value="linux"), \
+             patch.object(run, "route_for", return_value=route), \
+             patch.object(run, "execute") as execute:
+            with redirect_stderr(io.StringIO()) as errors:
+                self.assertEqual(invoke(["test"]), 1)
+        execute.assert_not_called()
+        self.assertIn("runs on windows in CI", errors.getvalue())
+
+    def test_os_flag_allows_running_a_ci_os_locally(self):
+        """`--os` を明示したときだけ、CI と違う OS で回せる。"""
+        route = route_for_os("windows")
+        with patch.object(run.report, "on_github", return_value=False), \
+             patch.object(run, "local_os", return_value="linux"), \
              patch.object(run, "route_for", return_value=route), \
              patch.object(run, "missing_prerequisites", return_value=[]), \
              patch.object(run, "execute", return_value={"route": "test", "ok": True, "steps": []}):
             with redirect_stdout(io.StringIO()):
-                self.assertEqual(invoke(["test"]), 0)
+                self.assertEqual(invoke(["test", "--os", "windows"]), 0)
+
+    def test_os_flag_rejects_unknown_os(self):
+        with redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                invoke(["test", "--os", "solaris"])
+
+    def test_platform_steps_are_loaded_by_file_name(self):
+        """`<route>_<os>.py` を置くだけで OS 別 step が載る。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "widget_windows.py").write_text(
+                "from scripts.ci.model import Step\n"
+                "STEPS = (Step('win-only', ['cmd']),)\n",
+                encoding="utf-8",
+            )
+            (root / "widget_linux.py").write_text(
+                "from scripts.ci.model import Step\n"
+                "STEPS = (Step('nix-only', ['sh']),)\n",
+                encoding="utf-8",
+            )
+            (root / "other_windows.py").write_text("STEPS = ()\n", encoding="utf-8")
+            loaded = model.load_platform_steps(root, "widget")
+        self.assertEqual(sorted(loaded), ["linux", "windows"])
+        self.assertEqual(loaded["windows"][0].name, "win-only")
+        self.assertEqual(loaded["linux"][0].name, "nix-only")
+
+    def test_platform_steps_reject_unknown_os_file_name(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "widget_solaris.py").write_text("STEPS = ()\n", encoding="utf-8")
+            with self.assertRaises(ValueError) as raised:
+                model.load_platform_steps(root, "widget")
+        self.assertIn("solaris", str(raised.exception))
+
+    def test_platform_steps_require_steps_definition(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "widget_windows.py").write_text("OTHER = ()\n", encoding="utf-8")
+            with self.assertRaises(ValueError) as raised:
+                model.load_platform_steps(root, "widget")
+        self.assertIn("STEPS", str(raised.exception))
+
+    def test_execute_runs_only_the_selected_os_platform_steps(self):
+        """選んだ OS の差分 step だけを、共通 step の後ろに足す。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "test_windows.py").write_text(
+                "from scripts.ci.model import Step\n"
+                "STEPS = (Step('win-only', ['cmd']),)\n",
+                encoding="utf-8",
+            )
+            (root / "test_linux.py").write_text(
+                "from scripts.ci.model import Step\n"
+                "STEPS = (Step('nix-only', ['sh']),)\n",
+                encoding="utf-8",
+            )
+            route = route_with(Step("common", [sys.executable, "-c", "print('ok')"]))
+
+            def fake_step(_route, step, _log):
+                return {"name": step.name, "ok": True, "seconds": 0.0, "output": ""}
+
+            with patch.object(model, "PLATFORM_DIRECTORY", root), \
+                 patch.object(report, "on_github", return_value=False), \
+                 patch.object(run, "run_step", side_effect=fake_step):
+                windows = run.execute(route, None, quiet=True, os_name="windows")
+                linux = run.execute(route, None, quiet=True, os_name="linux")
+        self.assertEqual([step["name"] for step in windows["steps"]], ["common", "win-only"])
+        self.assertEqual([step["name"] for step in linux["steps"]], ["common", "nix-only"])
 
     def test_step_selection_rejects_unknown_names(self):
         with patch.object(run, "route_for", return_value=route_for_os("linux")):

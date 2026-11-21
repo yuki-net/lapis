@@ -7,7 +7,7 @@
 
 import sys
 
-from scripts.ci.model import OS_LABELS, Route
+from scripts.ci.model import OS_LABELS, RUNNERS, Route
 from scripts.ci.routes import desktop, dev_commands, host, mobile, repository, rust_core, web
 
 # 実行順。matrix の並び順もここに従う。
@@ -17,6 +17,26 @@ ROUTES: dict[str, Route] = {
     module.ROUTE.key: module.ROUTE
     for module in (repository, dev_commands, rust_core, host, desktop, mobile, web)
 }
+
+
+def validate(routes: dict[str, Route]) -> None:
+    """`runs_on` が実際に runner を持つ OS だけを指しているか検査する。
+
+    ここを素通りさせると、matrix を作るときに `RUNNERS[os_name]` で
+    KeyError になり、原因が分からないまま plan が落ちる。
+    """
+    for route in routes.values():
+        if not route.runs_on:
+            raise ValueError(f"{route.key}: runs_on を空にしない")
+        unknown = [os_name for os_name in route.runs_on if os_name not in RUNNERS]
+        if unknown:
+            raise ValueError(
+                f"{route.key}: unknown OS {', '.join(unknown)} "
+                f"(expected {', '.join(RUNNERS)})"
+            )
+
+
+validate(ROUTES)
 
 
 def route_for(key: str) -> Route:

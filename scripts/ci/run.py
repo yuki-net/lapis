@@ -19,6 +19,7 @@ from pathlib import Path
 from scripts.ci import report
 from scripts.ci.console import configure
 from scripts.ci.jobs import ROOT, ORDER, local_os, requirements, route_for
+from scripts.ci.model import RUNNERS
 
 
 def configure_output() -> None:
@@ -232,13 +233,16 @@ def tail(output: str, lines: int = 40) -> str:
     return "\n".join(parts[-lines:])
 
 
-def execute(route, only: list[str] | None, quiet: bool) -> dict:
-    steps = list(route.steps)
+def execute(route, only: list[str] | None, quiet: bool, os_name: str | None = None) -> dict:
+    """route の step を実行する。`os_name` の差分 step も後ろに足す。"""
+    os_name = os_name or local_os()
+    all_steps = [*route.steps, *route.platform_steps.get(os_name, ())]
+    steps = all_steps
     if only:
         wanted = {name.lower() for name in only}
-        steps = [step for step in steps if step.name.lower() in wanted]
+        steps = [step for step in all_steps if step.name.lower() in wanted]
         if not steps:
-            available = ", ".join(step.name for step in route.steps)
+            available = ", ".join(step.name for step in all_steps) or "none"
             raise SystemExit(f"no step matched {only}\navailable: {available}")
 
     log = None if report.on_github() else report.LocalLog(ROOT / ".ci" / "logs")
@@ -290,14 +294,21 @@ def missing_prerequisites_for_step(step) -> list[str]:
 
 
 def list_routes() -> None:
-    print(f"{'route':12} {'name':20} {'runs_on':20} {'matches this os':16} requires")
+    print(f"{'route':12} {'name':20} {'runs_on':20} {'platform':16} {'matches this os':16} requires")
     for key in ORDER:
         route = route_for(key)
         runs_on = ",".join(route.runs_on)
+        platform = ",".join(sorted(route.platform_steps)) or "-"
         matches = "yes" if local_os() in route.runs_on else "no (same steps)"
-        print(f"{key:12} {route.name:20} {runs_on:20} {matches:16} {', '.join(requirements(route)) or '-'}")
+        print(
+            f"{key:12} {route.name:20} {runs_on:20} {platform:16} {matches:16} "
+            f"{', '.join(requirements(route)) or '-'}"
+        )
     print()
-    print("usage: python -m scripts.ci.run <route> [--list] [--step <name>] [--json]")
+    print(
+        "usage: python -m scripts.ci.run <route> "
+        "[--list] [--step <name>] [--os <os>] [--json]"
+    )
 
 
 def main() -> int:
@@ -306,6 +317,11 @@ def main() -> int:
     parser.add_argument("route", nargs="?", help="実行する route（--list で一覧）")
     parser.add_argument("--list", action="store_true", help="route 一覧と前提を表示する")
     parser.add_argument("--step", action="append", help="指定した step だけ実行する（複数可）")
+    parser.add_argument(
+        "--os",
+        choices=tuple(RUNNERS),
+        help="この OS として実行する。CI の matrix から渡す。ローカルで別 OS の検証を試すときにも使う",
+    )
     parser.add_argument("--json", action="store_true", help="結果を JSON で stdout に出す")
     parser.add_argument("--quiet", action="store_true", help="失敗 step の抜粋を出さない")
     parser.add_argument("--strict", action="store_true", help="実行できない route を失敗として扱う")
@@ -318,12 +334,18 @@ def main() -> int:
 
     route = route_for(args.route)
 
+    # CI では matrix が `runs_on` の中から選ぶので、ここはローカル専用の門。
+    # 手元の OS で CI に存在しない検証を回すと「手元では緑、CI では未検証」を
+    # 作りやすい。明示的に `--os` を渡したときだけ通す。
+    if not report.on_github() and args.os is None and local_os() not in route.runs_on:
+        runs_on = ", ".join(route.runs_on)
+        report.error(
+            f"{route.key} runs on {runs_on} in CI; "
+            f"pass --os <{'|'.join(route.runs_on)}> to run it on {local_os()} anyway"
+        )
+        return 1
+
     if not report.on_github() and not args.no_prerequisite_check:
-        if local_os() not in route.runs_on:
-            runs_on = ", ".join(route.runs_on)
-            report.warning(
-                f"{route.key} runs on {runs_on} in CI; verifying with this machine's toolchain instead"
-            )
         missing = missing_prerequisites(route)
         if missing:
             message = f"{route.key} needs {', '.join(missing)} on this machine"
@@ -334,7 +356,7 @@ def main() -> int:
             print(json.dumps({"route": route.key, "ok": True, "skipped": True, "reason": f"missing {missing}"}))
             return 0
 
-    payload = execute(route, args.step, args.quiet)
+    payload = execute(route, args.step, args.quiet, args.os)
     if args.json:
         report.emit_json(payload)
     return 0 if payload["ok"] else 1

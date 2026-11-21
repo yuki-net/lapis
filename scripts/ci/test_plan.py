@@ -69,6 +69,20 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(plan.matrix(["host"])[0]["name"], "Host / Windows")
         self.assertEqual(plan.matrix(["repository"])[0]["name"], "Repository / Linux")
 
+    def test_routes_declare_only_known_os(self):
+        """`runs_on` の typo は matrix を作る前に落とす。"""
+        from dataclasses import replace
+
+        from scripts.ci.routes import validate
+
+        route = route_for("web")
+        validate({"ok": route})
+        with self.assertRaises(ValueError) as raised:
+            validate({"bad": replace(route, runs_on=("solaris",))})
+        self.assertIn("solaris", str(raised.exception))
+        with self.assertRaises(ValueError):
+            validate({"empty": replace(route, runs_on=())})
+
     def test_matrix_carries_working_directory_indirectly(self):
         """作業ディレクトリは matrix ではなく run.py が route から解決する。"""
         workflow = WORKFLOW.read_text(encoding="utf-8")
@@ -101,6 +115,11 @@ class PlanTests(unittest.TestCase):
         self.assertIn("python -m scripts.ci.run ${{ matrix.route.job }}", workflow)
         for step in ("python scripts/check.py", "cargo test", "npm run build", "./gradlew"):
             self.assertNotIn(step, workflow)
+
+    def test_workflow_passes_the_matrix_os_to_run_py(self):
+        """CI は matrix の OS を `--os` で run.py に渡す。"""
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("--os ${{ matrix.route.os }}", workflow)
 
     def test_workflow_matrix_comes_from_plan(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")

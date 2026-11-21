@@ -31,7 +31,7 @@ python -m scripts.ci.run rust_core --json
 - `--json` は成否だけを返す。まずこれで当たりを付け、失敗した route だけ通常実行する
 - 前提（cargo / node / wasm-bindgen / java / gradle）が無い route は実行されず理由が出る。`--strict` で失敗扱いにできる
 - CI の runner OS と違っても同じ step を回す。差はログの装飾とキャッシュだけ
-- `runs_on` に無い OS の route でも、前提が揃えばローカルでは実行できる（警告は出る）。CI で job が生まれるのは `runs_on` の OS だけ
+- `runs_on` に無い OS の route は門で止まる。`--os` を明示したときだけ実行できる
 - 検証を足すときは `scripts/ci/routes/<route>.py` の `Route.steps` に `Step` を足す。`ci.yml` と `jobs.py` は触らない
 - OS 固有の step は `runs_on` に OS を足し、`scripts/ci/routes/platforms/<route>_<os>.py` に置く
 - path の振り分けを変えるときは `scripts/ci/paths.py` の `PATH_RULES` を編集する

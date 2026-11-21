@@ -8,7 +8,7 @@ CI で走る検証は、ローカルでも同じものが同じコマンドで�
 | --- | --- |
 | `scripts/ci/routes/<route>.py` | **route の検証内容の正本**。route 名・走らせる OS（`runs_on`）・タイムアウト・必要な toolchain・step 列（1 route 1 ファイル） |
 | `scripts/ci/model.py` | `Step` / `Route` の型、runner 名と OS 表示名、toolchain などの固定値 || `scripts/ci/routes/__init__.py` | route の集合と実行順（`ROUTES` / `ORDER`）、job 名の組み立て |
-| `scripts/ci/routes/platforms/` | OS ごとに検証内容が違う場合の差分 step（無い OS のファイルは作らない） |
+| `scripts/ci/routes/platforms/` | OS ごとの差分 step（`<route>_<os>.py` を置くだけ。無い OS のファイルは作らない） |
 | `scripts/ci/paths.py` | **変更 path → route の対応の正本**。1 つの path が複数 route を要求する関係を持つ |
 | `scripts/ci/jobs.py` | 上記の再エクスポート（従来の import 先を保つ） |
 | `scripts/ci/plan.py` | 上 2 つを繋ぎ、実行すべき route を route × OS の matrix にする |
@@ -25,7 +25,7 @@ CI で走る検証は、ローカルでも同じものが同じコマンドで�
 ファイル名・route key・`name` に OS は書かない。走らせる OS は `Route.runs_on` に持ち、GitHub の job 名（`Host / Windows`）は `runs_on` から組み立てる。検証対象が runner の OS と違う場合（`Mobile / Android`）だけ `Route.target` で対象を表示する。
 
 - OS を増やすときは `runs_on` に足すだけ。ファイル名も `paths.py` も変えなくてよい
-- OS ごとに step が違う場合だけ `scripts/ci/routes/platforms/<route>_<os>.py` に差分を置く（共通 step は `routes/<route>.py`）
+- OS ごとに step が違う場合は `scripts/ci/routes/platforms/<route>_<os>.py` に `STEPS` を置く。**ファイルを置くだけで効き、route ファイルは編集しない**。`python -m scripts.ci.run --list` の `platform` 列で読み込まれているか確認できる
 - `runs_on` に無い OS では job 自体が生まれない。**skip で緑にならない**
 - runner を絞りたいときは `python -m scripts.ci.plan --only-os linux`。`ci.yml` も route 定義も変えずに、その OS の job だけを matrix に入れられる
 
@@ -48,17 +48,19 @@ GitHub の job 名は `name` と `runs_on`（または `target`）から作る�
 ## ローカルで回す
 
 ```powershell
-python -m scripts.ci.run --list                  # route と前提を確認
+python -m scripts.ci.run --list                  # route / runs_on / 前提を確認
 python -m scripts.ci.run repository              # route 全体
 python -m scripts.ci.run rust_core --step lint   # step を絞る
 python -m scripts.ci.run desktop --json          # エージェント向け（ログを抑制）
+python -m scripts.ci.run host --os windows       # CI と違う OS として実行する
 python -m scripts.ci.measure host                # step 別の所要時間を並べる
 ```
 
 - 成功した step の出力は捨てる。失敗した step だけ末尾 40 行を表示し、全文は `.ci/logs/<route>/<step>.log` に残る
 - `--json` は `{route, name, ok, steps:[{name, ok, seconds}]}` だけを返す。ログを読まずに成否を判断できる
 - 前提（cargo / node / wasm-bindgen / java / gradle）が無い route は実行せず理由を表示する。`--strict` を付けると失敗扱いになる
-- CI の runner OS と違う OS でも、前提が揃えば同じ step を実行する。差はログの装飾とキャッシュだけ
+- 手元の OS が `runs_on` に無い route は**実行せず失敗する**。CI で走らない検証を手元で緑にしても意味がないため。`--os` を明示したときだけ実行する
+- `--os` は CI の matrix からも渡す。ローカルで別 OS の検証を試すときにも使う
 - step の上限は `Step.timeout_minutes`、無指定なら `Route.timeout_minutes` から 10 分（後処理のキャッシュ保存分）を引いた値
 
 ## GitHub での見え方
@@ -72,6 +74,7 @@ python -m scripts.ci.measure host                # step 別の所要時間を並
 | 失敗の注釈 | `report.error()` が `::error::` を出力 |
 | 実行時間の表 | `report.write_summary()` が `$GITHUB_STEP_SUMMARY` に Markdown 表を書く |
 | route の再実行 | matrix の `route.job` 単位で再実行できる |
+| 実行 OS | matrix の `route.os` を `run.py --os` に渡す |
 
 Actions UI の step 単位プログレスバーだけは失われる。代替は job サマリの表。
 
@@ -79,7 +82,7 @@ Actions UI の step 単位プログレスバーだけは失われる。代替は
 
 1. `scripts/ci/routes/<route>.py` の `Route.steps` に `Step` を足す
 2. 必要なら `Route` の前提（`rust` / `node` / `wasm_bindgen` / `java` / `gradle`）を埋める
-3. OS 固有の step なら `runs_on` にその OS を足し、`routes/platforms/` に置く
+3. OS 固有の step なら `routes/platforms/<route>_<os>.py` に `STEPS` を置く（route ファイルは触らない）
 4. `python -m scripts.ci.run <route> --step <新しい step 名>` でローカル確認
 5. 新しい path を検証対象にするなら `scripts/ci/paths.py` の `PATH_RULES` も更新する
 
@@ -90,4 +93,4 @@ step は shell 文字列ではなく argv で書く。`&&` や `$LASTEXITCODE` �
 1. `scripts/ci/routes/<new>.py` に `Route` を書く（`runs_on` を必ず埋める）
 2. `scripts/ci/routes/__init__.py` の import と `ORDER` に足す
 3. `scripts/ci/paths.py` の `PATH_RULES` に、その route を選ぶ path を足す
-4. OS ごとに step が違う場合だけ `scripts/ci/routes/platforms/<route>_<os>.py` を作る
+4. OS ごとに step が違う場合は `scripts/ci/routes/platforms/<route>_<os>.py` を足すだけ（上の 1〜3 は変更不要）

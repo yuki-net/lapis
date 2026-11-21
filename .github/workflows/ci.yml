@@ -116,7 +116,7 @@ jobs:
         working-directory: ${{ github.workspace }}
         env:
           RUNNER_TEMP: ${{ runner.temp }}
-        run: python -m scripts.ci.run ${{ matrix.route.job }} --no-prerequisite-check
+        run: python -m scripts.ci.run ${{ matrix.route.job }} --no-prerequisite-check --os ${{ matrix.route.os }}
 
   gate:
     name: Gate

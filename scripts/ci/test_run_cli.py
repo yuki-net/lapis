@@ -41,8 +41,9 @@ class ListTests(unittest.TestCase):
         self.assertIn("known routes", errors.getvalue())
 
     def test_bad_step_name_lists_available_steps(self):
+        # `--os` を渡さないと、手元の OS が runs_on に無い route は門で止まる。
         with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as raised:
-            invoke(["repository", "--step", "Nope"])
+            invoke(["repository", "--os", "linux", "--step", "Nope"])
         self.assertIn("available", str(raised.exception.code))
 
 

@@ -3,9 +3,15 @@
 定義の中身は `scripts/ci/routes/` の 1 route 1 ファイルが持ち、ここは
 型だけを持つ。型を別ファイルにすることで、route ファイル同士や
 `plan.py` / `run.py` が定義ファイルを import し合う循環を作らない。
+
+OS ごとに step が違う場合の差分は `scripts/ci/routes/platforms/` に
+`<route>_<os>.py`（`STEPS` を定義）を置く。ファイルを置くだけで
+`Route.platform_steps` に載るので、route ファイルを書き換えなくてよい。
 """
 
+import importlib.util
 from dataclasses import dataclass, field
+from pathlib import Path
 
 # CI の固定値。ローカルの検証でも同じ値を使う。
 RUST_TOOLCHAIN = "1.96.0"
@@ -18,7 +24,10 @@ JAVA_VERSION = "21"
 RUNNERS = {"linux": "ubuntu-latest", "windows": "windows-2022"}
 
 # GitHub の job 名に使う OS の表示名（`Host / Windows`）。
-OS_LABELS = {"linux": "Linux", "windows": "Windows", "macos": "macOS"}
+OS_LABELS = {"linux": "Linux", "windows": "Windows"}
+
+# OS ごとの追加 step を置くディレクトリ（`<route>_<os>.py`）。
+PLATFORM_DIRECTORY = Path(__file__).resolve().parent / "routes" / "platforms"
 
 
 @dataclass(frozen=True)
@@ -74,3 +83,49 @@ class Route:
     cache_paths: tuple[str, ...] = ("target/",)
     # route の既定作業ディレクトリ（リポジトリルートからの相対パス）。
     working_directory: str = ""
+
+    @property
+    def platform_steps(self) -> dict[str, tuple["Step", ...]]:
+        """OS ごとの追加 step。`routes/platforms/<key>_<os>.py` から拾う。
+
+        ファイルが無い OS は含まれない（共通 step だけで走る）。route
+        ファイル側に列挙を持たせないので、差分を足すときはファイルを
+        置くだけでよい。
+        """
+        return platform_steps(self.key)
+
+
+def platform_steps(route_key: str) -> dict[str, tuple[Step, ...]]:
+    """`PLATFORM_DIRECTORY` から route の OS 別 step を集める。"""
+    return load_platform_steps(PLATFORM_DIRECTORY, route_key)
+
+
+def load_platform_steps(directory: Path, route_key: str) -> dict[str, tuple[Step, ...]]:
+    """`<route_key>_<os>.py` を読み、OS 名 → step 列 にする。
+
+    ファイル名の OS が `RUNNERS` に無い場合は、綴り間違いをそのまま
+    無視しないよう例外にする。
+    """
+    found: dict[str, tuple[Step, ...]] = {}
+    prefix = f"{route_key}_"
+    for path in sorted(Path(directory).glob(f"{prefix}*.py")):
+        os_name = path.stem[len(prefix):]
+        if os_name not in RUNNERS:
+            raise ValueError(
+                f"{path.name}: unknown OS '{os_name}' (expected {', '.join(RUNNERS)})"
+            )
+        module = _load_module(path)
+        steps = getattr(module, "STEPS", None)
+        if steps is None:
+            raise ValueError(f"{path.name}: STEPS を定義すること")
+        found[os_name] = tuple(steps)
+    return found
+
+
+def _load_module(path: Path):
+    spec = importlib.util.spec_from_file_location(f"lapis_ci_platform_{path.stem}", path)
+    if spec is None or spec.loader is None:
+        raise ValueError(f"{path.name}: 読み込めない")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
