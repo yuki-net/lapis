@@ -43,6 +43,7 @@ python -m scripts.ci.run desktop --json          # エージェント向け（�
 - `--json` は `{route, name, ok, steps:[{name, ok, seconds}]}` だけを返す。ログを読まずに成否を判断できる
 - 前提（cargo / node / wasm-bindgen / java / gradle）が無い route は実行せず理由を表示する。`--strict` を付けると失敗扱いになる
 - CI の runner OS と違う OS でも、前提が揃えば同じ step を実行する。差はログの装飾とキャッシュだけ
+- step の上限は `Step.timeout_minutes`、無指定なら `Route.timeout_minutes` から 10 分（後処理のキャッシュ保存分）を引いた値
 
 ## GitHub での見え方
 

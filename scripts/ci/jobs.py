@@ -231,7 +231,10 @@ ROUTES: dict[str, Route] = {
         key="host",
         name="Host / Windows",
         os="windows",
-        timeout_minutes=50,
+        # 検証だけで約 44 分かかる（承認済み拡張 PTY の 16 step を含む）。
+        # さらに job の後処理で target/ のキャッシュ保存に数分かかるため、
+        # 旧 CI の 50 分では足りずに保存中に打ち切られる。上限は保存分を含めて決める。
+        timeout_minutes=75,
         python=PYTHON_VERSION,
         node=NODE_VERSION,
         rust=True,

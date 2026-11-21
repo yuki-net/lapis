@@ -40,6 +40,10 @@ PREREQUISITES = {
     "gradle": ("gradle", "--version"),
 }
 
+# job の後処理（target/ のキャッシュ保存）に使う時間。step の既定上限は
+# route の上限からこれを引いて確保する。
+POST_JOB_RESERVE_MINUTES = 10
+
 
 def runner_temp() -> Path:
     value = os.environ.get("RUNNER_TEMP")
@@ -93,13 +97,14 @@ def run_step(route, step, log: report.LocalLog | None) -> dict:
       2 回 25 分止まって原因不明だった）
 
     追記読み出しなので、長い step でも進行が見え、ハング箇所も特定できる。
-    step に個別の上限が無い場合は route の上限を使い、job 予算を食い潰さない。
+    step に個別の上限が無い場合は route の上限から後処理（キャッシュ保存）分を
+    差し引いた値を使い、job 予算を食い潰さない。
     """
     directory = ROOT / (route.working_directory or "") / (step.directory or "")
     command = [substitute(part) for part in step.command]
     environment = dict(os.environ)
     environment.update({key: substitute(value) for key, value in step.env.items()})
-    limit = (step.timeout_minutes or route.timeout_minutes) * 60
+    limit = (step.timeout_minutes or max(1, route.timeout_minutes - POST_JOB_RESERVE_MINUTES)) * 60
     if log is not None:
         log.begin(route.key, step.name)
 
