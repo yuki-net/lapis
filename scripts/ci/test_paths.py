@@ -9,9 +9,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from scripts.ci.paths import jobs_for_paths, PATH_RULES, ALL_JOBS
+from scripts.ci.routes import ORDER, ROUTES
+from scripts.ci.paths import ALL_JOBS, PATH_RULES, jobs_for_paths, worktree_paths
 from scripts.ci.gate import errors
-from scripts.ci.paths import JOB_IDS
 from scripts.ci.paths import changed_paths
 
 
@@ -23,26 +23,36 @@ class TestPathRouting(unittest.TestCase):
         self.assertEqual(jobs_for_paths(["apps/desktop/persistence/src/lib.rs"]), {"desktop", "rust_core"})
         self.assertEqual(jobs_for_paths(["locales/ja-JP/messages/common.json"]), {"repository", "rust_core", "desktop"})
 
-    def test_ci_workflow_uses_final_check_names_and_no_release_validation(self):
+    def test_route_names_match_the_workflow(self):
+        """route の表示名は CI のジョブ名になるため、jobs.py を正とする。"""
         workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-        for name in ("Changes", "Dev Commands / Windows", "Mobile / Android", "Gate"):
-            self.assertIn(f"name: {name}", workflow)
-        self.assertNotIn("Build Release Desktop", workflow)
-        self.assertNotIn("Test Release Inspector boundary", workflow)
+        for key in ORDER:
+            self.assertIn(key, ROUTES)
+        for key in ORDER:
+            self.assertIn(ROUTES[key].name, {route.name for route in ROUTES.values()})
+        self.assertIn("name: Plan", workflow)
+        self.assertIn("name: Gate", workflow)
+        self.assertIn("python -m scripts.ci.run", workflow)
 
-    def test_format_jobs_install_rustfmt(self):
-        workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-        jobs = re.split(r"(?m)^  (?=[a-z_]+:\s*$)", workflow.split("\njobs:\n", 1)[1])
-        format_jobs = [job for job in jobs if re.search(r"scripts/check\.py\s+\w+\s+format", job)]
-        self.assertEqual(len(format_jobs), 3)
-        for job in format_jobs:
-            self.assertRegex(job, r"(?m)^\s+components:\s+[^\n]*\brustfmt\b")
+    def test_all_jobs_matches_route_keys(self):
+        """path ルール側の job 名が jobs.py の route key と一致する。"""
+        self.assertEqual(ALL_JOBS, set(ROUTES))
+
+    def test_format_steps_install_rustfmt(self):
+        """`check.py <route> format` を実行する route は rustfmt を導入する。"""
+        format_routes = [
+            route
+            for route in ROUTES.values()
+            if any(any("format" in part for part in step.command) for step in route.steps)
+        ]
+        self.assertEqual(len(format_routes), 3)
+        for route in format_routes:
+            self.assertRegex(route.rust_components, r"\brustfmt\b", route.key)
 
     def test_rust_core_installs_analyzer_for_platform_tests(self):
-        workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-        rust_core = workflow.split("\n  rust_core:\n", 1)[1].split("\n  host_windows:\n", 1)[0]
-        self.assertRegex(rust_core, r"(?m)^\s+components:\s+[^\n]*\brust-analyzer\b")
-        self.assertRegex(rust_core, r"(?m)^\s+components:\s+[^\n]*\brust-src\b")
+        rust_core = ROUTES["rust_core"]
+        self.assertRegex(rust_core.rust_components, r"\brust-analyzer\b")
+        self.assertRegex(rust_core.rust_components, r"\brust-src\b")
 
     def test_desktop_path_runs_desktop(self):
         self.assertIn("desktop", jobs_for_paths(["apps/desktop/app/src/main.rs"]))
@@ -190,6 +200,18 @@ class TestPathRouting(unittest.TestCase):
         """移設前の path は削除差分で現れるため、全 job を起こさない。"""
         self.assertEqual(jobs_for_paths(["clients/web/package.json"]), {"web"})
 
+    def test_docs_site_paths_run_only_the_docs_site(self):
+        """サイトは触ったときだけ、そのサイトの route を回す。"""
+        for path in (
+            "sites/docs/astro.config.mjs",
+            "sites/docs/package.json",
+            "sites/docs/src/content/docs/index.md",
+        ):
+            self.assertEqual(jobs_for_paths([path]), {"sites_docs"}, path)
+
+    def test_docs_specs_do_not_build_the_site(self):
+        self.assertEqual(jobs_for_paths(["docs/specs/architecture.md"]), {"repository"})
+
     def test_cargo_toml_runs_all_rust(self):
         jobs = jobs_for_paths(["Cargo.toml"])
         self.assertIn("repository", jobs)
@@ -240,7 +262,7 @@ class TestPathRouting(unittest.TestCase):
         self.assertIn("host", jobs)
 
     def test_path_rules_are_exhaustive(self):
-        """PATH_RULESのpatternが重複していないことを確認。"""
+        """PATH_RULES の pattern が重複していないことを確認。"""
         seen = set()
         for patterns, _ in PATH_RULES:
             for pattern in patterns:
@@ -249,21 +271,23 @@ class TestPathRouting(unittest.TestCase):
 
     def test_windows_dev_commands_are_selected(self):
         for path in ("scripts/stop_dev_host.ps1", "scripts/test_dev_commands.py", "scripts/test_dev_session.py", "scripts/dev-session/src/main.rs", ".run/Lapis.run.xml", ".cargo/config.toml"):
-            self.assertIn("dev_windows", jobs_for_paths([path]))
-        self.assertNotIn("dev_windows", jobs_for_paths(["scripts/other.py"]))
+            self.assertIn("dev_commands", jobs_for_paths([path]))
+        self.assertNotIn("dev_commands", jobs_for_paths(["scripts/other.py"]))
 
     def test_gate_checks_mapped_jobs_and_expected_skips(self):
         for route, path in (("desktop", "apps/desktop/app/src/main.rs"), ("host", "host/app/src/main.rs")):
-            selected = list(jobs_for_paths([path]))
-            needs = {"path_filter": {"result": "success"}}
-            needs.update({job: {"result": "success" if name in selected else "skipped"} for name, job in JOB_IDS.items()})
-            self.assertEqual(errors(selected, needs), [])
+            selected = sorted(jobs_for_paths([path]))
+            needs = {"plan": {"result": "success"}, "ci": {"result": "success"}}
+            self.assertEqual(errors(selected, needs, len(selected)), [])
+            if not selected:
+                self.assertTrue(errors(selected, needs, 1))
+                continue
             for result in ("failure", "cancelled", "timed_out", "skipped"):
-                needs[JOB_IDS[route]]["result"] = result
-                self.assertTrue(errors(selected, needs), result)
-            needs[JOB_IDS[route]]["result"] = "success"
-            needs["path_filter"]["result"] = "failure"
-            self.assertTrue(errors(selected, needs))
+                needs["ci"]["result"] = result
+                self.assertTrue(errors(selected, needs, len(selected)), result)
+            needs["ci"]["result"] = "success"
+            needs["plan"]["result"] = "failure"
+            self.assertTrue(errors(selected, needs, len(selected)))
 
     def test_diff_uses_given_parent_for_stacked_pr_and_push(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -288,6 +312,70 @@ class TestPathRouting(unittest.TestCase):
                 git("mv", "child.txt", "renamed.txt")
                 git("commit", "-m", "rename")
                 self.assertEqual(set(changed_paths(child)), {"child.txt", "renamed.txt"})
+
+    def test_diff_ignores_commits_that_only_the_base_has(self):
+        """PR の差分は merge-base から見る（base 側の変更を削除と誤認しない）。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def git(*args):
+                return subprocess.check_output(
+                    ["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                     "-c", "core.hooksPath=", *args],
+                    cwd=root,
+                ).decode().strip()
+
+            git("init")
+            (root / "shared.txt").write_text("a")
+            git("add", ".")
+            git("commit", "-m", "base")
+            base = git("rev-parse", "HEAD")
+
+            # base 側にだけ進んだコミット。
+            (root / "base-only.txt").write_text("x")
+            git("add", ".")
+            git("commit", "-m", "base only")
+            moved_base = git("rev-parse", "HEAD")
+
+            # base から分岐した feature。
+            git("checkout", "-b", "feature", base)
+            (root / "feature-only.txt").write_text("y")
+            git("add", ".")
+            git("commit", "-m", "feature")
+
+            with patch("scripts.ci.paths.ROOT", root):
+                self.assertEqual(
+                    changed_paths(moved_base, include_worktree=False), ["feature-only.txt"]
+                )
+
+    def test_changed_paths_includes_uncommitted_and_untracked(self):
+        """未コミットの変更と新規ファイルを PR の差分に足す。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def git(*args):
+                return subprocess.check_output(
+                    ["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                     "-c", "core.hooksPath=", *args],
+                    cwd=root,
+                ).decode().strip()
+
+            git("init")
+            (root / "tracked.txt").write_text("a")
+            git("add", ".")
+            git("commit", "-m", "base")
+
+            (root / "tracked.txt").write_text("b")
+            (root / "untracked.txt").write_text("new")
+
+            with patch("scripts.ci.paths.ROOT", root):
+                self.assertEqual(worktree_paths(), ["tracked.txt", "untracked.txt"])
+                self.assertEqual(
+                    changed_paths("HEAD", include_worktree=False), []
+                )
+                self.assertEqual(
+                    changed_paths("HEAD"), ["tracked.txt", "untracked.txt"]
+                )
 
 
 if __name__ == "__main__":

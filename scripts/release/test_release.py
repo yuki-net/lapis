@@ -1207,10 +1207,13 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.workflow.count("persist-credentials: false"), 2)
 
     def test_existing_workflows_still_gate_on_repository_checks(self):
-        ci = (
-            Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
-        ).read_text(encoding="utf-8")
-        self.assertIn("python scripts/check.py repository architecture", ci)
+        # repository 検証の定義は route 定義（scripts/ci/routes/repository.py）
+        # 側にあり、CI は run.py に委譲していることを確認する。
+        root = Path(__file__).resolve().parents[2]
+        repository = (root / "scripts" / "ci" / "routes" / "repository.py").read_text(encoding="utf-8")
+        ci = (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        self.assertIn('"scripts/check.py", "repository", "architecture"', repository)
+        self.assertIn("python -m scripts.ci.run", ci)
 
 
 class SigningKeyTests(TempDirTest):
