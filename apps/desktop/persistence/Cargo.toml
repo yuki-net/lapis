@@ -6,7 +6,7 @@ description.workspace = true
 license.workspace = true
 
 [dependencies]
-desktop-client = { path = "../../state" }
+desktop-client = { path = "../../../clients/state" }
 editor-core = { path = "../../../contracts/domain/editor-core" }
 settings = { path = "../../../contracts/domain/settings" }
 workspace = { path = "../../../contracts/domain/workspace" }

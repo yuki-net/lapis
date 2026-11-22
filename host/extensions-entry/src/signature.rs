@@ -1,6 +1,6 @@
 //! `.lapis` package の manifest 署名検証。
 //!
-//! リリース署名（`scripts/release/manifest.py`、`clients/desktop/launcher`）と
+//! リリース署名（`scripts/release/manifest.py`、`apps/launcher`）と
 //! 同じ規則を使う。Ed25519、`release/trusted-keys.json` の信頼済み公開鍵、
 //! `signature` を除いた JSON を key 順に並べて区切りを詰めた UTF-8 bytes への署名。
 //! 拡張 package は別の manifest schema だが、鍵と正規化・検証の規則は同じである。
@@ -234,7 +234,7 @@ mod tests {
     #[test]
     fn canonical_bytes_match_the_python_generated_fixture() {
         let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../clients/desktop/launcher/tests/fixtures");
+            .join("../../apps/launcher/tests/fixtures");
         let raw = std::fs::read(fixtures.join("distribution/manifest.json"))
             .expect("launcher の署名済み manifest");
         let mut value: Value = serde_json::from_slice(&raw).expect("manifest json");

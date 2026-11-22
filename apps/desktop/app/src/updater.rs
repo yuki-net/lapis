@@ -439,14 +439,14 @@ mod tests {
 
     fn verifier() -> Verifier {
         let registry = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../launcher/tests/fixtures/keys.json");
+            .join("../../launcher/tests/fixtures/keys.json");
         let raw = std::fs::read(registry).expect("fixture registry");
         Verifier::from_registry(&raw).expect("registry")
     }
 
     fn distribution(name: &str) -> PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../launcher/tests/fixtures")
+            .join("../../launcher/tests/fixtures")
             .join(name)
     }
 

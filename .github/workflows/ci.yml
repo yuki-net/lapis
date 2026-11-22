@@ -143,7 +143,9 @@ jobs:
   host_windows:
     name: Host / Windows
     runs-on: windows-2022
-    timeout-minutes: 50
+    # crate 移設で Cargo の path fingerprint が無効になり、初回は cold build に
+    # なることがある。通常は 10 分台で終わるが、再ビルドを含む回を取りこぼさない。
+    timeout-minutes: 70
     needs: path_filter
     if: >-
       needs.path_filter.outputs.jobs != '[]' &&
@@ -263,7 +265,7 @@ jobs:
   desktop_windows:
     name: Desktop / Windows
     runs-on: windows-2022
-    timeout-minutes: 60
+    timeout-minutes: 75
     needs: path_filter
     if: >-
       needs.path_filter.outputs.jobs != '[]' &&
@@ -297,14 +299,21 @@ jobs:
       - name: Check formatting
         run: python scripts/check.py desktop format
 
-      - name: Test Desktop
+      # crate 移設で Cargo の path fingerprint が無効になり、初回は cold build に
+      # なることがある。テスト本体の 20 分上限とビルドを分け、ビルドだけ余裕を持たせる。
+      - name: Build Desktop test prerequisites
         shell: pwsh
-        timeout-minutes: 20
+        timeout-minutes: 35
         run: |
           cargo build --locked -p extension-runtime --bin lapis-extension-host
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --locked -p lapis-terminal-native
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Test Desktop
+        shell: pwsh
+        timeout-minutes: 20
+        run: |
           $process = Start-Process python -ArgumentList @('scripts/check.py', 'desktop', 'test') -NoNewWindow -PassThru
           if (-not $process.WaitForExit(1200000)) {
             & taskkill /F /T /PID $process.Id 2>$null

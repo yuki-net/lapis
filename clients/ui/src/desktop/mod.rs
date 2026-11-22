@@ -1,10 +1,6 @@
-//! Desktop（ネイティブ window）向けの shell 部品と起動処理。
+//! Shell / Root が共有する window 部品。ネイティブ起動 entry は `apps/desktop/app` が持つ。
 
-#[cfg(not(target_family = "wasm"))]
-mod window;
 pub(crate) mod window_host;
 mod window_options;
 
-#[cfg(not(target_family = "wasm"))]
-pub use window::run;
 pub(crate) use window_options::{window_options, window_options_with_title};

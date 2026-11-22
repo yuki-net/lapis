@@ -38,7 +38,9 @@ pub(crate) mod time {
 
 pub use app::{ConnectionIdentity, DesktopServices, InitialView, UpdaterHandle, WorkspaceOption};
 #[cfg(not(target_family = "wasm"))]
-pub use desktop::run;
+pub use app::{
+    desktop_application, init_tracing, initialize, on_last_window_closed, open_desktop_window,
+};
 #[cfg(target_family = "wasm")]
 pub use entry::web_fonts;
 pub use entry::{application_assets, boot};

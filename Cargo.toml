@@ -1,6 +1,7 @@
 [workspace]
 members = [
-    "clients/desktop/*",
+    "apps/desktop/*",
+    "apps/launcher",
     "clients/state",
     "clients/ui",
     "clients/ui/wasm-smoke",

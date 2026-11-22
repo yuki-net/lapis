@@ -35,8 +35,10 @@ def strip_rust_comments(text):
 
 def check_desktop_layout(root=ROOT):
     errors = []
-    source = root / "clients"
-    for path in source.rglob("*.rs"):
+    client_root = root / "clients"
+    # Desktop の entry は apps/ 側にもあるため、Layout の旧識別子は両方から検査する。
+    sources = [client_root, root / "apps"]
+    for path in (path for source in sources if source.exists() for path in source.rglob("*.rs")):
         text = path.read_text(encoding="utf-8")
         identifiers = set(rust_identifiers(text))
         for name in sorted(identifiers & OLD_DESKTOP_LAYOUT):
@@ -72,7 +74,7 @@ def check_desktop_layout(root=ROOT):
             for name in ("main-panel", "left-panel", "right-panel", "bottom-panel"):
                 if re.search(rf'"{name}"', code_text):
                     errors.append(f"{path.relative_to(root)}: 旧Zone保存識別子 {name}")
-    shell_mod = source / "ui/src/shell/mod.rs"
+    shell_mod = client_root / "ui/src/shell/mod.rs"
     if shell_mod.exists():
         module_text = shell_mod.read_text(encoding="utf-8")
         for module in ("panel_layout", "zone_policy", "zone"):
@@ -125,9 +127,10 @@ def layer(manifest, root):
         ("host/app/", "host"), ("clients/ui/", "ui"),
         ("apps/web/", "web_entry"),
         ("clients/state/", "desktop_client"),
-        ("clients/desktop/persistence/", "desktop_persistence"),
-        ("clients/desktop/launcher/", "desktop_launcher"),
-        ("clients/desktop/app/", "desktop_entry"), ("clients/", "client"),
+        ("apps/desktop/persistence/", "desktop_persistence"),
+        ("apps/launcher/", "desktop_launcher"),
+        ("apps/desktop/app/", "desktop_entry"),
+        ("apps/", "client"), ("clients/", "client"),
     ]:
         if relative.startswith(prefix):
             return value
