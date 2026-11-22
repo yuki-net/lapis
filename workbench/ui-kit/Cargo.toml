@@ -1,0 +1,27 @@
+[package]
+name = "ui-kit"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+extension-ui-contract = { path = "../../protocol/types/extension-ui" }
+localization = { path = "../../protocol/types/localization" }
+serde.workspace = true
+serde_json.workspace = true
+settings = { path = "../../protocol/types/settings" }
+syntect = { version = "5.3", default-features = false, features = ["default-syntaxes", "regex-fancy"] }
+tracing.workspace = true
+web-time = "1.1"
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+gpui.workspace = true
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+gpui_preview = { package = "gpui-pre", version = "=0.3.9", default-features = false }
+gloo-timers = { version = "0.3", features = ["futures"] }
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }

@@ -31,6 +31,8 @@ settings = { path = "../../protocol/types/settings" }
 task = { path = "../../protocol/types/task" }
 terminal = { package = "terminal-contract", path = "../../extensions/terminal/contract" }
 workspace = { path = "../../protocol/types/workspace" }
+ui-kit = { path = "../../workbench/ui-kit" }
+workbench-shell = { path = "../../workbench/shell" }
 serde_json.workspace = true
 syntect = { version = "5.3", default-features = false, features = ["default-syntaxes", "regex-fancy"] }
 async-channel = { version = "2", optional = true }

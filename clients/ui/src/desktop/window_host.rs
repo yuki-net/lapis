@@ -1,10 +1,9 @@
 //! OS Window と Feature の所有を分離する。Detached は既存 worker を共有する。
 use std::collections::HashMap;
 
-pub(crate) mod chrome;
+pub(crate) use workbench_shell::chrome;
 mod close;
 pub(crate) mod drag;
-pub(crate) mod drag_preview;
 #[cfg(not(target_family = "wasm"))]
 mod native_smoke;
 #[cfg(not(target_family = "wasm"))]
@@ -194,7 +193,14 @@ impl WindowHost {
         cx: &mut Context<Self>,
     ) -> Self {
         let editor = cx.new(|cx| Editor::new_with_initial_snapshot(worker, false, cx));
-        let shell = cx.new(|cx| Shell::new(editor.clone().into(), HashMap::new(), cx));
+        let shell = cx.new(|cx| {
+            Shell::new(
+                editor.clone().into(),
+                HashMap::new(),
+                crate::features::bundled_registry(),
+                cx,
+            )
+        });
         shell.update(cx, |shell, _| {
             shell.host = host;
             shell.group = Some(group.entity_id());

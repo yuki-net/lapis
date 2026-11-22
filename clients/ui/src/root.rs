@@ -371,7 +371,14 @@ impl DesktopRoot {
             (id::VIEW_SETTINGS.into(), settings.clone().into()),
             (id::VIEW_COMMAND_SEARCH.into(), quick_search.clone().into()),
         ]);
-        let shell = cx.new(|cx| Shell::new(editor.clone().into(), views, cx));
+        let shell = cx.new(|cx| {
+            Shell::new(
+                editor.clone().into(),
+                views,
+                features::bundled_registry(),
+                cx,
+            )
+        });
         let extension_terminal = services.extension_terminal;
         let branch_picker = cx.new(|cx| features::git::BranchPicker::new(git.clone(), window, cx));
         let terminal_backend = services.terminal.backend();
@@ -393,7 +400,7 @@ impl DesktopRoot {
                 },
             });
         shell.update(cx, |shell, cx| {
-            shell.branch_picker = Some(branch_picker);
+            shell.branch_picker = Some(branch_picker.into());
             shell.set_locale(initial_locale.clone(), cx);
             if let Some(update) = update.clone() {
                 update.update(cx, |update, cx| {
@@ -2302,7 +2309,10 @@ impl DesktopRoot {
                 self.double_shift.reset();
                 let locale = self.group.read(cx).locale.clone();
                 let keymap = crate::keymap::KeymapRegistry::active(cx).clone();
-                let provider = self.shell.read(cx).command_search_provider(&keymap);
+                let provider = self
+                    .shell
+                    .read(cx)
+                    .command_search_provider(|command| keymap.shortcut_label(command));
                 if !self.universal_search_open {
                     self.universal_previous_focus = window.focused(cx);
                 }

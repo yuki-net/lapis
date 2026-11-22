@@ -1,0 +1,297 @@
+use crate::HeaderMenuSection as MenuId;
+use crate::components::IconName;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MenuAction {
+    NewFile,
+    NewFolder,
+    NewWindow,
+    ConnectHost,
+    OpenProject,
+    OpenFile,
+    Save,
+    SaveAs,
+    CloseProject,
+    CloseWindow,
+    Undo,
+    Redo,
+    Cut,
+    Copy,
+    Paste,
+    ToggleLeftPanel,
+    ToggleBottomZone,
+    ToggleRightPanel,
+    TogglePanelControls,
+    ToggleInspector,
+    Placeholder,
+}
+
+#[derive(Clone, Copy)]
+pub struct MenuItemDefinition {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub shortcut: Option<&'static str>,
+    pub action: Option<MenuAction>,
+    pub enabled: bool,
+    pub separator_before: bool,
+    pub icon: Option<IconName>,
+}
+
+impl MenuItemDefinition {
+    const fn action(
+        id: &'static str,
+        label: &'static str,
+        shortcut: Option<&'static str>,
+        action: MenuAction,
+    ) -> Self {
+        Self {
+            id,
+            label,
+            shortcut,
+            action: Some(action),
+            enabled: !matches!(action, MenuAction::Placeholder),
+            separator_before: false,
+            icon: match action {
+                MenuAction::NewFile => Some(IconName::FilePlus),
+                MenuAction::NewFolder => Some(IconName::FolderPlus),
+                MenuAction::NewWindow => Some(IconName::Square),
+                MenuAction::ConnectHost => Some(IconName::Plug),
+                MenuAction::OpenProject | MenuAction::OpenFile => Some(IconName::Files),
+                MenuAction::Save | MenuAction::SaveAs => Some(IconName::Save),
+                MenuAction::CloseProject | MenuAction::CloseWindow => Some(IconName::Close),
+                MenuAction::Undo => Some(IconName::Undo),
+                MenuAction::Redo => Some(IconName::Redo),
+                MenuAction::Cut => Some(IconName::Cut),
+                MenuAction::Copy => Some(IconName::Copy),
+                MenuAction::Paste => Some(IconName::Paste),
+                MenuAction::ToggleLeftPanel
+                | MenuAction::ToggleBottomZone
+                | MenuAction::ToggleRightPanel
+                | MenuAction::TogglePanelControls => Some(IconName::PanelLeft),
+                MenuAction::ToggleInspector => Some(IconName::Search),
+                MenuAction::Placeholder => None,
+            },
+        }
+    }
+
+    const fn disabled(id: &'static str, label: &'static str) -> Self {
+        Self {
+            id,
+            label,
+            shortcut: None,
+            action: Some(MenuAction::Placeholder),
+            enabled: false,
+            separator_before: false,
+            icon: None,
+        }
+    }
+
+    const fn with_separator_before(mut self) -> Self {
+        self.separator_before = true;
+        self
+    }
+}
+
+pub const ROOT_MENUS: &[(MenuId, &str)] = &[
+    (MenuId::File, "File"),
+    (MenuId::Edit, "Edit"),
+    (MenuId::View, "View"),
+    (MenuId::Window, "Window"),
+    (MenuId::Help, "Help"),
+];
+
+const FILE_MENU: &[MenuItemDefinition] = &[
+    MenuItemDefinition::action("save", "Save", Some("Ctrl+S"), MenuAction::Save),
+    MenuItemDefinition::action(
+        "save-as",
+        "Save As…",
+        Some("Ctrl+Shift+S"),
+        MenuAction::SaveAs,
+    ),
+    MenuItemDefinition::action(
+        "new-file",
+        "New File...",
+        Some("Ctrl+N"),
+        MenuAction::NewFile,
+    )
+    .with_separator_before(),
+    MenuItemDefinition::action("new-folder", "New Folder...", None, MenuAction::NewFolder),
+    MenuItemDefinition::action(
+        "new-window",
+        "New Window",
+        Some("Ctrl+Shift+N"),
+        MenuAction::NewWindow,
+    ),
+    MenuItemDefinition::action(
+        "open-project",
+        "Open Project...",
+        Some("Ctrl+O"),
+        MenuAction::OpenProject,
+    )
+    .with_separator_before(),
+    MenuItemDefinition::action("open-file", "Open...", None, MenuAction::OpenFile),
+    MenuItemDefinition::disabled("open-recent", "Open Recent"),
+    MenuItemDefinition::action("connect-host", "Hostに接続…", None, MenuAction::ConnectHost)
+        .with_separator_before(),
+    MenuItemDefinition::action(
+        "close-project",
+        "Close Project",
+        None,
+        MenuAction::CloseProject,
+    )
+    .with_separator_before(),
+    MenuItemDefinition::action(
+        "close-window",
+        "Close Window",
+        Some("Ctrl+Shift+F4"),
+        MenuAction::CloseWindow,
+    ),
+];
+
+const EDIT_MENU: &[MenuItemDefinition] = &[
+    MenuItemDefinition::action("undo", "Undo", Some("Ctrl+Z"), MenuAction::Undo),
+    MenuItemDefinition::action("redo", "Redo", Some("Ctrl+Y"), MenuAction::Redo),
+    MenuItemDefinition::action("cut", "Cut", Some("Ctrl+X"), MenuAction::Cut)
+        .with_separator_before(),
+    MenuItemDefinition::action("copy", "Copy", Some("Ctrl+C"), MenuAction::Copy),
+    MenuItemDefinition::action("paste", "Paste", Some("Ctrl+V"), MenuAction::Paste),
+];
+
+const VIEW_MENU: &[MenuItemDefinition] = &[
+    MenuItemDefinition::action(
+        "left-panel",
+        "Left Panel",
+        None,
+        MenuAction::ToggleLeftPanel,
+    ),
+    MenuItemDefinition::action(
+        "bottom-panel",
+        "Bottom Panel",
+        Some("Ctrl+J"),
+        MenuAction::ToggleBottomZone,
+    ),
+    MenuItemDefinition::action(
+        "right-panel",
+        "Right Panel",
+        None,
+        MenuAction::ToggleRightPanel,
+    ),
+    MenuItemDefinition::action(
+        "panel-controls",
+        "Panel Controls",
+        None,
+        MenuAction::TogglePanelControls,
+    ),
+    MenuItemDefinition::disabled("command-palette", "Command Palette").with_separator_before(),
+];
+
+const WINDOW_MENU: &[MenuItemDefinition] = &[
+    MenuItemDefinition::action(
+        "new-window",
+        "New Window",
+        Some("Ctrl+Shift+N"),
+        MenuAction::NewWindow,
+    ),
+    MenuItemDefinition::action(
+        "close-window",
+        "Close Window",
+        Some("Ctrl+Shift+F4"),
+        MenuAction::CloseWindow,
+    ),
+    MenuItemDefinition::disabled("switch-window", "Switch Window").with_separator_before(),
+];
+
+const HELP_MENU: &[MenuItemDefinition] = &[
+    MenuItemDefinition::action(
+        "toggle-devtool",
+        "Toggle Lapis DevTool",
+        Some("F12"),
+        MenuAction::ToggleInspector,
+    ),
+    MenuItemDefinition::disabled("keyboard-shortcuts", "Keyboard Shortcuts")
+        .with_separator_before(),
+    MenuItemDefinition::disabled("documentation", "Documentation"),
+    MenuItemDefinition::disabled("about", "About Lapis"),
+];
+
+pub fn items(menu: MenuId) -> &'static [MenuItemDefinition] {
+    match menu {
+        MenuId::File => FILE_MENU,
+        MenuId::Edit => EDIT_MENU,
+        MenuId::View => VIEW_MENU,
+        MenuId::Window => WINDOW_MENU,
+        MenuId::Help => HELP_MENU,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn header_menu_has_five_root_sections() {
+        assert_eq!(ROOT_MENUS.len(), 5);
+        assert_eq!(ROOT_MENUS[0].0, MenuId::File);
+        assert_eq!(ROOT_MENUS[1].0, MenuId::Edit);
+        assert_eq!(ROOT_MENUS[2].0, MenuId::View);
+        assert_eq!(ROOT_MENUS[3].0, MenuId::Window);
+        assert_eq!(ROOT_MENUS[4].0, MenuId::Help);
+    }
+
+    #[test]
+    fn file_menu_exposes_workspace_and_window_actions() {
+        assert!(
+            FILE_MENU
+                .iter()
+                .any(|item| { item.action == Some(MenuAction::NewFile) && item.enabled })
+        );
+        assert!(
+            FILE_MENU
+                .iter()
+                .any(|item| { item.action == Some(MenuAction::NewFolder) && item.enabled })
+        );
+        assert!(
+            FILE_MENU
+                .iter()
+                .any(|item| { item.action == Some(MenuAction::NewWindow) && item.enabled })
+        );
+        assert!(
+            FILE_MENU
+                .iter()
+                .any(|item| { item.action == Some(MenuAction::OpenProject) && item.enabled })
+        );
+        assert!(
+            FILE_MENU
+                .iter()
+                .any(|item| { item.action == Some(MenuAction::CloseProject) && item.enabled })
+        );
+        assert!(
+            FILE_MENU
+                .iter()
+                .any(|item| { item.action == Some(MenuAction::CloseWindow) && item.enabled })
+        );
+    }
+
+    #[test]
+    fn placeholder_items_are_disabled() {
+        assert!(
+            HELP_MENU
+                .iter()
+                .any(|item| item.id == "about" && !item.enabled)
+        );
+        assert!(
+            WINDOW_MENU
+                .iter()
+                .any(|item| item.id == "switch-window" && !item.enabled)
+        );
+    }
+
+    #[test]
+    fn help_menu_contains_devtool() {
+        assert!(
+            HELP_MENU
+                .iter()
+                .any(|item| item.id == "toggle-devtool" && item.enabled)
+        );
+    }
+}

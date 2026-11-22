@@ -7,7 +7,11 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 | 領域 | 所有するもの | 所有しないもの |
 | --- | --- | --- |
 | `apps/desktop/` | Desktop の起動 entry・Composition Root・表示状態の保存 | 共通 UI の Window / Panel 実装、Host 上の実行資源 |
-| `clients/` | Client の Window、Panel、Tab、focus、selection、表示 cache | Host 上の実行資源 |
+| `clients/` | Client の Feature 実装、Resource への配線、表示 cache | Host 上の実行資源、共通 Window / Panel の実装 |
+| `workbench/shell/` | Window / Panel / Tab の状態、Dock 配置、Shell の描画 | Feature の実装、Host の正規状態 |
+| `workbench/ui-kit/` | 共通 Widget、Theme / Token、通知・ローカライズの表示基盤 | Feature 固有の画面、Host の判断 |
+| `tools/devtools/` | 開発時のみ使う Inspector・診断 UI（desktop-ui から `#[path]` で読み込む） | 製品の画面構成、Host の正規状態 |
+| `tools/wasm-smoke/` | Web の端子・接続を検証する Wasm smoke クレート | 製品の画面構成、Host の正規状態 |
 | `apps/web/` | Web の Wasm entry（ページ起動、Host 接続、prototype backend）と配信ページ | Desktop と共通の UI 実装、Host の正規状態 |
 | `apps/launcher/` | staging 済み package の適用と本体の起動、および検証・staging の共通実装 | 更新モードの設定、同意の判断、アプリの実行 |
 | `protocol/types/` | Transport 非依存の値・ドメイン規則・port | GPUI、通信、外部プロセスの具体実装 |
