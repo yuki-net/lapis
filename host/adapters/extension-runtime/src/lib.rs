@@ -30,7 +30,7 @@ pub mod supervisor;
 #[allow(dead_code)]
 mod pty_bindings {
     wasmtime::component::bindgen!({
-        path: "../../../contracts/extension-api/wit/pty-v1",
+        path: "../../../protocol/extension-api/wit/pty-v1",
         world: "pty-host",
     });
 }
@@ -38,7 +38,7 @@ mod pty_bindings {
 #[allow(dead_code)]
 mod process_info_bindings {
     wasmtime::component::bindgen!({
-        path: "../../../contracts/extension-api/wit/process-info-v1",
+        path: "../../../protocol/extension-api/wit/process-info-v1",
         world: "process-info-host",
     });
 }

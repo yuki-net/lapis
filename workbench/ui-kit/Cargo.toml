@@ -7,11 +7,11 @@ license.workspace = true
 
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-extension-ui-contract = { path = "../../contracts/domain/extension-ui" }
-localization = { path = "../../contracts/domain/localization" }
+extension-ui-contract = { path = "../../protocol/types/extension-ui" }
+localization = { path = "../../protocol/types/localization" }
 serde.workspace = true
 serde_json.workspace = true
-settings = { path = "../../contracts/domain/settings" }
+settings = { path = "../../protocol/types/settings" }
 syntect = { version = "5.3", default-features = false, features = ["default-syntaxes", "regex-fancy"] }
 tracing.workspace = true
 web-time = "1.1"

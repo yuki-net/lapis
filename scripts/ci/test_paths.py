@@ -97,7 +97,7 @@ class TestPathRouting(unittest.TestCase):
             {"repository", "rust_core", "host", "desktop", "web"},
         )
         self.assertEqual(
-            jobs_for_paths(["contracts/extension-api/native/src/lib.rs"]),
+            jobs_for_paths(["protocol/extension-api/native/src/lib.rs"]),
             {"rust_core", "host", "desktop"},
         )
         for path in (
@@ -144,11 +144,11 @@ class TestPathRouting(unittest.TestCase):
         for path in (
             "clients/ui/src/lib.rs",
             "clients/state/src/lib.rs",
-            "clients/transport/src/lib.rs",
-            "contracts/protocol/src/lib.rs",
-            "contracts/transport/wire/src/lib.rs",
-            "contracts/domain/document/src/lib.rs",
-            "contracts/domain/extension-ui/src/lib.rs",
+            "protocol/wire-client/src/lib.rs",
+            "protocol/wire/client-api/src/lib.rs",
+            "protocol/wire/dto/src/lib.rs",
+            "protocol/types/document/src/lib.rs",
+            "protocol/types/extension-ui/src/lib.rs",
         ):
             self.assertIn("web", jobs_for_paths([path]), path)
 
@@ -178,9 +178,28 @@ class TestPathRouting(unittest.TestCase):
 
     def test_protocol_and_client_transport_keep_cross_surface_ci(self):
         expected = {"rust_core", "host", "desktop", "web"}
-        self.assertEqual(jobs_for_paths(["contracts/protocol/src/lib.rs"]), expected)
-        self.assertEqual(jobs_for_paths(["clients/transport/src/lib.rs"]), expected)
-        self.assertEqual(jobs_for_paths(["contracts/transport/wire/src/lib.rs"]), expected)
+        self.assertEqual(jobs_for_paths(["protocol/wire/client-api/src/lib.rs"]), expected)
+        self.assertEqual(jobs_for_paths(["protocol/wire-client/src/lib.rs"]), expected)
+        self.assertEqual(jobs_for_paths(["protocol/wire/dto/src/lib.rs"]), expected)
+
+    def test_legacy_contract_paths_stay_in_the_same_surfaces(self):
+        """移設前の path は削除差分として現れるため、全 job を起こさない。"""
+        expected = {"rust_core", "host", "desktop", "web"}
+        for path in (
+            "contracts/protocol/src/lib.rs",
+            "contracts/transport/wire/src/lib.rs",
+            "contracts/domain/document/src/lib.rs",
+            "clients/transport/src/lib.rs",
+        ):
+            self.assertEqual(jobs_for_paths([path]), expected, path)
+        self.assertEqual(
+            jobs_for_paths(["contracts/extension-api/native/src/lib.rs"]),
+            {"rust_core", "host", "desktop"},
+        )
+
+    def test_protocol_readmes_run_only_repository(self):
+        for path in ("protocol/README.md", "protocol/extension-api/README.md"):
+            self.assertEqual(jobs_for_paths([path]), {"repository"}, path)
 
     def test_backend_transport_runs_rust_surfaces(self):
         expected = {"rust_core", "host", "desktop"}
@@ -191,7 +210,7 @@ class TestPathRouting(unittest.TestCase):
         self.assertEqual(jobs_for_paths(["host/transport/web/src/main.rs"]), expected)
 
     def test_rust_core_path_runs_rust_core(self):
-        jobs = jobs_for_paths(["contracts/domain/workspace/src/lib.rs"])
+        jobs = jobs_for_paths(["protocol/types/workspace/src/lib.rs"])
         self.assertIn("rust_core", jobs)
 
     def test_mobile_path_runs_mobile(self):

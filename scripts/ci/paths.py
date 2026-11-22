@@ -64,11 +64,18 @@ PATH_RULES = [
     # 含む）。未分類のままにすると全 job が走るため、Host の面へ割り当てる。
     (["host/"], {"rust_core", "host", "desktop"}),
 
-    # Contracts / Client transport。
+    # Protocol / Client transport。
+    # 領域の README はコード変更ではないため repository だけで検証する。
+    (["protocol/README.md", "protocol/extension-api/README.md"], {"repository"}),
+    (["protocol/extension-api/native/"], {"rust_core", "host", "desktop"}),
+    (["protocol/extension-api/"], {"rust_core", "host", "desktop", "web"}),
+    (["protocol/types/"], {"rust_core", "host", "desktop", "web"}),
+    (["protocol/wire/client-api/"], {"rust_core", "host", "desktop", "web"}),
+    (["protocol/wire/dto/"], {"rust_core", "host", "desktop", "web"}),
+    (["protocol/wire-client/"], {"rust_core", "host", "desktop", "web"}),
+    # 移設前の path は削除差分として現れるため、全 route を起こさず元の面へ割り当てる。
     (["contracts/extension-api/native/"], {"rust_core", "host", "desktop"}),
-    (["contracts/domain/"], {"rust_core", "host", "desktop", "web"}),
-    (["contracts/protocol/"], {"rust_core", "host", "desktop", "web"}),
-    (["contracts/transport/wire/"], {"rust_core", "host", "desktop", "web"}),
+    (["contracts/"], {"rust_core", "host", "desktop", "web"}),
     (["clients/transport/"], {"rust_core", "host", "desktop", "web"}),
 
     # Extensions。

@@ -7,13 +7,13 @@ license.workspace = true
 
 [dependencies]
 desktop-client = { path = "../../clients/state" }
-editor-core = { path = "../../contracts/domain/editor-core" }
-extension-ui-contract = { path = "../../contracts/domain/extension-ui" }
+editor-core = { path = "../../protocol/types/editor-core" }
+extension-ui-contract = { path = "../../protocol/types/extension-ui" }
 getrandom.workspace = true
-language = { path = "../../contracts/domain/language" }
-localization = { path = "../../contracts/domain/localization" }
+language = { path = "../../protocol/types/language" }
+localization = { path = "../../protocol/types/localization" }
 tracing.workspace = true
-workspace = { path = "../../contracts/domain/workspace" }
+workspace = { path = "../../protocol/types/workspace" }
 ui-kit = { path = "../ui-kit" }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
@@ -28,7 +28,7 @@ raw-window-handle = "0.6"
 windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_HiDpi"] }
 
 [dev-dependencies]
-document = { path = "../../contracts/domain/document" }
+document = { path = "../../protocol/types/document" }
 gpui = { workspace = true, features = ["test-support"] }
 serde_json.workspace = true
-settings = { path = "../../contracts/domain/settings" }
+settings = { path = "../../protocol/types/settings" }

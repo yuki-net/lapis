@@ -1,7 +1,7 @@
 # 拡張ホスト実行
 
 Wasm component のライフサイクルを隔離した拡張ホストプロセスで実行するための基盤。
-`contracts/extension-api/wit/v1` の `activate` と `deactivate` を使う。
+`protocol/extension-api/wit/v1` の `activate` と `deactivate` を使う。
 Host は署名と互換性を検証した component を別プロセスに渡し、終了時は一度だけ再起動する。
 JSON 行の双方向 call/reply は呼出 ID と現在実行中の拡張 ID を照合し、Host の参照を渡さない。
 Windows Host は承認された拡張に PTY v1 を提供する。未承認の呼び出しは拒否し、

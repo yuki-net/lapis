@@ -6,4 +6,4 @@ description.workspace = true
 license.workspace = true
 
 [dependencies]
-git = { path = "../../../contracts/domain/git" }
+git = { path = "../../../protocol/types/git" }

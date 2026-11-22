@@ -20,7 +20,7 @@ class ArchitectureTests(unittest.TestCase):
             "workspace_members": ["host", "client-api", "terminal-contract"],
             "packages": [
                 package("host", "host/app", ["client-api"]),
-                package("client-api", "contracts/protocol", ["terminal-contract"]),
+                package("client-api", "protocol/wire/client-api", ["terminal-contract"]),
                 package("terminal-contract", "extensions/terminal/contract"),
             ],
         }
@@ -120,7 +120,7 @@ class ArchitectureTests(unittest.TestCase):
     def test_duplicate_type_names_across_crates_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            first = root / "contracts/domain/example/src/lib.rs"
+            first = root / "protocol/types/example/src/lib.rs"
             second = root / "host/runtime/src/lib.rs"
             for path, name in ((first, "example"), (second, "runtime")):
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -180,7 +180,7 @@ class ArchitectureTests(unittest.TestCase):
 
     def setUp(self):
         self.metadata = {"workspace_members": ["model", "runtime", "ui"], "packages": [
-            package("model", "contracts/domain/example"),
+            package("model", "protocol/types/example"),
             package("runtime", "host/runtime", ["model"]),
             package("ui", "clients/ui", ["model"]),
         ]}
@@ -230,7 +230,7 @@ class ArchitectureTests(unittest.TestCase):
         self.metadata["workspace_members"].extend(["cli", "protocol"])
         self.metadata["packages"].extend([
             package("cli", "clients/cli", ["protocol"]),
-            package("protocol", "contracts/protocol"),
+            package("protocol", "protocol/wire/client-api"),
         ])
         self.assertEqual(check(self.metadata, {}), [])
 

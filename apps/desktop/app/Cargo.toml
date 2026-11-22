@@ -10,7 +10,7 @@ hot-reload = ["desktop-ui/hot-reload"]
 
 [dependencies]
 host = { path = "../../../host/app" }
-client-api = { path = "../../../contracts/protocol" }
+client-api = { path = "../../../protocol/wire/client-api" }
 zeroize.workspace = true
 desktop-client = { path = "../../../clients/state" }
 desktop-ui = { path = "../../../clients/ui" }
@@ -19,25 +19,25 @@ futures-channel = "0.3"
 lapis-launcher = { path = "../../launcher" }
 platform = { path = "../../../host/adapters/local" }
 local-process = { path = "../../../host/adapters/process" }
-process = { path = "../../../contracts/domain/process" }
+process = { path = "../../../protocol/types/process" }
 persistence = { path = "../persistence" }
 remote = { path = "../../../host/transport/remote" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
-settings = { path = "../../../contracts/domain/settings" }
-task = { path = "../../../contracts/domain/task" }
+settings = { path = "../../../protocol/types/settings" }
+task = { path = "../../../protocol/types/task" }
 tempfile.workspace = true
 getrandom.workspace = true
 rfd.workspace = true
 sysinfo.workspace = true
-wire = { path = "../../../contracts/transport/wire" }
+wire = { path = "../../../protocol/wire/dto" }
 
 [dev-dependencies]
 base64 = "0.22"
 ed25519-dalek = "3"
 serde_json.workspace = true
-editor-core = { path = "../../../contracts/domain/editor-core" }
-workbench = { path = "../../../contracts/domain/workbench" }
-workspace = { path = "../../../contracts/domain/workspace" }
+editor-core = { path = "../../../protocol/types/editor-core" }
+workbench = { path = "../../../protocol/types/workbench" }
+workspace = { path = "../../../protocol/types/workspace" }
 tempfile.workspace = true
 
 [target.'cfg(not(windows))'.dev-dependencies]

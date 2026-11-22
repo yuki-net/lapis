@@ -9,7 +9,7 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-client-api = { path = "../../contracts/protocol" }
+client-api = { path = "../../protocol/wire/client-api" }
 desktop-client = { path = "../../clients/state" }
 terminal = { package = "terminal-contract", path = "../../extensions/terminal/contract" }
 gloo-timers = { version = "0.3", features = ["futures"] }
