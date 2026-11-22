@@ -12,9 +12,9 @@ export default defineConfig({
       ],
       customCss: ['./src/styles/custom.css'],
       components: {
-        Header: './src/components/Header.astro',
         Sidebar: './src/components/Sidebar.astro',
         Pagination: './src/components/Pagination.astro',
+        PageTitle: './src/components/PageTitle.astro',
       },
       sidebar: [
         {

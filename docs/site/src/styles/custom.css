@@ -3,48 +3,31 @@
  * コンポーネントを埋め込まず、表示の調整は CSS と設定側で行う。
  */
 
-/* ---- アクセント色（ライト / ダーク） ---- */
-:root {
-  --sl-color-accent-low: #122442;
-  --sl-color-accent: #92b8fc;
-  --sl-color-accent-high: #e0ecff;
-  --lapis-border: color-mix(in srgb, var(--sl-color-accent) 24%, transparent);
-  --lapis-surface: color-mix(in srgb, var(--sl-color-accent) 8%, transparent);
-}
-:root[data-theme='light'] {
-  --sl-color-accent-low: #eaf2ff;
-  --sl-color-accent: #2858b8;
-  --sl-color-accent-high: #163577;
-  --lapis-border: color-mix(in srgb, var(--sl-color-accent) 24%, transparent);
-  --lapis-surface: color-mix(in srgb, var(--sl-color-accent) 6%, transparent);
-}
-
-/* ---- 日本語の読みやすさ ---- */
-:root {
-  --sl-content-width: 48rem;
-  --sl-text-body: 1rem;
-  --sl-line-height: 1.9;
-}
-
 body {
   font-feature-settings: 'palt' 1;
   letter-spacing: 0.01em;
   line-height: var(--sl-line-height);
+  background-color: var(--lapis-backdrop);
+}
+
+/* ヘッダーとサイドバーを仕切る線は不要。左パネルは背景と同化させる。 */
+header.header {
+  border-bottom: none;
 }
 
 /* 見出しは字間を詰め、本文との余白を広めに取る。 */
 .sl-markdown-content :is(h1, h2, h3, h4) {
   letter-spacing: -0.01em;
-  line-height: 1.5;
+  line-height: 1.4;
   text-wrap: balance;
 }
 .sl-markdown-content h2 {
-  margin-top: 2.75rem;
+  margin-top: 2.5rem;
   padding-top: 1.25rem;
-  border-top: 1px solid var(--lapis-border);
+  border-top: 1px solid var(--lapis-hairline);
 }
 .sl-markdown-content h3 {
-  margin-top: 2rem;
+  margin-top: 1.75rem;
 }
 .sl-markdown-content p,
 .sl-markdown-content li {
@@ -67,34 +50,28 @@ body {
 
 /* ---- コードブロック ---- */
 .sl-markdown-content :not(pre) > code {
-  border: 1px solid var(--lapis-border);
-  background: var(--lapis-surface);
+  border: 1px solid var(--lapis-hairline);
+  background: var(--lapis-surface-3);
   padding: 0.12em 0.36em;
   border-radius: 0.3rem;
 }
 .sl-markdown-content pre {
-  border: 1px solid var(--lapis-border);
+  border: 1px solid var(--lapis-hairline);
   border-radius: 0.6rem;
   line-height: 1.7;
-  box-shadow: 0 1px 2px color-mix(in srgb, #000 12%, transparent);
+  background-color: var(--lapis-surface-3) !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 
-/* 導入文（先頭段落）は本文より大きく、行間を広く取る。 */
+/* 導入文（先頭段落） */
 .sl-markdown-content > p:first-child {
   font-size: 1.0625rem;
-  line-height: 1.95;
-}
-
-/* サイドバーの現在地をアクセント色で示す。 */
-.sidebar-content a[aria-current='page'],
-.sidebar-content a[aria-current='page']:hover {
-  background: var(--lapis-surface);
-  color: var(--sl-color-accent-high);
+  line-height: 1.9;
 }
 
 /* ---- トップページ（splash） ---- */
 .hero {
-  padding-block: clamp(2rem, 6vw, 4.5rem);
+  padding-block: clamp(2.5rem, 6vw, 4.5rem);
 }
 .hero h1 {
   letter-spacing: -0.02em;
@@ -115,7 +92,10 @@ body {
   border-radius: 0.5rem;
 }
 
-/* トップのリンクカード（本文 Markdown のリストを体裁する）。 */
+/* 
+ * トップのリンクカード（本文 Markdown のリストを体裁する特殊なセクションボタン）
+ * Air / Fleet 風の洗練されたカードアイランドデザイン
+ */
 .sl-markdown-content ul:has(> li > a:only-child) {
   display: grid;
   gap: 0.85rem;
@@ -124,109 +104,375 @@ body {
   list-style: none;
 }
 .sl-markdown-content ul:has(> li > a:only-child) > li {
-  border: 1px solid var(--lapis-border);
-  border-radius: 0.65rem;
-  background: var(--lapis-surface);
-  padding: 0.9rem 1.1rem;
-  transition: border-color 120ms ease, transform 120ms ease;
+  border: 1px solid var(--lapis-hairline);
+  border-radius: 0.75rem;
+  background: var(--lapis-surface-3);
+  padding: 1.1rem 1.25rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  transition: border-color 150ms ease, background-color 150ms ease, transform 150ms ease;
 }
 .sl-markdown-content ul:has(> li > a:only-child) > li:hover {
-  border-color: var(--sl-color-accent);
+  border-color: var(--lapis-hairline-strong);
+  background-color: var(--lapis-selected);
   transform: translateY(-1px);
 }
 .sl-markdown-content ul:has(> li > a:only-child) > li > a {
   display: block;
   font-weight: 600;
   text-decoration: none;
-  color: var(--sl-color-accent-high);
+  color: var(--sl-color-white);
 }
 .sl-markdown-content ul:has(> li > a:only-child) > li > a:hover {
-  text-decoration: underline;
+  text-decoration: none;
+  color: var(--sl-color-accent);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .sl-markdown-content ul:has(> li > a:only-child) > li {
-    transition: none;
-  }
-  .sl-markdown-content ul:has(> li > a:only-child) > li:hover {
-    transform: none;
+@media (min-width: 60rem) {
+  .sl-markdown-content ul:has(> li > a:only-child) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
 /* =====================================================================
- * レイアウト試作（比較用）
- * Antigravity 風の「広い 3 カラム + 落ち着いたダーク + 大きめ本文」に
- * CSS だけでどこまで寄せられるかの確認用。不要ならこのブロックごと削除する。
+ * Lapis アイランドデザイン
+ * - 浮島は「記事」の一つだけ。ヘッダー/サイドバーは背景と同化させ、
+ *   目次は島の中の静かなレールとして従属させる。
+ * - Colab / Air のサーフェス感だけ借り、パネルを対等に動かす操作感は採らない。
  * ===================================================================== */
-:root {
-  --sl-color-bg: #202124;
-  --sl-color-bg-nav: #202124;
-  --sl-color-bg-sidebar: #202124;
-  --sl-color-bg-inline-code: #2a2b2e;
-  --sl-color-hairline: #3c4043;
-  --sl-color-hairline-light: #3c4043;
-  --sl-color-gray-1: #f1f3f4;
-  --sl-color-gray-2: #e3e5e8;
-  --sl-color-gray-3: #bdc1c6;
-  --sl-color-gray-4: #9aa0a6;
-  --sl-color-gray-5: #3c4043;
-  --sl-color-gray-6: #2a2b2e;
-  --sl-color-accent-low: #1f2c46;
-  --sl-color-accent: #8ab4f8;
-  --sl-color-accent-high: #8ab4f8;
-  --lapis-border: #3c4043;
-  --lapis-surface: #2a2b2e;
 
-  --sl-nav-height: 7.5rem;
-  --sl-nav-pad-y: 0rem;
-  --sl-sidebar-width: 21rem;
+/* --- アプリのテーマ値 --- */
+:root {
+  --lapis-panel-width: 16rem;
+  --lapis-toc-width: 14.5rem;
+  --lapis-backdrop: #0c0d10;      /* 外側の深い黒背景（キャンバス） */
+  --lapis-island: #16181f;        /* 浮島（アイランド）のサーフェス色：はっきりと区別できる明度 */
+  --lapis-hairline: rgba(255, 255, 255, 0.08);        /* 繊細なヘアライン境界 */
+  --lapis-hairline-soft: rgba(255, 255, 255, 0.045);  /* 目次レールなど従属境界 */
+  --lapis-hairline-strong: rgba(255, 255, 255, 0.16); /* アイランド外枠の境界 */
+  --lapis-rail: #14161d;          /* 目次レール: 本文より一段だけ暗い */
+  --lapis-surface-3: #1d2029;     /* コードブロックやカードの背景 */
+  --lapis-selected: #252a36;      /* 選択項目の背景 */
+
+  /* 島の左端。サイドバーがあるときだけその分だけ逃がす。 */
+  --lapis-main-inset: 0px;
+
+  --sl-nav-height: 4rem;
+  --sl-color-bg: var(--lapis-backdrop);
+  --sl-color-bg-nav: var(--lapis-backdrop);
+  --sl-color-bg-sidebar: var(--lapis-backdrop);
+  --sl-color-bg-inline-code: var(--lapis-surface-3);
+  --sl-color-hairline: var(--lapis-hairline);
+  --sl-color-hairline-light: var(--lapis-hairline-strong);
+  --sl-color-hairline-shade: var(--lapis-hairline);
+  --sl-color-gray-1: #eef0f5;
+  --sl-color-gray-2: #c5c9d4;
+  --sl-color-gray-3: #9297a5;
+  --sl-color-gray-4: #646875;
+  --sl-color-gray-5: #2c303c;
+  --sl-color-gray-6: var(--lapis-surface-3);
+  --sl-color-black: var(--lapis-backdrop);
+  --sl-color-white: #f5f6fa;
+  --sl-color-accent-low: #141c33;
+  --sl-color-accent: #82a8f8;
+  --sl-color-accent-high: #9bbaf9;
+
+  --sl-sidebar-width: var(--lapis-panel-width);
   --sl-content-width: 50rem;
-  --sl-text-body: 1.0625rem;
+  --sl-text-body: 1rem;
   --sl-line-height: 1.75;
 }
 
-@media (min-width: 72rem) {
-  :root {
-    --sl-content-pad-x: 2.5rem;
-  }
+:root[data-has-sidebar] {
+  --lapis-main-inset: var(--lapis-panel-width);
+}
+
+:root[data-theme='light'] {
+  --lapis-backdrop: #f0f2f6;
+  --lapis-island: #ffffff;
+  --lapis-hairline: rgba(0, 0, 0, 0.08);
+  --lapis-hairline-soft: rgba(0, 0, 0, 0.045);
+  --lapis-hairline-strong: rgba(0, 0, 0, 0.14);
+  --lapis-rail: #f7f9fc;
+  --lapis-surface-3: #f5f7fa;
+  --lapis-selected: #e5e9f2;
+
+  --sl-color-bg: var(--lapis-backdrop);
+  --sl-color-bg-nav: var(--lapis-backdrop);
+  --sl-color-bg-sidebar: var(--lapis-backdrop);
+  --sl-color-bg-inline-code: var(--lapis-surface-3);
+  --sl-color-hairline: var(--lapis-hairline);
+  --sl-color-hairline-light: var(--lapis-hairline-strong);
+  --sl-color-hairline-shade: var(--lapis-hairline);
+  --sl-color-gray-1: #1e2129;
+  --sl-color-gray-2: #3e4452;
+  --sl-color-gray-3: #616877;
+  --sl-color-gray-4: #8b92a1;
+  --sl-color-gray-5: #d8dce6;
+  --sl-color-gray-6: var(--lapis-surface-3);
+  --sl-color-black: var(--lapis-backdrop);
+  --sl-color-white: #12141a;
+  --sl-color-accent-low: #eaf2ff;
+  --sl-color-accent: #3366cc;
+  --sl-color-accent-high: #204db3;
 }
 
 main h1#_top {
-  font-size: clamp(2.25rem, 1.6vw + 1.6rem, 2.75rem);
+  font-size: clamp(2.1rem, 1.5vw + 1.5rem, 2.6rem);
   letter-spacing: -0.02em;
+  margin-top: 0.5rem;
 }
 
-/* サイドバー: 行を広げ、現在地を面で示す */
+/* パンくず: 記事タイトルの上に置く、目立たない階層表示 */
+main .lapis-breadcrumb {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  letter-spacing: 0.02em;
+  color: var(--sl-color-gray-4);
+}
+main .lapis-breadcrumb .sep {
+  color: var(--sl-color-gray-5);
+}
+main .lapis-breadcrumb .current {
+  color: var(--sl-color-gray-3);
+}
+main .lapis-breadcrumb + h1#_top {
+  margin-top: 0.6rem;
+}
+
+/* Starlight 既定の全幅ボーダーは中央寄せカラムとずれるので外す。 */
+.main-pane .content-panel + .content-panel {
+  border-top: none !important;
+}
+
+/* --- デスクトップの骨格 --- */
+@media (min-width: 50em) {
+  /*
+   * PC はページ自体をスクロールさせない。
+   * 島と角丸を画面に固定し、本文だけが島の中でスクロールする。
+   * モバイル（< 50em）は従来どおりページ全体をスクロールする。
+   */
+  html,
+  body {
+    height: 100%;
+    overflow: hidden;
+  }
+  .page {
+    height: 100vh;
+    min-height: 0;
+  }
+
+  /* 左サイドバー: 背景と同じ色（#0c0d10）でフラット同化 */
+  .sidebar-pane {
+    inset-block-start: var(--sl-nav-height);
+    inset-block-end: 0;
+    inset-inline-start: 0;
+    width: var(--lapis-panel-width);
+    background-color: var(--lapis-backdrop);
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  /*
+   * 記事アイランド: ヘッダー下端・サイドバー右端に隙間なく接し、
+   * 左上だけ角丸にする。右端と下端は画面枠にくっつける。
+   * 高さは画面いっぱいで固定し、スクロールは中の本文に閉じ込める。
+   */
+  .main-frame {
+    margin-top: var(--sl-nav-height);
+    margin-inline-start: var(--lapis-main-inset) !important;
+    margin-inline-end: 0 !important;
+    width: auto !important;
+    padding-inline-start: 0 !important;
+    padding-inline-end: 0 !important;
+    padding-top: 0 !important;
+    background-color: var(--lapis-island) !important;
+    border-top: 1px solid var(--lapis-hairline-strong);
+    border-left: 1px solid var(--lapis-hairline-strong);
+    border-top-left-radius: 18px;
+    height: calc(100vh - var(--sl-nav-height));
+    min-height: 0;
+    /* 影を落とすと継ぎ目が隙間に見えるため、境界線と明度差だけで浮かせる。 */
+    box-shadow: none;
+    position: relative;
+    /* hidden はスクロールコンテナを作り sticky を殺すため clip を使う。 */
+    overflow: clip;
+  }
+
+  /* アイランド内部で本文と目次を横並びにする */
+  .main-frame > div {
+    display: flex !important;
+    flex-direction: row !important;
+    background-color: var(--lapis-island) !important;
+    border: none !important;
+    border-radius: 0 !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+    height: 100%;
+    min-height: 0;
+    width: 100% !important;
+  }
+
+  /* 本文エリア: ここだけがスクロールする。min-width:0 は長いコード行のはみ出し防止。 */
+  .main-pane {
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+    width: auto !important;
+    max-width: none !important;
+    order: 1 !important;
+    background-color: var(--lapis-island) !important;
+    border: none !important;
+    border-radius: 0 !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+    padding: 2.5rem 3rem 4rem !important;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: var(--sl-color-gray-5) transparent;
+  }
+
+  /* 本文は読書幅に絞って島内で中央寄せにする */
+  .main-pane .sl-container {
+    max-width: var(--sl-content-width) !important;
+    margin-inline: auto !important;
+  }
+
+  /* 右目次: 別の島にせず、記事アイランドの中の静かなレールにする */
+  @media (min-width: 72rem) {
+    .right-sidebar-container {
+      position: relative !important;
+      width: var(--lapis-toc-width) !important;
+      max-width: var(--lapis-toc-width) !important;
+      flex: 0 0 var(--lapis-toc-width) !important;
+      order: 2 !important;
+      margin: 0 0 0 auto !important;
+      border-inline-start: 1px solid var(--lapis-hairline-soft) !important;
+      background-color: var(--lapis-rail) !important;
+    }
+
+    .right-sidebar {
+      position: sticky !important;
+      /* 固定ヘッダーの下で止める。top:0 だとヘッダーの裏に潜る。 */
+      top: var(--sl-nav-height) !important;
+      right: 0 !important;
+      width: 100% !important;
+      height: calc(100vh - var(--sl-nav-height)) !important;
+      max-height: calc(100vh - var(--sl-nav-height)) !important;
+      padding-top: 2.5rem !important;
+      padding-inline: 1.25rem !important;
+      background-color: var(--lapis-rail) !important;
+      border: none !important;
+      border-inline-start: none !important;
+      overflow-y: auto !important;
+      scrollbar-width: none;
+    }
+
+    .right-sidebar-panel {
+      padding: 0 !important;
+    }
+
+    .right-sidebar .sl-container {
+      width: 100% !important;
+      max-width: none !important;
+    }
+  }
+}
+
+/* サイドバー先頭: セクション切り替え。増えても横スクロールで追従する。 */
+.lapis-section-tabs {
+  flex: 0 0 auto;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  margin-bottom: 0.25rem;
+}
+.lapis-section-tabs::-webkit-scrollbar {
+  display: none;
+}
+.lapis-section-tabs ul {
+  display: flex;
+  gap: 0.25rem;
+  width: max-content;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.lapis-section-tab {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.3rem 0.7rem;
+  border-radius: 0.375rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--sl-color-gray-3);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+.lapis-section-tab:hover {
+  color: var(--sl-color-gray-1);
+  background-color: var(--lapis-surface-3);
+}
+.lapis-section-tab.active {
+  color: var(--sl-color-white);
+  background-color: var(--lapis-selected);
+  box-shadow: inset 0 0 0 1px var(--lapis-hairline);
+}
+
+/* サイドバー: リスト項目 */
+.sidebar-content {
+  padding: 1.25rem 0.85rem;
+  gap: 0.5rem;
+}
 .sidebar-content a {
-  border-radius: 0.5rem;
-  padding-block: 0.5rem;
-  font-size: 0.95rem;
+  border-radius: 0.375rem;
+  padding: 0.4rem 0.65rem;
+  font-size: 0.8125rem;
+  color: var(--sl-color-gray-3);
+  transition: color 120ms ease, background-color 120ms ease;
+}
+.sidebar-content a:hover {
+  color: var(--sl-color-gray-1);
+  background-color: var(--lapis-surface-3);
 }
 .sidebar-content a[aria-current='page'],
 .sidebar-content a[aria-current='page']:hover {
-  background: color-mix(in srgb, var(--sl-color-accent) 16%, transparent);
-  color: #d3e3fd;
+  background-color: var(--lapis-selected);
+  color: var(--sl-color-white);
+  font-weight: 500;
+  box-shadow: inset 0 0 0 1px var(--lapis-hairline);
 }
 .sidebar-content .group-label > .large {
-  font-size: 0.72rem;
+  font-size: 0.6875rem;
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--sl-color-gray-3);
+  color: var(--sl-color-gray-4);
+  padding-inline: 0.65rem;
 }
 
-/* 右カラム: 「このページの内容」を読み物として立てる */
+/* 右カラム: 「このページの内容」 */
 .right-sidebar nav > h2 {
-  font-size: 1rem;
+  font-size: 0.75rem;
   font-weight: 600;
-  color: var(--sl-color-gray-1);
-  margin-block: 0.25rem 1rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--sl-color-gray-3);
+  margin-block: 0.25rem 0.75rem;
 }
 .right-sidebar nav a {
-  font-size: 0.9375rem;
+  font-size: 0.8125rem;
   color: var(--sl-color-gray-3);
-  padding-block: 0.4rem;
+  padding-block: 0.25rem;
   border-radius: 0;
+  transition: color 120ms ease;
 }
 .right-sidebar nav a:hover {
   color: var(--sl-color-gray-1);
@@ -235,11 +481,4 @@ main h1#_top {
   color: var(--sl-color-accent);
   box-shadow: inset 2px 0 0 var(--sl-color-accent);
   border-radius: 0;
-}
-
-/* トップのリンク一覧を 2 カラムのカードに */
-@media (min-width: 60rem) {
-  .sl-markdown-content ul:has(> li > a:only-child) {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }
