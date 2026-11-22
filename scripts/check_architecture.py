@@ -1,11 +1,15 @@
 """Cargo metadata に基づく内部依存の検査。"""
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+
+# 行数上限の検査で走査しないディレクトリ（生成物・外部コード）。
+FILE_LENGTH_SKIP = {"target", "vendor", "node_modules", ".git"}
 OLD_DESKTOP_LAYOUT = {
     "TabGroup", "TabGroupId", "PanelPosition", "LayoutNode", "SplitDirection",
     "DropZone", "has_variable_splits", "group_for_tab", "leaf_group_ids",
@@ -246,12 +250,87 @@ def check(metadata, exceptions, root=ROOT):
     return errors
 
 
+def read_file_length_baseline(path=None):
+    """`lints/baseline.json` から上限と既存違反を読む。"""
+    path = Path(path) if path is not None else ROOT / "lints/baseline.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    limit = data.get("limit")
+    files = data.get("files")
+    if not isinstance(limit, int) or limit <= 0:
+        raise ValueError(f"{path}: limit は正の整数で指定する")
+    if not isinstance(files, dict) or not all(
+        isinstance(name, str) and isinstance(lines, int) for name, lines in files.items()
+    ):
+        raise ValueError(f"{path}: files は path -> 行数の object で指定する")
+    return limit, files
+
+
+def file_length_errors(sizes, baseline, limit):
+    """行数の上限と baseline のラチェットを判定する。
+
+    - 上限超過の新規ファイルはエラー（baseline への記録は人間の判断）
+    - baseline より増えたらエラー
+    - baseline より減ったら、baseline を下げるまでエラー（ラチェット）
+    - 上限以下になったファイルは baseline から削除する
+    """
+    errors = []
+    for name, lines in sorted(sizes.items()):
+        recorded = baseline.get(name)
+        if lines > limit:
+            if recorded is None:
+                errors.append(
+                    f"{name}: {lines} 行は上限 {limit} 行を超える"
+                    "（分割するか、人間が lints/baseline.json に記録する）"
+                )
+            elif lines > recorded:
+                errors.append(f"{name}: {recorded} 行 -> {lines} 行に増えた（上限 {limit} 行）")
+            elif lines < recorded:
+                errors.append(
+                    f"{name}: {recorded} 行 -> {lines} 行に減った。"
+                    f"lints/baseline.json を {lines} に下げる"
+                )
+        elif recorded is not None:
+            errors.append(
+                f"{name}: 上限 {limit} 行以下になったので lints/baseline.json から削除する"
+            )
+    for name in sorted(set(baseline) - set(sizes)):
+        errors.append(f"{name}: lints/baseline.json にあるがファイルが無い")
+    return errors
+
+
+def rust_line_counts(root=ROOT):
+    """リポジトリ内の Rust ファイルの行数（生成物・vendor を除く）。"""
+    sizes = {}
+    for directory, dirnames, filenames in os.walk(root):
+        dirnames[:] = [name for name in dirnames if name not in FILE_LENGTH_SKIP]
+        for name in filenames:
+            if not name.endswith(".rs"):
+                continue
+            path = Path(directory) / name
+            text = path.read_text(encoding="utf-8")
+            sizes[path.relative_to(root).as_posix()] = len(text.splitlines())
+    return sizes
+
+
+def check_file_length(root=ROOT, baseline_path=None):
+    """`lints/baseline.json` を基準に、Rust ファイルの行数を検査する。"""
+    limit, baseline = read_file_length_baseline(
+        baseline_path if baseline_path is not None else Path(root) / "lints/baseline.json"
+    )
+    return file_length_errors(rust_line_counts(root), baseline, limit)
+
+
 def main():
     metadata = json.loads(subprocess.check_output([
         "cargo", "metadata", "--locked", "--no-deps", "--format-version", "1",
     ], cwd=ROOT))
     exceptions = json.loads((ROOT / "scripts/architecture-exceptions.json").read_text(encoding="utf-8"))
-    errors = check(metadata, exceptions) + check_desktop_layout() + check_duplicate_type_names()
+    errors = (
+        check(metadata, exceptions)
+        + check_desktop_layout()
+        + check_duplicate_type_names()
+        + check_file_length()
+    )
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1

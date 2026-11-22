@@ -113,6 +113,9 @@ PATH_RULES = [
     (["Cargo.lock"], {"repository", "rust_core", "host", "desktop", "web"}),
     ([".cargo/"], {"repository", "rust_core", "host", "desktop", "dev_commands"}),
 
+    # lint 基盤。カタログ・fixture・baseline の検査は repository が持つ。
+    (["lints/"], {"repository"}),
+
     # サイト。サイトごとに route を分け、触っていないサイトは走らせない。
     (["sites/docs/"], {"sites_docs"}),
     (["sites/"], {"sites_docs"}),
