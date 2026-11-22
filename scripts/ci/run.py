@@ -379,6 +379,10 @@ def execute(
         for step in steps:
             if step.requires and missing_prerequisites_for_step(step):
                 report.notice(f"skip {step.name} (requires {', '.join(step.requires)})")
+                # skip も「処理済み」として数える。数えないと 1/2 のまま OK と
+                # 表示され、進捗が止まって見える。
+                writer.begin(step.name)
+                writer.end(step.name, True)
                 results.append({"name": step.name, "ok": True, "skipped": True, "seconds": 0.0, "output": ""})
                 continue
             report.notice(f"run {step.name}: {' '.join(step.command)}")
