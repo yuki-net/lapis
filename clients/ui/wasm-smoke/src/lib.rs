@@ -17,7 +17,9 @@ fn failure(message: impl std::fmt::Display) -> JsValue {
 }
 
 async fn wait_for_text(session: &mut TerminalSession, expected: &str) -> Result<(), JsValue> {
-    for _ in 0..200 {
+    // CI のコールド runner では PTY とシェルの起動に時間がかかる。20 秒では
+    // 足りずに落ちたため 60 秒まで待つ（ローカルは数秒で返る）。
+    for _ in 0..600 {
         session.refresh().map_err(failure)?;
         if session
             .terminals()
