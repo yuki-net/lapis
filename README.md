@@ -7,7 +7,7 @@ Lapis は、Rust と GPUI を中心に開発している、ローカル・リモ
 - [文書の案内と分類](docs/README.md)
 - [全体の設計上の考え方](docs/ARCHITECTURE.md)
 - [変更の進め方](docs/workflow.md)
-- [利用者向けドキュメントサイト](docs/site/README.md)（別PRで導入）
+- [利用者向けドキュメントサイト](docs/site/README.md)
 - [内部仕様](docs/specs/README.md)
 
 実装済みの範囲やCIの状態は、ソースコードとGitHubのPR・Issueを確認してください。文書内の構想は、実装済みの保証ではありません。
