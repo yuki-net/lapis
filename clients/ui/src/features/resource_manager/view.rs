@@ -1,4 +1,4 @@
-﻿use crate::{components::action_button, theme};
+use crate::{components::action_button, theme};
 use gpui::{Context, Render, Window, div, prelude::*, px};
 use process::{ProcessOrigin, ProcessState};
 
@@ -64,11 +64,9 @@ impl Render for ResourceManagerFeature {
             );
         }
         if self.state.snapshot.roots.is_empty() {
-            return content.child(
-                div()
-                    .text_color(theme::colors(cx).text_secondary)
-                    .child("No managed processes. Terminal, task, and language server usage appears here while they run."),
-            );
+            return content.child(div().text_color(theme::colors(cx).text_secondary).child(
+                "No managed processes. Terminal and task usage appears here while they run.",
+            ));
         }
         content = content.children(
             rows(&self.state.snapshot)

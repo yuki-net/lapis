@@ -16,7 +16,6 @@ desktop-client = { path = "../../../clients/state" }
 document = { path = "../../../protocol/types/document" }
 editor-core = { path = "../../../protocol/types/editor-core" }
 git = { package = "git-contract", path = "../../../extensions/git/contract" }
-lsp = { path = "../../../protocol/types/lsp" }
 settings = { path = "../../../protocol/types/settings" }
 task = { path = "../../../protocol/types/task" }
 terminal = { package = "terminal-contract", path = "../../../extensions/terminal/contract" }

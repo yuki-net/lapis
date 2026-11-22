@@ -16,9 +16,7 @@ pub fn registry() -> FeatureRegistry {
         (ids::VIEW_PROJECT_TASKS, "view.projects"),
         (ids::VIEW_PREVIEW, "view.preview"),
         (ids::VIEW_ASSISTANT, "view.assistant"),
-        (ids::VIEW_PROBLEMS, "view.problems"),
         (ids::VIEW_RESOURCES, "view.resources"),
-        (ids::VIEW_OUTPUT, "view.output"),
         (ids::VIEW_COMMAND_SEARCH, "view.command-search"),
         (ids::VIEW_SETTINGS, "view.settings"),
     ];

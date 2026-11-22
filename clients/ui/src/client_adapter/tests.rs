@@ -86,7 +86,6 @@ impl Fixture {
         DocumentClient::new(
             editor,
             conversation,
-            LspSession::new(port.clone()),
             port.clone(),
             #[cfg(not(target_family = "wasm"))]
             None,
@@ -264,39 +263,6 @@ impl git::GitConnection for Fixture {
         _: &editor_core::TaskId,
     ) -> Result<git::WorktreeSnapshot, git::GitError> {
         Err(git::GitError::new(git::GitErrorKind::Io, "git unavailable"))
-    }
-}
-impl lsp::LanguageServerBackend for Fixture {
-    fn start(&self, _: &Path) -> Result<(), lsp::LspError> {
-        Ok(())
-    }
-    fn did_open(&self, _: &Path, _: &str, _: Revision) -> Result<(), lsp::LspError> {
-        Ok(())
-    }
-    fn did_change(&self, _: &Path, _: &str, _: Revision) -> Result<(), lsp::LspError> {
-        Ok(())
-    }
-    fn diagnostics(&self) -> Result<Vec<lsp::Diagnostic>, lsp::LspError> {
-        Ok(vec![])
-    }
-    fn completion(
-        &self,
-        _: &Path,
-        _: lsp::LspPosition,
-        _: Revision,
-    ) -> Result<Vec<lsp::CompletionItem>, lsp::LspError> {
-        Ok(vec![])
-    }
-    fn definition(
-        &self,
-        _: &Path,
-        _: lsp::LspPosition,
-        _: Revision,
-    ) -> Result<Option<lsp::DefinitionTarget>, lsp::LspError> {
-        Ok(None)
-    }
-    fn shutdown(&self) -> Result<(), lsp::LspError> {
-        Ok(())
     }
 }
 

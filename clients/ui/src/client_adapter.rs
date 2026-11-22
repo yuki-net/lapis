@@ -1,7 +1,7 @@
 use crate::app::SessionViewHandle;
 use desktop_client::{
     ConversationRecord, ConversationSession, ConversationViewState, DocumentTab, EditorSession,
-    LspSession, SessionViewWatch,
+    SessionViewWatch,
 };
 use document::DocumentCache;
 use editor_core::{ConversationId, DocumentId, WorkspaceId};
@@ -23,7 +23,6 @@ fn session_view_watch(handle: &SessionViewHandle) -> &SessionViewWatch {
 pub(crate) struct DocumentClient {
     pub editor: EditorSession,
     pub conversation: ConversationSession,
-    pub lsp: LspSession,
     pub edit_chain: EditChain,
     pub git: std::sync::Arc<dyn git::GitConnection>,
     pub snapshot_sequence: u64,
@@ -47,14 +46,12 @@ impl DocumentClient {
     pub(crate) fn new(
         editor: EditorSession,
         conversation: ConversationSession,
-        lsp: LspSession,
         git: std::sync::Arc<dyn git::GitConnection>,
         session_view: Option<std::sync::Arc<desktop_client::SessionViewSync>>,
     ) -> Self {
         Self {
             editor,
             conversation,
-            lsp,
             edit_chain: EditChain::default(),
             git,
             snapshot_sequence: 0,
@@ -72,14 +69,12 @@ impl DocumentClient {
     pub(crate) fn new(
         editor: EditorSession,
         conversation: ConversationSession,
-        lsp: LspSession,
         git: std::sync::Arc<dyn git::GitConnection>,
         session_view: Option<SessionViewWatch>,
     ) -> Self {
         Self {
             editor,
             conversation,
-            lsp,
             edit_chain: EditChain::default(),
             git,
             snapshot_sequence: 0,

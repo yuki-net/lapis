@@ -12,15 +12,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use desktop_client::{
-    ConversationRepository, ConversationSession, EditorSession, GitSession, LspSession,
-    ProcessSession, SettingsSession, TaskSession, TerminalSession, WorkspaceSearchSession,
+    ConversationRepository, ConversationSession, EditorSession, GitSession, ProcessSession,
+    SettingsSession, TaskSession, TerminalSession, WorkspaceSearchSession,
 };
 use host::BackendHost;
 use persistence::{
     HostConversationRepository, LocalConversationRepository, LocalUserSettingsRepository,
     LocalWorkspaceStateRepository,
 };
-use platform::{ConnectionGate, LocalLspBackend, LocalWorkspaceSearchBackend, LoopbackBackend};
+use platform::{ConnectionGate, LocalWorkspaceSearchBackend, LoopbackBackend};
 
 /// Starts the Desktop Client. Host関連のモード (--managed-host / --task-worker) は
 /// `lapis-host.exe` が担当するため、このbinaryでは処理しない。
@@ -188,15 +188,6 @@ fn main() {
     }
     let git_session = GitSession::new(host.git());
     let local_processes = local_process::LocalProcessRegistry::new(process::ProcessOrigin::Desktop);
-    let lsp_backend = LocalLspBackend::default().with_processes(local_processes.clone());
-    let lsp_session = if use_loopback {
-        LspSession::new(Arc::new(LoopbackBackend::new(
-            Arc::new(lsp_backend),
-            connection.clone(),
-        )))
-    } else {
-        LspSession::new(Arc::new(lsp_backend))
-    };
     let terminal_backend: Arc<dyn terminal::TerminalBackend> = Arc::new(
         lapis::extension_terminal::ExtensionTerminals::new(host.clone()),
     );
@@ -216,7 +207,6 @@ fn main() {
         native_window_smoke: arguments.iter().any(|value| value == "--window-host-smoke"),
         show_tasks: arguments.iter().any(|value| value == "--show-tasks"),
         show_terminal,
-        show_problems: arguments.iter().any(|value| value == "--show-problems"),
     };
     let connection_identity = host_profile
         .map(|info| desktop_ui::ConnectionIdentity {
@@ -233,7 +223,6 @@ fn main() {
     let mut desktop_services = desktop_ui::DesktopServices::new(
         task_session,
         git_session,
-        lsp_session,
         terminal_session,
         search_session,
         conversation_session,

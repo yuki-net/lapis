@@ -177,8 +177,6 @@ impl KeymapRegistry {
                     "Ctrl Shift F",
                 ),
                 KeyBindingDefinition::new(id::COMMAND_FIND_NEXT, "f3", "F3"),
-                KeyBindingDefinition::new(id::COMMAND_COMPLETE, "ctrl-space", "Ctrl Space"),
-                KeyBindingDefinition::new(id::COMMAND_GO_TO_DEFINITION, "f12", "F12"),
                 KeyBindingDefinition::new(
                     id::COMMAND_SHOW_COMMANDS,
                     "ctrl-shift-k",

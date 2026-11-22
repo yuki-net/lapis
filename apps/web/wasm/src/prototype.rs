@@ -19,9 +19,6 @@ use document::{
 };
 use editor_core::{ConversationId, DocumentId, ExecutionId, TaskId, WorkspaceId};
 use git::{GitConnection, GitDiffSnapshot, GitError, GitErrorKind, GitSnapshot, WorktreeSnapshot};
-use lsp::{
-    CompletionItem, DefinitionTarget, Diagnostic, LanguageServerBackend, LspError, LspPosition,
-};
 use settings::{SettingsDocument, SettingsError, SettingsRepository, SettingsScope};
 use task::{TaskConnection, TaskControl, TaskError, TaskSnapshot, TaskStart};
 use terminal::{TerminalBackend, TerminalError, TerminalEvent, TerminalId};
@@ -56,7 +53,7 @@ impl PrototypeBackend {
         for (name, content) in [
             (
                 "README.md",
-                "# Lapis Web\n\nDesktopと同じRust/GPUIの画面をブラウザーで動かしています。\n\n## 試せること\n\n- テキスト編集、選択、Undo/Redo\n- ファイルツリーから文書を開く、タブ切替\n- Ctrl+Shift+K: コマンドパレット\n- Ctrl+F: エディター内検索\n- Ctrl+J: 下部パネルの切替\n- Markdownプレビューとテーマ変更\n- パネルとウィンドウのリサイズ\n\n## 範囲\n\nファイルと設定はメモリー上だけにあります。ページを再読み込みすると元に戻ります。\nTerminal、Git、LSP、外部runnerはまだ接続していません。\n",
+                "# Lapis Web\n\nDesktopと同じRust/GPUIの画面をブラウザーで動かしています。\n\n## 試せること\n\n- テキスト編集、選択、Undo/Redo\n- ファイルツリーから文書を開く、タブ切替\n- Ctrl+Shift+K: コマンドパレット\n- Ctrl+F: エディター内検索\n- Ctrl+J: 下部パネルの切替\n- Markdownプレビューとテーマ変更\n- パネルとウィンドウのリサイズ\n\n## 範囲\n\nファイルと設定はメモリー上だけにあります。ページを再読み込みすると元に戻ります。\nTerminal、Git、外部runnerはまだ接続していません。\n",
             ),
             (
                 "src/main.rs",
@@ -453,40 +450,6 @@ impl GitConnection for PrototypeBackend {
     }
     fn discard_worktree(&self, _: &WorkspaceId, _: &TaskId) -> Result<WorktreeSnapshot, GitError> {
         Err(GitError::new(GitErrorKind::Io, UNAVAILABLE))
-    }
-}
-
-impl LanguageServerBackend for PrototypeBackend {
-    fn start(&self, _: &Path) -> Result<(), LspError> {
-        Err(LspError::new(UNAVAILABLE))
-    }
-    fn did_open(&self, _: &Path, _: &str, _: Revision) -> Result<(), LspError> {
-        Err(LspError::new(UNAVAILABLE))
-    }
-    fn did_change(&self, _: &Path, _: &str, _: Revision) -> Result<(), LspError> {
-        Err(LspError::new(UNAVAILABLE))
-    }
-    fn diagnostics(&self) -> Result<Vec<Diagnostic>, LspError> {
-        Ok(Vec::new())
-    }
-    fn completion(
-        &self,
-        _: &Path,
-        _: LspPosition,
-        _: Revision,
-    ) -> Result<Vec<CompletionItem>, LspError> {
-        Err(LspError::new(UNAVAILABLE))
-    }
-    fn definition(
-        &self,
-        _: &Path,
-        _: LspPosition,
-        _: Revision,
-    ) -> Result<Option<DefinitionTarget>, LspError> {
-        Ok(None)
-    }
-    fn shutdown(&self) -> Result<(), LspError> {
-        Ok(())
     }
 }
 

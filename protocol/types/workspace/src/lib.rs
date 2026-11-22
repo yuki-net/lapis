@@ -22,7 +22,6 @@ pub enum WorkspaceLocation {
 pub struct WorkspaceCapabilities {
     pub files: bool,
     pub git: bool,
-    pub lsp: bool,
     pub terminal: bool,
     pub tasks: bool,
 }
@@ -32,7 +31,6 @@ impl WorkspaceCapabilities {
         Self {
             files: true,
             git: false,
-            lsp: false,
             terminal: false,
             tasks: false,
         }

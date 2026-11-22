@@ -29,9 +29,6 @@ use document::{
 use editor_core::{DocumentId, SessionId, WorkspaceId};
 use futures_channel::{mpsc, oneshot};
 use git::{GitConnection, GitDiffSnapshot, GitError, GitErrorKind, GitSnapshot, WorktreeSnapshot};
-use lsp::{
-    CompletionItem, DefinitionTarget, Diagnostic, LanguageServerBackend, LspError, LspPosition,
-};
 use settings::{SettingsDocument, SettingsError, SettingsRepository, SettingsScope};
 use task::{TaskConnection, TaskControl, TaskError, TaskSnapshot, TaskStart};
 use workbench::ConversationViewState;
@@ -1939,39 +1936,5 @@ impl GitConnection for WebBackend {
         _: &editor_core::TaskId,
     ) -> Result<WorktreeSnapshot, GitError> {
         Err(GitError::new(GitErrorKind::Io, UNAVAILABLE))
-    }
-}
-
-impl LanguageServerBackend for WebBackend {
-    fn start(&self, _: &Path) -> Result<(), LspError> {
-        Err(LspError::new(UNAVAILABLE))
-    }
-    fn did_open(&self, _: &Path, _: &str, _: Revision) -> Result<(), LspError> {
-        Err(LspError::new(UNAVAILABLE))
-    }
-    fn did_change(&self, _: &Path, _: &str, _: Revision) -> Result<(), LspError> {
-        Err(LspError::new(UNAVAILABLE))
-    }
-    fn diagnostics(&self) -> Result<Vec<Diagnostic>, LspError> {
-        Ok(Vec::new())
-    }
-    fn completion(
-        &self,
-        _: &Path,
-        _: LspPosition,
-        _: Revision,
-    ) -> Result<Vec<CompletionItem>, LspError> {
-        Err(LspError::new(UNAVAILABLE))
-    }
-    fn definition(
-        &self,
-        _: &Path,
-        _: LspPosition,
-        _: Revision,
-    ) -> Result<Option<DefinitionTarget>, LspError> {
-        Ok(None)
-    }
-    fn shutdown(&self) -> Result<(), LspError> {
-        Ok(())
     }
 }

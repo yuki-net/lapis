@@ -43,8 +43,6 @@ pub enum UiCommand {
     Find,
     FindNext,
     FindWorkspace,
-    Complete,
-    GoToDefinition,
     Quit,
     Cut,
     Copy,

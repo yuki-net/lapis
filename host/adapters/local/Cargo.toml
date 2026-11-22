@@ -11,13 +11,11 @@ editor-core = { path = "../../../protocol/types/editor-core" }
 git = { package = "git-contract", path = "../../../extensions/git/contract" }
 local-credentials = { path = "../credentials" }
 local-git = { path = "../../extensions/git" }
-local-lsp = { path = "../lsp" }
 local-tasks = { path = "../tasks" }
 local-search = { path = "../search" }
 local-workbench = { path = "../workbench" }
 local-workspace = { path = "../workspace" }
 local-workspace-store = { path = "../workspace-store" }
-lsp = { path = "../../../protocol/types/lsp" }
 task-runner = { path = "../agent" }
 workspace = { path = "../../../protocol/types/workspace" }
 workbench = { path = "../../../protocol/types/workbench" }

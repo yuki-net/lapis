@@ -191,18 +191,6 @@ fn resolved_bindings(registry: &crate::keymap::KeymapRegistry) -> Result<Vec<Key
         crate::features::id::COMMAND_FIND_NEXT
     );
     command_binding!(
-        true,
-        Complete,
-        Some("Editor"),
-        crate::features::id::COMMAND_COMPLETE
-    );
-    command_binding!(
-        true,
-        GoToDefinition,
-        Some("Editor"),
-        crate::features::id::COMMAND_GO_TO_DEFINITION
-    );
-    command_binding!(
         false,
         ShowCommands,
         None,
@@ -499,7 +487,7 @@ mod keymap_tests {
     fn rebind_replaces_command_and_preserves_internal_bindings(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             bind_keys(cx);
-            assert_eq!(cx.key_bindings().borrow().bindings().len(), 57);
+            assert_eq!(cx.key_bindings().borrow().bindings().len(), 55);
             let key = |s| gpui::Keystroke::parse(s).unwrap();
             assert_eq!(cx.all_bindings_for_input(&[key("ctrl-s")]).len(), 1);
             let before = cx.all_bindings_for_input(&[key("backspace")]).len();
@@ -729,8 +717,6 @@ mod keymap_tests {
             KeyBinding::new("ctrl-shift-f", FindWorkspace, Some("!Terminal")),
             KeyBinding::new("cmd-g", FindNext, Some("Editor")),
             KeyBinding::new("f3", FindNext, Some("Editor")),
-            KeyBinding::new("ctrl-space", Complete, Some("Editor")),
-            KeyBinding::new("f12", GoToDefinition, Some("Editor")),
             KeyBinding::new("cmd-shift-k", ShowCommands, None),
             KeyBinding::new("ctrl-shift-k", ShowCommands, Some("!Terminal")),
             KeyBinding::new("backspace", SearchBackspace, Some("QuickSearch")),

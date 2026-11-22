@@ -7,7 +7,6 @@ pub(crate) mod editor;
 pub(crate) mod files;
 pub(crate) mod git;
 pub(crate) mod preview;
-pub(crate) mod problems;
 pub(crate) mod resource_manager;
 pub(crate) mod search;
 pub(crate) mod settings;
@@ -122,8 +121,6 @@ pub fn bundled_registry() -> FeatureRegistry {
         preview::descriptor(),
         tasks::descriptor(),
         terminal::descriptor(),
-        problems::descriptor(),
-        problems::output_descriptor(),
         resource_manager::descriptor(),
         editor::rust_descriptor(),
         preview::markdown_descriptor(),
@@ -220,7 +217,6 @@ mod tests {
             id::VIEW_GIT,
             id::VIEW_CHANGES,
             id::VIEW_ASSISTANT,
-            id::VIEW_PROBLEMS,
             id::VIEW_RESOURCES,
             id::VIEW_SEARCH,
             id::VIEW_PROJECT_TASKS,
@@ -293,8 +289,6 @@ mod tests {
             id::VIEW_CHANGES,
             id::VIEW_PROJECT_TASKS,
             id::VIEW_PREVIEW,
-            id::VIEW_PROBLEMS,
-            id::VIEW_OUTPUT,
             id::VIEW_RESOURCES,
         ] {
             assert_eq!(

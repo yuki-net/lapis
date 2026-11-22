@@ -2207,7 +2207,6 @@ dependencies = [
  "git-contract",
  "gloo-timers",
  "localization",
- "lsp",
  "process",
  "project",
  "serde",
@@ -2251,7 +2250,6 @@ dependencies = [
  "gpui-pre-web",
  "language",
  "localization",
- "lsp",
  "process",
  "raw-window-handle",
  "serde",
@@ -5366,18 +5364,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "local-lsp"
-version = "0.1.0"
-dependencies = [
- "document",
- "futures-channel",
- "lsp",
- "process",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
 name = "local-process"
 version = "0.1.0"
 dependencies = [
@@ -5513,16 +5499,6 @@ name = "lru-slab"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
-
-[[package]]
-name = "lsp"
-version = "0.1.0"
-dependencies = [
- "document",
- "futures-channel",
- "serde",
- "serde_json",
-]
 
 [[package]]
 name = "lyon"
@@ -6820,13 +6796,11 @@ dependencies = [
  "git-contract",
  "local-credentials",
  "local-git",
- "local-lsp",
  "local-search",
  "local-tasks",
  "local-workbench",
  "local-workspace",
  "local-workspace-store",
- "lsp",
  "task-runner",
  "tempfile",
  "workbench",
@@ -10729,7 +10703,6 @@ dependencies = [
  "gpui-pre-platform",
  "gpui-pre-web",
  "js-sys",
- "lsp",
  "serde",
  "serde_json",
  "settings",

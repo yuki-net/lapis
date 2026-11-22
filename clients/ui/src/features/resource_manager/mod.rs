@@ -164,7 +164,6 @@ pub(crate) fn kind_label(kind: ProcessKind) -> &'static str {
         ProcessKind::Desktop => "Desktop",
         ProcessKind::Terminal => "Terminal",
         ProcessKind::Agent => "Agent",
-        ProcessKind::LanguageServer => "LSP",
         ProcessKind::TaskRun => "Task Run",
         ProcessKind::Build => "Build",
         ProcessKind::Git => "Git",
