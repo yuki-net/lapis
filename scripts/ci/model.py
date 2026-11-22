@@ -63,6 +63,8 @@ class Route:
     runs_on: tuple[str, ...]
     timeout_minutes: int
     steps: tuple[Step, ...]
+    # `--prefer-os` の対象外にする（lint のように全 OS で見たい route）。
+    always_all_os: bool = False
     # runner の OS ではなく検証対象を job 名に出したいときのラベル。
     # 例: Mobile は Linux runner で Android を検証するので "Android"。
     # 複数 OS で走る route は job 名の重複を避けるため OS を優先する。

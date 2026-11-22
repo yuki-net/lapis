@@ -38,16 +38,15 @@ class TestPathRouting(unittest.TestCase):
         """path ルール側の job 名が jobs.py の route key と一致する。"""
         self.assertEqual(ALL_JOBS, set(ROUTES))
 
-    def test_format_steps_install_rustfmt(self):
-        """`check.py <route> format` を実行する route は rustfmt を導入する。"""
+    def test_format_is_centralized_in_one_route(self):
+        """整形チェックは 1 route に集約し、rustfmt を導入する。"""
         format_routes = [
             route
             for route in ROUTES.values()
-            if any(any("format" in part for part in step.command) for step in route.steps)
+            if any(any("fmt" in part for part in step.command) for step in route.steps)
         ]
-        self.assertEqual(len(format_routes), 3)
-        for route in format_routes:
-            self.assertRegex(route.rust_components, r"\brustfmt\b", route.key)
+        self.assertEqual([route.key for route in format_routes], ["format"])
+        self.assertRegex(ROUTES["format"].rust_components, r"\brustfmt\b")
 
     def test_rust_core_installs_analyzer_for_platform_tests(self):
         rust_core = ROUTES["rust_core"]

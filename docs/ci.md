@@ -89,13 +89,17 @@ Rust のビルドは `Swatinem/rust-cache` に任せる。
 | route | `runs_on` | 主な検証 |
 | --- | --- | --- |
 | `repository` | linux, windows | `scripts/check.py repository architecture`（CI・拡張・開発コマンドの Python テスト、アーキテクチャ検査） |
-| `dev_commands` | windows | 開発起動コマンド・`dev-session` の整形とテスト |
-| `rust_core` | linux, windows | backend 全体の architecture / format / test / lint と外部拡張 component |
-| `host` | windows | Host の architecture / format / test / lint / build と承認済み拡張 PTY・Web 公開 |
-| `desktop` | windows | Desktop の architecture / format / test / lint / build と GPUI patch 検証 |
+| `format` | linux | 整形チェック（workspace / dev-session / terminal component）。OS 非依存なので 1 回だけ |
+| `lint` | linux, windows | clippy。Linux は backend、Windows は workspace 全体（`cfg(windows)` を検査するため全 OS） |
+| `dev_commands` | windows | 開発起動コマンド・`dev-session` のテスト |
+| `rust_core` | linux, windows | backend 全体の architecture / test と外部拡張 component |
+| `host` | windows | Host の architecture / test / build と承認済み拡張 PTY・Web 公開 |
+| `desktop` | windows | Desktop の architecture / test / build と GPUI patch 検証 |
 | `mobile` | linux, windows | KMP のユニットテストと Android ビルド（Linux では `./gradlew`、Windows では `gradlew.bat`） |
 | `web` | linux, windows | Web のビルドと接続処理テスト（`{npm}` が OS の実行ファイル名になる） |
-| `sites_docs` | linux | 利用者向けドキュメントサイト（`sites/docs`）のビルド |
+| `sites_docs` | linux | 利用者向けドキュメントサイト（`sites/docs`）のビルド。job 名は `Site Docs` |
+
+`format` と `lint` は path 規則ではなく、**Rust を含む route が選ばれたら自動で足す**（`plan.py`）。整形・静的検査は全体に掛けるものなので、領域ごとに重複させない。
 
 ## サイト（sites/）
 

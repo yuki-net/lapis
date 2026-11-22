@@ -85,7 +85,6 @@ ROUTE = Route(
     cache=True,
     steps=(
         Step("Check architecture", py("scripts/check.py", "host", "architecture")),
-        Step("Check formatting", py("scripts/check.py", "host", "format")),
         Step("Test Host", py("scripts/check.py", "host", "test"), timeout_minutes=20),
         *PTY_STEPS,
         Step("Build host and web-bridge bins", ["cargo", "build", "--locked", "-p", "host", "-p", "web-bridge", "--bins"]),
@@ -102,7 +101,6 @@ ROUTE = Route(
              "managed_host_owns_web_publication_and_stops_it_on_exit", "--", "--ignored"],
             env={"LAPIS_TEST_WEB_BRIDGE": "{root}/target/debug/lapis-web-bridge{exe}"},
         ),
-        Step("Lint Host", py("scripts/check.py", "host", "lint")),
         Step("Build Host", py("scripts/check.py", "host", "build")),
     ),
 )
