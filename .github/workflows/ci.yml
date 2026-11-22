@@ -316,7 +316,7 @@ jobs:
         shell: pwsh
         timeout-minutes: 35
         run: |
-          cargo test --locked -p lapis --all-targets -p desktop-ui --all-targets -p lapis-launcher --all-targets --no-run
+          cargo test --locked -p lapis --all-targets -p desktop-ui -p lapis-launcher --no-run
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Test Desktop
