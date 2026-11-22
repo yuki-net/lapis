@@ -9,6 +9,6 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-extension-native-api = { path = "../../../contracts/extension-api/native" }
+extension-native-api = { path = "../../../protocol/extension-api/native" }
 serde_json = "1"
 terminal-logic = { path = "../logic" }

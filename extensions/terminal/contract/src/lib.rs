@@ -2,7 +2,7 @@
 //! および PTY 実装が満たす `TerminalBackend` port の正本。
 //!
 //! Terminal の型・port はこの crate だけが定義する。参照側は crate 名 `terminal`
-//! （package `terminal-contract`）で依存し、`contracts/domain` へ正本を戻さない。
+//! （package `terminal-contract`）で依存し、`protocol/types` へ正本を戻さない。
 
 use std::{collections::BTreeMap, fmt, path::PathBuf};
 

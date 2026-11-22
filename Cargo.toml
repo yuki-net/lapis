@@ -5,7 +5,7 @@ members = [
     "clients/state",
     "clients/ui",
     "clients/ui/wasm-smoke",
-    "clients/transport",
+    "protocol/wire-client",
     "apps/web/wasm",
     "host/runtime",
     "host/workbench",
@@ -18,10 +18,9 @@ members = [
     "host/extensions/*",
     "host/extensions-entry",
     "host/transport/*",
-    "contracts/domain/*",
-    "contracts/transport/*",
-    "contracts/protocol",
-    "contracts/extension-api/native",
+    "protocol/types/*",
+    "protocol/wire/*",
+    "protocol/extension-api/native",
     "extensions/*/*",
 ]
 exclude = ["vendor/gpui", "vendor/portable-pty", "extensions/terminal/component"]

@@ -1,0 +1,22 @@
+[package]
+name = "client-api"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+git-contract = { path = "../../../extensions/git/contract" }
+process = { path = "../../../protocol/types/process" }
+extension-ui-contract = { path = "../../../protocol/types/extension-ui" }
+task = { path = "../../../protocol/types/task" }
+editor-core = { path = "../../../protocol/types/editor-core" }
+document = { path = "../../../protocol/types/document" }
+workspace = { path = "../../../protocol/types/workspace" }
+workbench = { path = "../../../protocol/types/workbench" }
+serde.workspace = true
+serde_json.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

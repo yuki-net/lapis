@@ -6,13 +6,13 @@ description.workspace = true
 license.workspace = true
 
 [dependencies]
-task = { path = "../../contracts/domain/task" }
-process = { path = "../../contracts/domain/process" }
-editor-core = { path = "../../contracts/domain/editor-core" }
-client-api = { path = "../../contracts/protocol" }
-document = { path = "../../contracts/domain/document" }
-text = { path = "../../contracts/domain/text" }
-workbench = { path = "../../contracts/domain/workbench" }
+task = { path = "../../protocol/types/task" }
+process = { path = "../../protocol/types/process" }
+editor-core = { path = "../../protocol/types/editor-core" }
+client-api = { path = "../../protocol/wire/client-api" }
+document = { path = "../../protocol/types/document" }
+text = { path = "../../protocol/types/text" }
+workbench = { path = "../../protocol/types/workbench" }
 workbench-state = { path = "../workbench" }
 document-state = { path = "../documents" }
 workspace-state = { path = "../workspaces" }
