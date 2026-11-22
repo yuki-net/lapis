@@ -14,3 +14,4 @@
 - [設定のスコープと所有者](settings.md): 設定値の所有者・保存先・解決順と、設定 UI が定義データから画面を作る規則。
 - [認証とセッション](auth.md): Host/Client の認証方式、OIDC 検証、Session の所有と失効。
 - [配布と更新の内部契約](release.md): package・署名付き manifest の schema、インストール layout、データ世代と署名鍵の扱い。
+- [WebTransport 直接接続（Phase 1 設計）](webtransport.md): web-bridge を廃止し、Web / Desktop を Host の WebTransport (QUIC) 経路へ統一するための証明書・接続確立・ストリーム対応付けの決定と未検証事項。
