@@ -82,10 +82,7 @@ ROUTE = Route(
     rust_components="rustfmt, clippy",
     rust_targets="wasm32-wasip2, wasm32-unknown-unknown",
     wasm_bindgen=WASM_BINDGEN_VERSION,
-    cache="host",
-    # target-dir を分けたビルドもキャッシュする。pty-extension と
-    # terminal-component は毎回ビルドし直すと 38 分の主因になる。
-    cache_paths=("target/", "target/pty-extension/", "target/terminal-component/"),
+    cache=True,
     steps=(
         Step("Check architecture", py("scripts/check.py", "host", "architecture")),
         Step("Check formatting", py("scripts/check.py", "host", "format")),

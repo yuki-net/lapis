@@ -80,10 +80,8 @@ class Route:
     wasm_bindgen: str = ""
     java: str = ""
     gradle: bool = False
-    # actions/cache の key 接頭辞。空ならキャッシュしない。
-    cache: str = ""
-    # キャッシュする target-dir（リポジトリルート相対）。
-    cache_paths: tuple[str, ...] = ("target/",)
+    # actions/cache ではなく rust-cache を使うか（Rust のビルドを含む route）。
+    cache: bool = False
     # route の既定作業ディレクトリ（リポジトリルートからの相対パス）。
     working_directory: str = ""
 

@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - develop
+      - main
   workflow_dispatch:
 
 permissions:
@@ -40,13 +41,21 @@ jobs:
         id: plan
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          BASE_REF: ${{ github.event.pull_request.base.ref || github.ref_name }}
         run: |
           set -euo pipefail
+          # main は全 route・全 OS。それ以外（develop など）は変更 path から選び、
+          # Linux 実装がある route は Linux に寄せる（Windows 専用 route は残る）。
+          if [ "${BASE_REF}" = "main" ]; then
+            scope=(--full)
+          else
+            scope=(--prefer-os linux)
+          fi
           # base が解決できない場合 plan.py が全 route を選び、理由を stderr に出す。
           python -m scripts.ci.plan --github-outputs --reason \
-            --base "${BASE_SHA:-invalid}" >> "$GITHUB_OUTPUT"
+            --base "${BASE_SHA:-invalid}" "${scope[@]}" >> "$GITHUB_OUTPUT"
           echo "### Selected routes" >> "$GITHUB_STEP_SUMMARY"
-          echo '`'"$(python -m scripts.ci.plan --selected --base "${BASE_SHA:-invalid}")"'`' >> "$GITHUB_STEP_SUMMARY"
+          echo '`'"$(python -m scripts.ci.plan --selected --base "${BASE_SHA:-invalid}" "${scope[@]}")"'`' >> "$GITHUB_STEP_SUMMARY"
 
   # 実際の検証。step 列は scripts/ci/routes/ が持ち、ここは matrix を
   # 展開して run.py に委譲するだけ。
@@ -99,18 +108,23 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         if: matrix.route.gradle
 
-      - uses: actions/cache@v4
+      # rust-cache は OS ごとに共有し、古い成果物を剪定して 10GB 枠を
+      # 圧迫しない。target 配下（--target-dir で分けたものも含む）は
+      # すべて target/ の内側なので、これだけで足りる。
+      - uses: Swatinem/rust-cache@v2
         if: matrix.route.cache
         with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            ~/.cargo/git/checkouts/
-            ${{ matrix.route.cache_paths }}
-          key: ${{ matrix.route.cache }}-${{ runner.os }}-rust-${{ matrix.route.toolchain }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ matrix.route.cache }}-${{ runner.os }}-rust-${{ matrix.route.toolchain }}-
+          shared-key: rust-${{ matrix.route.os }}
+          # PR では保存しない。develop / main のキャッシュを全 PR が読む。
+          save-if: ${{ github.event_name != 'pull_request' }}
+
+      # 復元された中身を次回以降の判断材料にする（L2 の計測）。
+      - name: Report restored cache
+        if: matrix.route.cache
+        run: |
+          echo "### ${{ matrix.route.name }} cache" >> "$GITHUB_STEP_SUMMARY"
+          echo "- target: $(du -sh target 2>/dev/null | cut -f1 || echo none)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- rlib: $(find target -name '*.rlib' 2>/dev/null | wc -l)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Run ${{ matrix.route.name }}
         working-directory: ${{ github.workspace }}

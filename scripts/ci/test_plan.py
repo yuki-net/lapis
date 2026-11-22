@@ -42,8 +42,9 @@ class PlanTests(unittest.TestCase):
             self.assertEqual(entry["name"], expected)
             self.assertEqual(entry["timeout"], route.timeout_minutes)
             self.assertEqual(entry["runner"], RUNNERS[entry["os"]])
-            self.assertEqual(entry["cache_paths"], "\n".join(route.cache_paths))
+            self.assertIs(entry["cache"], route.cache)
             self.assertNotIn("runs_on", entry)
+            self.assertNotIn("cache_paths", entry)
             self.assertNotIn("workdir", entry)
             self.assertNotIn("requires", entry)
             json.dumps(entry)  # matrix は JSON へ直列化できること
@@ -66,6 +67,15 @@ class PlanTests(unittest.TestCase):
         windows = [entry["job"] for entry in plan.matrix(list(ORDER), only_os="windows")]
         self.assertEqual(windows, [key for key in ORDER if "windows" in route_for(key).runs_on])
         self.assertEqual(plan.matrix([], only_os="linux"), [])
+
+    def test_prefer_os_keeps_one_job_per_route(self):
+        """develop は Linux に寄せる。Linux 実装が無い route は元の OS のまま。"""
+        entries = plan.matrix(list(ORDER), prefer_os="linux")
+        self.assertEqual(len(entries), len(ORDER))
+        for entry in entries:
+            route = route_for(entry["job"])
+            expected = "linux" if "linux" in route.runs_on else route.runs_on[0]
+            self.assertEqual(entry["os"], expected, entry["job"])
 
     def test_job_name_uses_target_when_the_runner_os_is_not_the_subject(self):
         """Mobile は Android を検証するので job 名に対象を出す。"""
@@ -126,12 +136,21 @@ class PlanTests(unittest.TestCase):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("--os ${{ matrix.route.os }}", workflow)
 
-    def test_workflow_uses_the_matrix_runner_and_cache_paths(self):
-        """YAML は runner 名とキャッシュ対象を matrix から受け取る。"""
+    def test_workflow_uses_the_matrix_runner_and_rust_cache(self):
+        """YAML は runner 名を matrix から受け、Rust は rust-cache に任せる。"""
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("runs-on: ${{ matrix.route.runner }}", workflow)
-        self.assertIn("${{ matrix.route.cache_paths }}", workflow)
+        self.assertIn("Swatinem/rust-cache@v2", workflow)
+        self.assertIn("shared-key: rust-${{ matrix.route.os }}", workflow)
         self.assertNotIn("matrix.route.runs_on", workflow)
+        self.assertNotIn("actions/cache@", workflow)
+
+    def test_workflow_scopes_main_and_develop_differently(self):
+        """main は全 route、develop は Linux 優先。"""
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn('if [ "${BASE_REF}" = "main" ]', workflow)
+        self.assertIn("scope=(--full)", workflow)
+        self.assertIn("scope=(--prefer-os linux)", workflow)
 
     def test_workflow_matrix_comes_from_plan(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")

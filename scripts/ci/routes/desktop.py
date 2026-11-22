@@ -19,9 +19,7 @@ ROUTE = Route(
     rust_components="rustfmt, clippy",
     # terminal component の wasm をビルドするため。
     rust_targets="wasm32-wasip2",
-    cache="desktop",
-    # terminal component は target-dir を分けてビルドする。
-    cache_paths=("target/", "target/terminal-component/"),
+    cache=True,
     steps=(
         Step("Check architecture", py("scripts/check.py", "desktop", "architecture")),
         Step("Check formatting", py("scripts/check.py", "desktop", "format")),

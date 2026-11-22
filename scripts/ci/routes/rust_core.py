@@ -74,8 +74,7 @@ ROUTE = Route(
     rust=True,
     rust_components=f"{RUSTFMT}, {CLIPPY}, rust-analyzer, rust-src",
     rust_targets="wasm32-wasip2",
-    cache="rust-core",
-    cache_paths=("target/", "target/external-extension/", "target/terminal-component/"),
+    cache=True,
     steps=(
         Step("Check architecture", py("scripts/check.py", "rust_core", "architecture")),
         Step("Check formatting", py("scripts/check.py", "rust_core", "format")),

@@ -51,23 +51,29 @@ def entry_for(route, os_name: str) -> dict:
         "java": route.java,
         "gradle": route.gradle,
         "cache": route.cache,
-        # actions/cache の path。runner ごとに分けた target-dir も含める。
-        "cache_paths": "\n".join(route.cache_paths),
     }
 
 
-def matrix(keys: list[str], only_os: str | None = None) -> list[dict]:
+def matrix(keys: list[str], only_os: str | None = None, prefer_os: str | None = None) -> list[dict]:
     """GitHub Actions の matrix に渡す配列。1 エントリ = route × OS。
 
-    only_os を渡すと、その OS で走るエントリだけに絞る（runner を
-    切り替えたいときに使う）。
+    - `only_os`: その OS で走るエントリだけに絞る
+    - `prefer_os`: route が対応しているならその OS だけにする（無ければ全 OS）。
+      develop を Linux に寄せるときに使う。Linux 実装が無い route は
+      Windows のまま残るので、Windows 専用の検証が消えない。
     """
     entries = []
     for key in keys:
         route = route_for(key)
-        for os_name in route.runs_on:
-            if only_os is not None and os_name != only_os:
-                continue
+        if prefer_os is not None and prefer_os in route.runs_on:
+            os_names = (prefer_os,)
+        else:
+            os_names = tuple(
+                os_name
+                for os_name in route.runs_on
+                if only_os is None or os_name == only_os
+            )
+        for os_name in os_names:
             entries.append(entry_for(route, os_name))
     return entries
 
@@ -128,6 +134,11 @@ def main() -> int:
         choices=("linux", "windows"),
         help="指定した OS で走る matrix エントリだけを出す（runner の切り替え用）",
     )
+    parser.add_argument(
+        "--prefer-os",
+        choices=("linux", "windows"),
+        help="route が対応しているならその OS だけにする。Linux 実装が無い route は元の OS のまま",
+    )
     args = parser.parse_args()
 
     if args.list:
@@ -141,7 +152,7 @@ def main() -> int:
 
     scope, paths = select_paths(args)
     keys = route_keys(paths)
-    entries = matrix(keys, args.only_os)
+    entries = matrix(keys, args.only_os, args.prefer_os)
     if args.reason:
         if paths is None:
             detail = "no diff (full run)"

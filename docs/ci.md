@@ -53,6 +53,35 @@ python -m scripts.ci.plan --selected --reason
 - base が解決できない（浅い clone、CI 外）場合は全 route に倒す。**取りこぼすより回しすぎる方を選ぶ**
 - CI では作業ツリーが clean なので、既定は実質 PR の差分だけになる
 
+## GitHub での起動と範囲
+
+```yaml
+on:
+  pull_request:                 # すべての PR（stacked PR も検証する）
+  push:
+    branches: [develop, main]   # マージ後の確認と、キャッシュの暖機
+  workflow_dispatch:
+```
+
+PR の **base ブランチで範囲を変える**。
+
+| base | 範囲 | OS |
+| --- | --- | --- |
+| `main` | 全 route（`--full`） | `runs_on` の全部（現在 11 job） |
+| それ以外（develop など） | 変更 path から選択 | **Linux 優先**（Linux 実装が無い route だけ Windows。現在 7 job） |
+
+Linux 優先は `--prefer-os linux`。route が Linux に対応していれば Linux だけ、対応していなければ元の OS のままにするので、Windows 専用の検証が消えない。
+
+## キャッシュ
+
+Rust のビルドは `Swatinem/rust-cache` に任せる。
+
+- `shared-key: rust-<os>` で **同じ OS の route が `target/` を共有**する（route ごとに別キーにしない）
+- 古い成果物を自動で剪定するので、リポジトリ全体 10GB の枠を圧迫しにくい
+- **PR では保存しない**（`save-if: github.event_name != 'pull_request'`）。PR のキャッシュは他の PR から見えないため、`develop` / `main` の push で暖めたものだけを全 PR が読む
+- 復元された中身は job サマリに出す（`target` のサイズと `*.rlib` の数）。**効果は次回の復元時に分かる**
+- キャッシュの実在とサイズは `gh api repos/<owner>/<repo>/actions/caches` で確認できる（CI 不要）
+
 ## route 一覧
 
 `python -m scripts.ci.run --list` で確認できる。
