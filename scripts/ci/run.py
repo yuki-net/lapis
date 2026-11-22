@@ -115,6 +115,20 @@ def missing_prerequisites(route) -> list[str]:
     return missing
 
 
+def step_environment(step, os_name: str | None, temp: Path | None) -> dict[str, str]:
+    """step を実行する環境変数。
+
+    Python の子プロセスは既定でロケールのコードページ（CI の Windows runner
+    は cp1252）で stdout を開く。日本語を print するスクリプト
+    （scripts/extensions/smoke*.py など）が UnicodeEncodeError で落ちるため、
+    子プロセス側も UTF-8 に揃える。run.py は出力を UTF-8 で読み直す。
+    """
+    environment = dict(os.environ)
+    environment.setdefault("PYTHONIOENCODING", "utf-8")
+    environment.update({key: substitute(value, os_name, temp) for key, value in step.env.items()})
+    return environment
+
+
 def run_step(route, step, log: report.LocalLog | None, writer=None, os_name: str | None = None, temp: Path | None = None) -> dict:
     """1 step を実行し、結果を返す。失敗は例外にせず結果に落とす。
 
@@ -131,8 +145,7 @@ def run_step(route, step, log: report.LocalLog | None, writer=None, os_name: str
     """
     directory = ROOT / (route.working_directory or "") / (step.directory or "")
     command = [substitute(part, os_name, temp) for part in step.command]
-    environment = dict(os.environ)
-    environment.update({key: substitute(value, os_name, temp) for key, value in step.env.items()})
+    environment = step_environment(step, os_name, temp)
     limit = (step.timeout_minutes or max(1, route.timeout_minutes - POST_JOB_RESERVE_MINUTES)) * 60
     if log is not None:
         log.begin()

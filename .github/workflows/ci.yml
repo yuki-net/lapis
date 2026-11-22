@@ -119,8 +119,10 @@ jobs:
           save-if: ${{ github.event_name != 'pull_request' }}
 
       # 復元された中身を次回以降の判断材料にする（L2 の計測）。
+      # Windows runner の既定は PowerShell で du / find が無いため bash を使う。
       - name: Report restored cache
         if: matrix.route.cache
+        shell: bash
         run: |
           echo "### ${{ matrix.route.name }} cache" >> "$GITHUB_STEP_SUMMARY"
           echo "- target: $(du -sh target 2>/dev/null | cut -f1 || echo none)" >> "$GITHUB_STEP_SUMMARY"

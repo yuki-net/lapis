@@ -142,6 +142,9 @@ class PlanTests(unittest.TestCase):
         self.assertIn("runs-on: ${{ matrix.route.runner }}", workflow)
         self.assertIn("Swatinem/rust-cache@v2", workflow)
         self.assertIn("shared-key: rust-${{ matrix.route.os }}", workflow)
+        # 計測 step は du / find を使うので、Windows でも bash で動かす。
+        self.assertIn("name: Report restored cache", workflow)
+        self.assertIn("shell: bash", workflow)
         self.assertNotIn("matrix.route.runs_on", workflow)
         self.assertNotIn("actions/cache@", workflow)
 

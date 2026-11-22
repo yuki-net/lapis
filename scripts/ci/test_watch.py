@@ -202,6 +202,7 @@ class SummaryTests(unittest.TestCase):
         states = {"host": running_state("host")}
         found = watch.status_of(target, states, codes={"host": 1})
         self.assertEqual(found["status"], state.FAILED)
+        self.assertIn("code 1", found["failure"])
 
     def test_missing_state_is_pending(self):
         self.assertEqual(watch.status_of(entry("web"), {}, codes={})["status"], state.PENDING)

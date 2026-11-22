@@ -42,6 +42,11 @@ class RunTests(unittest.TestCase):
         self.assertEqual(run.substitute("{gradlew}", "linux"), "./gradlew")
         self.assertEqual(run.substitute("{gradlew}", "windows"), "gradlew.bat")
 
+    def test_python_steps_get_utf8_io_encoding(self):
+        """cp1252 の runner で日本語 print が UnicodeEncodeError にならないようにする。"""
+        environment = run.step_environment(Step("x", ["python", "-c", "pass"]), "windows", None)
+        self.assertEqual(environment.get("PYTHONIOENCODING"), "utf-8")
+
     def test_host_command_wraps_batch_files_on_windows(self):
         """CreateProcess は .cmd/.bat を直接実行できないので cmd /c を挟む。"""
         expected = ["cmd", "/c", "npm.cmd", "ci"] if os.name == "nt" else ["npm.cmd", "ci"]

@@ -101,7 +101,12 @@ def status_of(entry: dict, states: dict[str, dict], codes: dict[str, int]) -> di
         }
     if found.get("status") not in (state.PASSED, state.FAILED) and entry["job"] in codes:
         found = dict(found)
-        found["status"] = state.PASSED if codes[entry["job"]] == 0 else state.FAILED
+        code = codes[entry["job"]]
+        found["status"] = state.PASSED if code == 0 else state.FAILED
+        if code != 0:
+            # 状態を最終形にせずプロセスが終わった（強制終了・クラッシュ等）。
+            # 次の調査のために終了コードを残す。
+            found["failure"] = f"process exited with code {code} before the route finished"
     return found
 
 
