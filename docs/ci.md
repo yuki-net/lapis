@@ -87,6 +87,8 @@ python -m scripts.ci.measure host                # step 別の所要時間を並
 - `--os` は CI の matrix が渡す。「その OS の variant として実行する」の意味で、ローカルで確かめたいときにも使える
 - `{npm}` と `{gradlew}` は対象 OS のコマンド名に展開する（`npm` / `npm.cmd`、`./gradlew` / `gradlew.bat`）
 - Windows では `.cmd` / `.bat` を `cmd /c` 経由で起動する（`CreateProcess` が直接実行できないため）
+- `{runner_temp}` はローカルでは job ごとに空のディレクトリを作り直す（CI の `RUNNER_TEMP` と同じ前提。前回の残骸で stage が落ちないように）
+- 端末が ANSI に対応していない場合は上書き描画をやめ、最後にまとめて出す
 - step の上限は `Step.timeout_minutes`、無指定なら `Route.timeout_minutes` から 10 分（後処理のキャッシュ保存分）を引いた値
 
 ## まとめて回す（GitHub と同じ並列）

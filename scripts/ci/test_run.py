@@ -197,7 +197,7 @@ class RunTests(unittest.TestCase):
             )
             route = route_with(Step("common", [sys.executable, "-c", "print('ok')"]))
 
-            def fake_step(_route, step, _log, _writer=None, _os_name=None):
+            def fake_step(_route, step, _log, _writer=None, _os_name=None, _temp=None):
                 return {"name": step.name, "ok": True, "seconds": 0.0, "output": ""}
 
             with patch.object(model, "PLATFORM_DIRECTORY", root), \

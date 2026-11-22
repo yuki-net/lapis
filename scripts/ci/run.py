@@ -46,14 +46,22 @@ PREREQUISITES = {
 POST_JOB_RESERVE_MINUTES = 10
 
 
-def runner_temp() -> Path:
+def runner_temp(override: Path | None = None) -> Path:
+    """step の一時領域。
+
+    GitHub は job ごとに空の `RUNNER_TEMP` が渡される。ローカルで同じ場所を
+    使うと、前回の出力が残って「入力が空ではない」で落ちる（拡張の stage が
+    これに当たる）。呼び出し側が実行ごとのディレクトリを渡す。
+    """
+    if override is not None:
+        return override
     value = os.environ.get("RUNNER_TEMP")
     if value:
         return Path(value)
     return Path(tempfile.gettempdir())
 
 
-def substitute(value: str, os_name: str | None = None) -> str:
+def substitute(value: str, os_name: str | None = None, temp: Path | None = None) -> str:
     """step の引数にある実行環境依存のプレースホルダを解決する。
 
     `{root}` はリポジトリルートの絶対パス。テストバイナリの作業ディレクトリは
@@ -69,7 +77,7 @@ def substitute(value: str, os_name: str | None = None) -> str:
     gradlew = "gradlew.bat" if os_name == "windows" else "./gradlew"
     return (
         value.replace("{root}", str(ROOT))
-        .replace("{runner_temp}", str(runner_temp()))
+        .replace("{runner_temp}", str(runner_temp(temp)))
         .replace("{exe}", exe)
         .replace("{npm}", npm)
         .replace("{gradlew}", gradlew)
@@ -106,7 +114,7 @@ def missing_prerequisites(route) -> list[str]:
     return missing
 
 
-def run_step(route, step, log: report.LocalLog | None, writer=None, os_name: str | None = None) -> dict:
+def run_step(route, step, log: report.LocalLog | None, writer=None, os_name: str | None = None, temp: Path | None = None) -> dict:
     """1 step を実行し、結果を返す。失敗は例外にせず結果に落とす。
 
     出力はパイプではなく実ファイルへ書かせ、待ちながら追記分を表示する。
@@ -121,9 +129,9 @@ def run_step(route, step, log: report.LocalLog | None, writer=None, os_name: str
     差し引いた値を使い、job 予算を食い潰さない。
     """
     directory = ROOT / (route.working_directory or "") / (step.directory or "")
-    command = [substitute(part, os_name) for part in step.command]
+    command = [substitute(part, os_name, temp) for part in step.command]
     environment = dict(os.environ)
-    environment.update({key: substitute(value, os_name) for key, value in step.env.items()})
+    environment.update({key: substitute(value, os_name, temp) for key, value in step.env.items()})
     limit = (step.timeout_minutes or max(1, route.timeout_minutes - POST_JOB_RESERVE_MINUTES)) * 60
     if log is not None:
         log.begin(route.key, step.name)
@@ -319,12 +327,19 @@ def error_excerpt(output: str, lines: int = 2) -> str:
     stripped = [line.strip() for line in output.splitlines() if line.strip()]
     if not stripped:
         return ""
-    picked = [line for line in stripped if any(hint in line for hint in ERROR_HINTS)]
+    hints = tuple(hint.lower() for hint in ERROR_HINTS)
+    picked = [line for line in stripped if any(hint in line.lower() for hint in hints)]
     chosen = picked[-lines:] if picked else stripped[-lines:]
     return " / ".join(chosen)[:300]
 
 
-def execute(route, only: list[str] | None, quiet: bool, os_name: str | None = None) -> dict:
+def execute(
+    route,
+    only: list[str] | None,
+    quiet: bool,
+    os_name: str | None = None,
+    temp: Path | None = None,
+) -> dict:
     """route の step を実行する。`os_name` の差分 step も後ろに足す。"""
     os_name = os_name or local_os()
     all_steps = [*route.steps, *route.platform_steps.get(os_name, ())]
@@ -338,6 +353,13 @@ def execute(route, only: list[str] | None, quiet: bool, os_name: str | None = No
 
     log = None if report.on_github() else report.LocalLog(ROOT / ".ci" / "logs")
     writer = state.Writer(state.directory(), route.key, route.name, os_name, len(steps))
+    # ローカルでは job ごとの一時領域を毎回作り直す。CI の RUNNER_TEMP と
+    # 同じ前提（空であること）を守るため。
+    work_temp = temp
+    created_temp = False
+    if work_temp is None and not report.on_github():
+        work_temp = Path(tempfile.mkdtemp(prefix=f"lapis-ci-{route.key}-"))
+        created_temp = True
     results = []
     try:
         for step in steps:
@@ -347,7 +369,7 @@ def execute(route, only: list[str] | None, quiet: bool, os_name: str | None = No
                 continue
             report.notice(f"run {step.name}: {' '.join(step.command)}")
             writer.begin(step.name)
-            result = run_step(route, step, log, writer, os_name)
+            result = run_step(route, step, log, writer, os_name, work_temp)
             writer.end(step.name, result["ok"])
             if not result["ok"]:
                 writer.note_failure(error_excerpt(result["output"]))
@@ -371,6 +393,9 @@ def execute(route, only: list[str] | None, quiet: bool, os_name: str | None = No
         writer.data["failure"] = f"{type(error).__name__}: {error}"[:300]
         writer.flush()
         raise
+    finally:
+        if created_temp and work_temp is not None:
+            shutil.rmtree(work_temp, ignore_errors=True)
     payload = {
         "route": route.key,
         "name": route.name,

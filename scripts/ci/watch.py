@@ -24,7 +24,7 @@ import sys
 import time
 from pathlib import Path
 
-from scripts.ci import plan, state
+from scripts.ci import console, plan, state
 from scripts.ci.console import configure
 from scripts.ci.jobs import ROOT, local_os
 from scripts.ci.routes import ORDER, job_name, route_for
@@ -385,11 +385,12 @@ def main() -> int:
         return 0
 
     jobs = args.jobs if args.jobs > 0 else len(entries)
-    # パイプやリダイレクト先に ANSI を流さない。
+    # ANSI が使えないコンソール（VT 無効・パイプ）では上書き描画をやめ、
+    # 最後にまとめて出す。中途半端に有効化すると行が増え続ける。
     colors = (
         not args.no_color
         and os.environ.get("NO_COLOR") is None
-        and sys.stdout.isatty()
+        and console.supports_ansi()
     )
     code = run(entries, jobs, colors=colors, scope=scope)
 
