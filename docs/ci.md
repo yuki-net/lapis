@@ -37,15 +37,15 @@ CI で走る検証は、ローカルでも同じものが同じコマンドで�
 
 | route | `runs_on` | 主な検証 |
 | --- | --- | --- |
-| `repository` | linux | `scripts/check.py repository architecture`（CI・拡張・開発コマンドの Python テスト、アーキテクチャ検査） |
+| `repository` | linux, windows | `scripts/check.py repository architecture`（CI・拡張・開発コマンドの Python テスト、アーキテクチャ検査） |
 | `dev_commands` | windows | 開発起動コマンド・`dev-session` の整形とテスト |
-| `rust_core` | linux | backend 全体の architecture / format / test / lint と外部拡張 component |
+| `rust_core` | linux, windows | backend 全体の architecture / format / test / lint と外部拡張 component |
 | `host` | windows | Host の architecture / format / test / lint / build と承認済み拡張 PTY・Web 公開 |
 | `desktop` | windows | Desktop の architecture / format / test / lint / build と GPUI patch 検証 |
-| `mobile` | linux | KMP のユニットテストと Android ビルド（job 名は `Mobile / Android`） |
-| `web` | linux | Web のビルドと接続処理テスト |
+| `mobile` | linux, windows | KMP のユニットテストと Android ビルド（Linux では `./gradlew`、Windows では `gradlew.bat`） |
+| `web` | linux, windows | Web のビルドと接続処理テスト（`{npm}` が OS の実行ファイル名になる） |
 
-GitHub の job 名は `name` と `runs_on`（または `target`）から作る（例 `Host / Windows`, `Mobile / Android`）。
+GitHub の job 名は `name` と `runs_on`（または `target`）から作る（例 `Host / Windows`, `Mobile / Android / Windows`）。
 
 ## ローカルで回す
 
@@ -61,8 +61,10 @@ python -m scripts.ci.measure host                # step 別の所要時間を並
 - 成功した step の出力は捨てる。失敗した step だけ末尾 40 行を表示し、全文は `.ci/logs/<route>/<step>.log` に残る
 - `--json` は `{route, name, ok, steps:[{name, ok, seconds}]}` だけを返す。ログを読まずに成否を判断できる
 - 前提（cargo / node / wasm-bindgen / java / gradle）が無い route は実行せず理由を表示する。`--strict` を付けると失敗扱いになる
-- 手元の OS が `runs_on` に無い route は**実行せず失敗する**。CI で走らない検証を手元で緑にしても意味がないため。`--os` を明示したときだけ実行する
-- `--os` は CI の matrix からも渡す。ローカルで別 OS の検証を試すときにも使う
+- 手元では**手元の OS の step**を実行する。`runs_on` に無い OS でも警告を出して実行する（他 OS のふりはしない）
+- `--os` は CI の matrix が渡す。「その OS の variant として実行する」の意味で、ローカルで確かめたいときにも使える
+- `{npm}` と `{gradlew}` は対象 OS のコマンド名に展開する（`npm` / `npm.cmd`、`./gradlew` / `gradlew.bat`）
+- Windows では `.cmd` / `.bat` を `cmd /c` 経由で起動する（`CreateProcess` が直接実行できないため）
 - step の上限は `Step.timeout_minutes`、無指定なら `Route.timeout_minutes` から 10 分（後処理のキャッシュ保存分）を引いた値
 
 ## まとめて回す（GitHub と同じ並列）
@@ -74,14 +76,14 @@ python -m scripts.ci.watch host desktop     # route を指定
 python -m scripts.ci.watch --jobs 2         # 同時実行数を絞る
 ```
 
-route × OS の job を GitHub の matrix と同じように並列で起動し、1 画面に進捗を出す。名前は GitHub に出る job 名（`Host / Windows`, `Mobile / Android`）に合わせている。
+route ごとに 1 job（**この機械の OS**）を並列で起動し、1 画面に進捗を出す。名前は GitHub に出る job 名（`Host / Windows`, `Mobile / Android / Windows`）に合わせるが、**手元の OS で実行している以上、その OS 名で出す**（Linux のふりはしない）。
 
 ```
 CI
 
-OK Host / Windows         [########--] 14/18   12m03s
->> Desktop / Windows      [#####-----]  9/18    7m41s  clients/ui/src/shell/layout.rs
-.. Web                    [----------]  0/3      -      (waiting)
+OK Host / Windows             [########--] 14/18   12m03s
+>> Desktop / Windows          [#####-----]  9/18    7m41s  clients/ui/src/shell/layout.rs
+.. Web / Windows              [----------]  0/3      -      (waiting)
 ```
 
 - 右側は**いま処理しているファイル**。出力が変わると表示も変わるので、止まっていないことの目安になる

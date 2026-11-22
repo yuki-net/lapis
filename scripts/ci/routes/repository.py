@@ -12,7 +12,7 @@ def py(*args):
 ROUTE = Route(
     key="repository",
     name="Repository",
-    runs_on=("linux",),
+    runs_on=("linux", "windows"),
     timeout_minutes=20,
     checkout_depth=0,
     python=PYTHON_VERSION,

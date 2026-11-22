@@ -35,6 +35,19 @@ class RunTests(unittest.TestCase):
             self.assertEqual(Path(run.substitute("{runner_temp}/a")), Path(temp) / "a")
             self.assertEqual(run.substitute("target{x}.{exe}"), f"target{{x}}.{'.exe' if os.name == 'nt' else ''}")
 
+    def test_substitute_expands_os_specific_command_names(self):
+        """OS で名前が変わるコマンドだけを 1 つの step 列に書ける。"""
+        self.assertEqual(run.substitute("{npm} ci", "linux"), "npm ci")
+        self.assertEqual(run.substitute("{npm} ci", "windows"), "npm.cmd ci")
+        self.assertEqual(run.substitute("{gradlew}", "linux"), "./gradlew")
+        self.assertEqual(run.substitute("{gradlew}", "windows"), "gradlew.bat")
+
+    def test_host_command_wraps_batch_files_on_windows(self):
+        """CreateProcess は .cmd/.bat を直接実行できないので cmd /c を挟む。"""
+        expected = ["cmd", "/c", "npm.cmd", "ci"] if os.name == "nt" else ["npm.cmd", "ci"]
+        self.assertEqual(run.host_command(["npm.cmd", "ci"]), expected)
+        self.assertEqual(run.host_command(["cargo", "test"]), ["cargo", "test"])
+
     def test_timeout_terminates_the_step(self):
         # timeout_minutes は秒換算して使うため、テストでは極小値を渡す。
         step = Step("slow", [sys.executable, "-c", "import time; time.sleep(30)"], timeout_minutes=0.02)
@@ -102,28 +115,30 @@ class RunTests(unittest.TestCase):
                 with redirect_stdout(io.StringIO()):
                     self.assertEqual(invoke(["test", "--strict"]), 1)
 
-    def test_local_os_outside_runs_on_is_refused(self):
-        """CI で走らない OS では、黙って別 OS の検証を回さない。"""
-        route = route_for_os("windows")
-        with patch.object(run.report, "on_github", return_value=False), \
-             patch.object(run, "local_os", return_value="linux"), \
-             patch.object(run, "route_for", return_value=route), \
-             patch.object(run, "execute") as execute:
-            with redirect_stderr(io.StringIO()) as errors:
-                self.assertEqual(invoke(["test"]), 1)
-        execute.assert_not_called()
-        self.assertIn("runs on windows in CI", errors.getvalue())
-
-    def test_os_flag_allows_running_a_ci_os_locally(self):
-        """`--os` を明示したときだけ、CI と違う OS で回せる。"""
+    def test_local_os_outside_runs_on_is_reported_but_still_runs(self):
+        """CI が別 OS でも、手元は手元の OS の step を実行する（ふりをしない）。"""
         route = route_for_os("windows")
         with patch.object(run.report, "on_github", return_value=False), \
              patch.object(run, "local_os", return_value="linux"), \
              patch.object(run, "route_for", return_value=route), \
              patch.object(run, "missing_prerequisites", return_value=[]), \
-             patch.object(run, "execute", return_value={"route": "test", "ok": True, "steps": []}):
+             patch.object(run, "execute", return_value={"route": "test", "ok": True, "steps": []}) as execute:
+            with redirect_stderr(io.StringIO()) as errors:
+                self.assertEqual(invoke(["test"]), 0)
+        execute.assert_called_once()
+        self.assertIn("runs on windows in CI", errors.getvalue())
+
+    def test_os_flag_runs_the_given_os_variant(self):
+        """`--os` は CI の matrix 用。ローカルでも OS を明示できる。"""
+        route = route_for_os("windows")
+        with patch.object(run.report, "on_github", return_value=False), \
+             patch.object(run, "local_os", return_value="linux"), \
+             patch.object(run, "route_for", return_value=route), \
+             patch.object(run, "missing_prerequisites", return_value=[]), \
+             patch.object(run, "execute", return_value={"route": "test", "ok": True, "steps": []}) as execute:
             with redirect_stdout(io.StringIO()):
                 self.assertEqual(invoke(["test", "--os", "windows"]), 0)
+        self.assertEqual(execute.call_args.args[3], "windows")
 
     def test_os_flag_rejects_unknown_os(self):
         with redirect_stderr(io.StringIO()):
@@ -182,7 +197,7 @@ class RunTests(unittest.TestCase):
             )
             route = route_with(Step("common", [sys.executable, "-c", "print('ok')"]))
 
-            def fake_step(_route, step, _log, _writer=None):
+            def fake_step(_route, step, _log, _writer=None, _os_name=None):
                 return {"name": step.name, "ok": True, "seconds": 0.0, "output": ""}
 
             with patch.object(model, "PLATFORM_DIRECTORY", root), \

@@ -53,19 +53,38 @@ def runner_temp() -> Path:
     return Path(tempfile.gettempdir())
 
 
-def substitute(value: str) -> str:
+def substitute(value: str, os_name: str | None = None) -> str:
     """step の引数にある実行環境依存のプレースホルダを解決する。
 
     `{root}` はリポジトリルートの絶対パス。テストバイナリの作業ディレクトリは
     cargo が crate ディレクトリにするため、リポジトリ相対で解決させたい値は
     絶対パスに展開しておく。
+
+    `{npm}` と `{gradlew}` は対象 OS のコマンド名に展開する。OS で名前が
+    変わるものだけをここに集め、route 側は 1 つの step 列で済ませる。
     """
+    os_name = os_name or local_os()
     exe = ".exe" if os.name == "nt" else ""
+    npm = "npm.cmd" if os_name == "windows" else "npm"
+    gradlew = "gradlew.bat" if os_name == "windows" else "./gradlew"
     return (
         value.replace("{root}", str(ROOT))
         .replace("{runner_temp}", str(runner_temp()))
         .replace("{exe}", exe)
+        .replace("{npm}", npm)
+        .replace("{gradlew}", gradlew)
     )
+
+
+def host_command(command: list[str]) -> list[str]:
+    """この機械で実行できる形に直す。
+
+    Windows の `CreateProcess` は `.cmd` / `.bat` を直接実行できない
+    （`npm.cmd` や `gradlew.bat` がこれに当たる）。`cmd /c` を挟む。
+    """
+    if os.name == "nt" and command and command[0].lower().endswith((".cmd", ".bat")):
+        return ["cmd", "/c", *command]
+    return command
 
 
 def missing_prerequisites(route) -> list[str]:
@@ -87,7 +106,7 @@ def missing_prerequisites(route) -> list[str]:
     return missing
 
 
-def run_step(route, step, log: report.LocalLog | None, writer=None) -> dict:
+def run_step(route, step, log: report.LocalLog | None, writer=None, os_name: str | None = None) -> dict:
     """1 step を実行し、結果を返す。失敗は例外にせず結果に落とす。
 
     出力はパイプではなく実ファイルへ書かせ、待ちながら追記分を表示する。
@@ -102,9 +121,9 @@ def run_step(route, step, log: report.LocalLog | None, writer=None) -> dict:
     差し引いた値を使い、job 予算を食い潰さない。
     """
     directory = ROOT / (route.working_directory or "") / (step.directory or "")
-    command = [substitute(part) for part in step.command]
+    command = [substitute(part, os_name) for part in step.command]
     environment = dict(os.environ)
-    environment.update({key: substitute(value) for key, value in step.env.items()})
+    environment.update({key: substitute(value, os_name) for key, value in step.env.items()})
     limit = (step.timeout_minutes or max(1, route.timeout_minutes - POST_JOB_RESERVE_MINUTES)) * 60
     if log is not None:
         log.begin(route.key, step.name)
@@ -162,7 +181,7 @@ def execute_step(
     try:
         try:
             process = subprocess.Popen(
-                command,
+                host_command(command),
                 cwd=directory,
                 env=environment,
                 stdin=subprocess.DEVNULL,
@@ -328,7 +347,7 @@ def execute(route, only: list[str] | None, quiet: bool, os_name: str | None = No
                 continue
             report.notice(f"run {step.name}: {' '.join(step.command)}")
             writer.begin(step.name)
-            result = run_step(route, step, log, writer)
+            result = run_step(route, step, log, writer, os_name)
             writer.end(step.name, result["ok"])
             if not result["ok"]:
                 writer.note_failure(error_excerpt(result["output"]))
@@ -423,16 +442,14 @@ def main() -> int:
 
     route = route_for(args.route)
 
-    # CI では matrix が `runs_on` の中から選ぶので、ここはローカル専用の門。
-    # 手元の OS で CI に存在しない検証を回すと「手元では緑、CI では未検証」を
-    # 作りやすい。明示的に `--os` を渡したときだけ通す。
+    # 手元では手元の OS で、その OS 用の step を実行する（他 OS のふりは
+    # しない）。CI の matrix が別 OS しか含まない場合は、その旨を伝える。
+    target_os = args.os or local_os()
     if not report.on_github() and args.os is None and local_os() not in route.runs_on:
         runs_on = ", ".join(route.runs_on)
-        report.error(
-            f"{route.key} runs on {runs_on} in CI; "
-            f"pass --os <{'|'.join(route.runs_on)}> to run it on {local_os()} anyway"
+        report.warning(
+            f"{route.key} runs on {runs_on} in CI; running the {local_os()} steps here"
         )
-        return 1
 
     if not report.on_github() and not args.no_prerequisite_check:
         missing = missing_prerequisites(route)
@@ -449,7 +466,7 @@ def main() -> int:
             print(json.dumps({"route": route.key, "ok": True, "skipped": True, "reason": f"missing {missing}"}))
             return 0
 
-    payload = execute(route, args.step, args.quiet, args.os)
+    payload = execute(route, args.step, args.quiet, target_os)
     if args.json:
         report.emit_json(payload)
     return 0 if payload["ok"] else 1

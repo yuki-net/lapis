@@ -32,7 +32,8 @@ class PlanTests(unittest.TestCase):
     def test_matrix_entries_only_reference_known_routes(self):
         entries = plan.matrix(list(ORDER))
         # 1 route が複数 OS で走る場合は route × OS のエントリになる。
-        self.assertEqual([entry["job"] for entry in entries], list(ORDER))
+        self.assertEqual(list(dict.fromkeys(entry["job"] for entry in entries)), list(ORDER))
+        self.assertEqual(len(entries), sum(len(route_for(key).runs_on) for key in ORDER))
         for entry in entries:
             route = route_for(entry["job"])
             self.assertIn(entry["os"], route.runs_on)
@@ -64,8 +65,9 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(plan.matrix([], only_os="linux"), [])
 
     def test_job_name_uses_target_when_the_runner_os_is_not_the_subject(self):
-        """Mobile は Linux runner で Android を検証するので job 名に Android を出す。"""
-        self.assertEqual(plan.matrix(["mobile"])[0]["name"], "Mobile / Android")
+        """Mobile は Android を検証するので job 名に対象を出す。"""
+        self.assertEqual(plan.matrix(["mobile"])[0]["name"], "Mobile / Android / Linux")
+        self.assertEqual(plan.matrix(["mobile"])[1]["name"], "Mobile / Android / Windows")
         self.assertEqual(plan.matrix(["host"])[0]["name"], "Host / Windows")
         self.assertEqual(plan.matrix(["repository"])[0]["name"], "Repository / Linux")
 

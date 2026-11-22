@@ -26,8 +26,8 @@ from pathlib import Path
 
 from scripts.ci import plan, state
 from scripts.ci.console import configure
-from scripts.ci.jobs import ROOT
-from scripts.ci.routes import ORDER
+from scripts.ci.jobs import ROOT, local_os
+from scripts.ci.routes import ORDER, job_name, route_for
 
 GREEN = "\x1b[32m"
 RED = "\x1b[31m"
@@ -242,11 +242,12 @@ def terminate(process: subprocess.Popen) -> None:
             process.kill()
 
 
-def spawn(job: str, os_name: str, state_dir: Path) -> subprocess.Popen:
+def spawn(job: str, state_dir: Path) -> subprocess.Popen:
+    """job を子プロセスで起動する。OS は子プロセスが自分で決める。"""
     environment = dict(os.environ)
     environment[state.ENV] = str(state_dir)
     return subprocess.Popen(
-        [sys.executable, "-m", "scripts.ci.run", job, "--os", os_name, "--quiet"],
+        [sys.executable, "-m", "scripts.ci.run", job, "--quiet"],
         cwd=ROOT,
         env=environment,
         stdin=subprocess.DEVNULL,
@@ -293,7 +294,7 @@ def run(entries: list[dict], jobs: int, colors: bool) -> int:
         while queue or running:
             while queue and len(running) < jobs:
                 entry = queue.pop(0)
-                running[entry["job"]] = spawn(entry["job"], entry["os"], state_dir)
+                running[entry["job"]] = spawn(entry["job"], state_dir)
             for job, process in list(running.items()):
                 code = process.poll()
                 if code is not None:
@@ -324,6 +325,27 @@ def run(entries: list[dict], jobs: int, colors: bool) -> int:
     return exit_code(entries, state.read_all(state_dir))
 
 
+def local_entries(keys: list[str]) -> list[dict]:
+    """手元の OS で走らせる job の一覧。
+
+    CI の matrix は「どの OS で走るか」を決めるが、手元は 1 台しかない。
+    他 OS のふりはせず、この機械の OS の step を実行して、その OS 名で出す。
+    """
+    os_name = local_os()
+    entries = []
+    for key in keys:
+        route = route_for(key)
+        entries.append(
+            {
+                "job": route.key,
+                "name": job_name(route, os_name),
+                "os": os_name,
+                "steps": len(route.steps) + len(route.platform_steps.get(os_name, ())),
+            }
+        )
+    return entries
+
+
 def main() -> int:
     configure()
     parser = argparse.ArgumentParser(description=__doc__)
@@ -331,7 +353,6 @@ def main() -> int:
     parser.add_argument("--base", default=plan.DEFAULT_BASE, help="diff の基準 ref")
     parser.add_argument("--no-diff", action="store_true", help="diff を取らずに全 route を対象にする")
     parser.add_argument("--jobs", type=int, default=0, help="同時実行数（0 は全 job 並列）")
-    parser.add_argument("--os", choices=("linux", "windows"), help="指定した OS の job だけ回す")
     parser.add_argument("--json", action="store_true", help="最後に結果を JSON で出す")
     parser.add_argument("--no-color", action="store_true", help="色と上書き描画を使わない")
     args = parser.parse_args()
@@ -346,7 +367,7 @@ def main() -> int:
         paths = None if args.no_diff else plan.changed_paths(args.base)
         keys = plan.route_keys(paths)
 
-    entries = plan.matrix(keys, args.os)
+    entries = local_entries(keys)
     if not entries:
         print("no job selected", file=sys.stderr)
         return 0

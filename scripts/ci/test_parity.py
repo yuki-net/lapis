@@ -27,10 +27,12 @@ JOB_TO_ROUTE = {
 }
 
 # setup 用の step（runner 準備）は jobs.py の Route フィールドが持つため対象外。
+# `Make Gradle wrapper executable` も runner 準備。gradlew は git 上で実行可能
+# にしてあるので、検証としては持たない。
 SETUP_STEPS = {
     "Check out repository", "Set up Python", "Install Rust toolchain", "Cache Cargo artifacts",
     "Set up Node.js", "Install wasm-bindgen", "Set up Java", "Set up Gradle",
-    "List jobs", "Check results",
+    "Make Gradle wrapper executable", "List jobs", "Check results",
 }
 
 

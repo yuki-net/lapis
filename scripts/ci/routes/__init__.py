@@ -51,8 +51,14 @@ def job_name(route: Route, os_name: str) -> str:
     """GitHub の job 名。`name` に OS を混ぜず、ここで組み立てる。
 
     検証対象が runner の OS と違う場合（Mobile / Android）は `target` を
-    使う。複数 OS で走る route は job 名の重複を避けるため OS を優先する。
+    挟む。複数 OS で走る route は OS を後ろに足して区別する
+    （`Mobile / Android / Windows`）。
     """
-    if route.target and len(route.runs_on) == 1:
-        return f"{route.name} / {route.target}"
-    return f"{route.name} / {OS_LABELS[os_name]}"
+    parts = [route.name]
+    if route.target:
+        parts.append(route.target)
+        if len(route.runs_on) > 1:
+            parts.append(OS_LABELS[os_name])
+    else:
+        parts.append(OS_LABELS[os_name])
+    return " / ".join(parts)

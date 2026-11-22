@@ -75,11 +75,11 @@ class LineTests(unittest.TestCase):
         self.assertEqual(watch.activity_of({}), "")
 
     def test_left_name_is_the_github_job_name(self):
-        """左は GitHub に出る job 名（Mobile / Android など）に統一する。"""
-        line = watch.line_for(
-            entry("mobile"), running_state("mobile", status=state.PASSED), now=200.0, palette=NO_COLOR
-        )
-        self.assertIn("Mobile / Android", line)
+        """左は GitHub に出る job 名（Mobile / Android / Windows など）。"""
+        target = watch.local_entries(["mobile"])[0]
+        line = watch.line_for(target, running_state("mobile", status=state.PASSED), now=200.0, palette=NO_COLOR)
+        self.assertIn(target["name"], line)
+        self.assertTrue(target["name"].startswith("Mobile / Android"))
 
     def test_pending_line_shows_total_steps_before_it_starts(self):
         target = entry("host")
@@ -184,10 +184,12 @@ class TerminateTests(unittest.TestCase):
 
 
 class SelectionTests(unittest.TestCase):
-    def test_entries_come_from_the_plan_matrix(self):
-        keys = plan.route_keys(["clients/web/package.json"])
-        entries = plan.matrix(keys)
-        self.assertEqual([found["job"] for found in entries], ["web"])
+    def test_entries_come_from_the_local_os(self):
+        """手元は 1 台なので、route ごとに 1 つの job（この機械の OS）になる。"""
+        entries = watch.local_entries(["web"])
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["job"], "web")
+        self.assertEqual(entries[0]["os"], watch.local_os())
 
     def test_os_filter_keeps_only_that_os(self):
         entries = plan.matrix(list(plan.ORDER), only_os="windows")
