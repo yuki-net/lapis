@@ -154,7 +154,10 @@ class RunTests(unittest.TestCase):
         """前提不足で skip した step も進捗に数える（1/2 のまま止まって見えない）。"""
         with tempfile.TemporaryDirectory() as directory:
             route = route_with(Step("needs-gradle", ["gradle", "build"], requires=("gradle",)))
+            # gradle は GitHub のランナーに最初から入っているため、実環境の有無に
+            # 頼ると skip されない。前提判定は別テストが担うのでここでは固定する。
             with patch.object(report, "on_github", return_value=False), \
+                 patch.object(run, "missing_prerequisites_for_step", return_value=["gradle"]), \
                  patch.dict(os.environ, {state.ENV: directory}):
                 payload = run.execute(route, None, quiet=True)
                 payload_state = state.read(state.path_for(Path(directory), "test"))
