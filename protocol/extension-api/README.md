@@ -35,7 +35,7 @@ Workspace 間の拡張状態はまだ分離されていないため、Host 全�
 
 `lapis.extension.views` 1.0.0 は `views.json` による表示宣言であり、設定・翻訳の
 `lapis.extension.contributions` とは独立して版を持つ。型の正本は
-`contracts/domain/extension-ui` の `StaticViews`。ID と command は提供元の名前空間に
+`protocol/types/extension-ui` の `StaticViews`。ID と command は提供元の名前空間に
 属し、title は同じ package の既定言語に存在しなければならない。Host は検証した宣言を
 Client に再配布する。Desktop と Web は `content_type` をネイティブ描画器へ接続する。
 アイコン配布はまだ実装されていない。

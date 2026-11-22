@@ -13,18 +13,18 @@ bridge-smoke = []
 
 [dependencies]
 desktop-client = { path = "../../../clients/state" }
-document = { path = "../../../contracts/domain/document" }
-editor-core = { path = "../../../contracts/domain/editor-core" }
+document = { path = "../../../protocol/types/document" }
+editor-core = { path = "../../../protocol/types/editor-core" }
 git = { package = "git-contract", path = "../../../extensions/git/contract" }
-lsp = { path = "../../../contracts/domain/lsp" }
-settings = { path = "../../../contracts/domain/settings" }
-task = { path = "../../../contracts/domain/task" }
+lsp = { path = "../../../protocol/types/lsp" }
+settings = { path = "../../../protocol/types/settings" }
+task = { path = "../../../protocol/types/task" }
 terminal = { package = "terminal-contract", path = "../../../extensions/terminal/contract" }
-workspace = { path = "../../../contracts/domain/workspace" }
+workspace = { path = "../../../protocol/types/workspace" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-client-api = { path = "../../../contracts/protocol" }
-client-core = { path = "../../../clients/transport" }
+client-api = { path = "../../../protocol/wire/client-api" }
+client-core = { path = "../../../protocol/wire-client" }
 console_error_panic_hook = "0.1"
 desktop-ui = { path = "../../../clients/ui" }
 futures-channel = "0.3"
@@ -50,6 +50,6 @@ web-sys = { version = "=0.3.106", features = [
     "Window",
     "console",
 ] }
-wire = { path = "../../../contracts/transport/wire" }
-workbench = { path = "../../../contracts/domain/workbench" }
+wire = { path = "../../../protocol/wire/dto" }
+workbench = { path = "../../../protocol/types/workbench" }
 zeroize.workspace = true

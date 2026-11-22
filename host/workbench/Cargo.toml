@@ -6,6 +6,6 @@ description.workspace = true
 license.workspace = true
 
 [dependencies]
-client-api = { path = "../../contracts/protocol" }
-workbench = { path = "../../contracts/domain/workbench" }
+client-api = { path = "../../protocol/wire/client-api" }
+workbench = { path = "../../protocol/types/workbench" }
 serde_json.workspace = true

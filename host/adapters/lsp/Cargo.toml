@@ -6,10 +6,10 @@ description.workspace = true
 license.workspace = true
 
 [dependencies]
-document = { path = "../../../contracts/domain/document" }
-process = { path = "../../../contracts/domain/process" }
+document = { path = "../../../protocol/types/document" }
+process = { path = "../../../protocol/types/process" }
 futures-channel = "0.3"
-lsp = { path = "../../../contracts/domain/lsp" }
+lsp = { path = "../../../protocol/types/lsp" }
 serde_json.workspace = true
 
 [dev-dependencies]

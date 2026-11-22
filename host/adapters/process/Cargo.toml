@@ -6,8 +6,8 @@ description.workspace = true
 license.workspace = true
 
 [dependencies]
-process = { path = "../../../contracts/domain/process" }
-editor-core = { path = "../../../contracts/domain/editor-core" }
+process = { path = "../../../protocol/types/process" }
+editor-core = { path = "../../../protocol/types/editor-core" }
 sysinfo.workspace = true
 portable-pty.workspace = true
 getrandom.workspace = true

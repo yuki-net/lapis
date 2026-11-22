@@ -117,7 +117,7 @@ delta として受け取る。protocol 0.13 で追加した契約で、Desktop�
   `null` にし、Workspace 相対 path だけでタブ構成とアクティブ文書を伝える。適用側は
   ID が無ければ path で文書を解決する。
 - 購読は Session 単位で受けるが、event は同じ Workspace に接続している全 Session へ
-  同じ連番で配る。`clients/transport` は event 連番の欠落を切断として扱うため、
+  同じ連番で配る。`protocol/wire-client` は event 連番の欠落を切断として扱うため、
   Session ごとに配信自体を絞ると未購読 Session がずれを検出して切断される。
 - 内容は読取り権限で絞る。`workspace.sync` を持たない Session へは `view` を `null` に
   した `workspace.view_changed` を届け、文書 path とカーソル位置を渡さない。絞り込みは

@@ -7,14 +7,14 @@ license.workspace = true
 
 [dependencies]
 desktop-client = { path = "../../../clients/state" }
-editor-core = { path = "../../../contracts/domain/editor-core" }
-settings = { path = "../../../contracts/domain/settings" }
-workspace = { path = "../../../contracts/domain/workspace" }
-workbench = { path = "../../../contracts/domain/workbench" }
+editor-core = { path = "../../../protocol/types/editor-core" }
+settings = { path = "../../../protocol/types/settings" }
+workspace = { path = "../../../protocol/types/workspace" }
+workbench = { path = "../../../protocol/types/workbench" }
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 
 [dev-dependencies]
-localization = { path = "../../../contracts/domain/localization" }
+localization = { path = "../../../protocol/types/localization" }
 terminal = { package = "terminal-contract", path = "../../../extensions/terminal/contract" }

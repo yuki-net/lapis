@@ -6,7 +6,7 @@ description.workspace = true
 license.workspace = true
 
 [dependencies]
-task = { path = "../../../contracts/domain/task" }
-editor-core = { path = "../../../contracts/domain/editor-core" }
+task = { path = "../../../protocol/types/task" }
+editor-core = { path = "../../../protocol/types/editor-core" }
 serde.workspace = true
 serde_json.workspace = true
