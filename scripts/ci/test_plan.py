@@ -24,7 +24,7 @@ class PlanTests(unittest.TestCase):
     def test_route_keys_follow_order(self):
         self.assertEqual(plan.route_keys(None), list(ORDER))
         keys = plan.route_keys(["apps/desktop/app/src/main.rs"])
-        self.assertEqual(keys, [key for key in ORDER if key in {"desktop"}])
+        self.assertEqual(keys, [key for key in ORDER if key in {"desktop", "format", "lint"}])
         self.assertEqual(keys, sorted(keys, key=ORDER.index))
 
     def test_unknown_path_selects_every_route(self):
@@ -68,14 +68,16 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(windows, [key for key in ORDER if "windows" in route_for(key).runs_on])
         self.assertEqual(plan.matrix([], only_os="linux"), [])
 
-    def test_prefer_os_keeps_one_job_per_route(self):
-        """develop は Linux に寄せる。Linux 実装が無い route は元の OS のまま。"""
+    def test_prefer_os_keeps_one_job_per_route_except_always_all_os(self):
+        """develop は Linux に寄せる。全 OS で見たい route だけは両方残す。"""
         entries = plan.matrix(list(ORDER), prefer_os="linux")
-        self.assertEqual(len(entries), len(ORDER))
-        for entry in entries:
-            route = route_for(entry["job"])
-            expected = "linux" if "linux" in route.runs_on else route.runs_on[0]
-            self.assertEqual(entry["os"], expected, entry["job"])
+        for route in ROUTES.values():
+            got = sorted(entry["os"] for entry in entries if entry["job"] == route.key)
+            if route.always_all_os:
+                self.assertEqual(got, sorted(route.runs_on), route.key)
+            else:
+                expected = ["linux"] if "linux" in route.runs_on else [route.runs_on[0]]
+                self.assertEqual(got, expected, route.key)
 
     def test_job_name_uses_target_when_the_runner_os_is_not_the_subject(self):
         """Mobile は Android を検証するので job 名に対象を出す。"""
@@ -164,6 +166,8 @@ class PlanTests(unittest.TestCase):
         reachable = set()
         for _, jobs in PATH_RULES:
             reachable.update(jobs)
+        # format / lint は path 規則ではなく rust route から自動で足す。
+        reachable.update({"format", "lint"})
         self.assertEqual(reachable, set(ROUTES))
 
     def test_cli_outputs_match_the_library(self):

@@ -39,10 +39,6 @@ EXTENSION_STEPS = (
            "--target-dir", "target/terminal-component", "--debug"),
     ),
     Step(
-        "Check terminal component formatting",
-        ["cargo", "fmt", "--manifest-path", "extensions/terminal/component/Cargo.toml", "--", "--check"],
-    ),
-    Step(
         "Lint terminal component",
         ["cargo", "clippy", "--locked", "--manifest-path", "extensions/terminal/component/Cargo.toml",
          "--target", "wasm32-wasip2", "--target-dir", "target/terminal-component", "--", "-D", "warnings"],
@@ -77,9 +73,7 @@ ROUTE = Route(
     cache=True,
     steps=(
         Step("Check architecture", py("scripts/check.py", "rust_core", "architecture")),
-        Step("Check formatting", py("scripts/check.py", "rust_core", "format")),
         Step("Test Rust Core", py("scripts/check.py", "rust_core", "test")),
         *EXTENSION_STEPS,
-        Step("Lint Rust Core", py("scripts/check.py", "rust_core", "lint")),
     ),
 )

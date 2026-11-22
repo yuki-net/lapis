@@ -12,7 +12,7 @@ import sys
 from scripts.ci.console import configure
 from scripts.ci.model import RUNNERS, RUST_TOOLCHAIN, local_os, requirements
 from scripts.ci.paths import ALL_JOBS, changed_paths, jobs_for_paths, worktree_paths
-from scripts.ci.routes import ORDER, job_name, route_for
+from scripts.ci.routes import ORDER, ROUTES, job_name, route_for
 
 DEFAULT_BASE = "origin/develop"
 
@@ -20,9 +20,14 @@ DEFAULT_BASE = "origin/develop"
 def route_keys(paths: list[str] | None) -> list[str]:
     """変更 path から実行すべき route key を ORDER 順で返す。
 
+    Rust のコードが変わるなら、対象 route に加えて `format` と `lint` を
+    足す（整形・静的検査は全体に掛けるものなので、path 規則に書かない）。
+
     paths が None（base が見つからない）場合は全 route を返す。
     """
     selected = ALL_JOBS if paths is None else jobs_for_paths(paths)
+    if any(ROUTES[key].rust for key in selected):
+        selected = selected | {"format", "lint"}
     return [key for key in ORDER if key in selected]
 
 
@@ -65,7 +70,7 @@ def matrix(keys: list[str], only_os: str | None = None, prefer_os: str | None = 
     entries = []
     for key in keys:
         route = route_for(key)
-        if prefer_os is not None and prefer_os in route.runs_on:
+        if prefer_os is not None and prefer_os in route.runs_on and not route.always_all_os:
             os_names = (prefer_os,)
         else:
             os_names = tuple(

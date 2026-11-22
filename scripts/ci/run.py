@@ -422,8 +422,10 @@ def execute(
 
     if not report.on_github():
         print()
-        print(report.summary_table(route.name, results))
-    report.write_summary(report.summary_table(route.name, results))
+    table = report.summary_table(route.name, results)
+    # CI のログからも step 別の所要時間を拾えるようにする（サマリは HTML のみで grep できない）。
+    print(table, flush=True)
+    report.write_summary(table)
     return payload
 
 
@@ -432,6 +434,9 @@ def missing_prerequisites_for_step(step) -> list[str]:
     for name in step.requires:
         if name == "posix":
             if os.name == "nt":
+                missing.append(name)
+        elif name == "windows":
+            if os.name != "nt":
                 missing.append(name)
         else:
             command = PREREQUISITES.get(name)

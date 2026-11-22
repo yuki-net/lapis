@@ -8,14 +8,47 @@
 import sys
 
 from scripts.ci.model import OS_LABELS, RUNNERS, Route
-from scripts.ci.routes import desktop, dev_commands, host, mobile, repository, rust_core, sites_docs, web
+from scripts.ci.routes import (
+    desktop,
+    dev_commands,
+    format as format_route,
+    host,
+    lint,
+    mobile,
+    repository,
+    rust_core,
+    sites_docs,
+    web,
+)
 
 # 実行順。matrix の並び順もここに従う。
-ORDER = ("repository", "dev_commands", "rust_core", "host", "desktop", "mobile", "web", "sites_docs")
+ORDER = (
+    "repository",
+    "format",
+    "lint",
+    "dev_commands",
+    "rust_core",
+    "host",
+    "desktop",
+    "mobile",
+    "web",
+    "sites_docs",
+)
 
 ROUTES: dict[str, Route] = {
     module.ROUTE.key: module.ROUTE
-    for module in (repository, dev_commands, rust_core, host, desktop, mobile, web, sites_docs)
+    for module in (
+        repository,
+        format_route,
+        lint,
+        dev_commands,
+        rust_core,
+        host,
+        desktop,
+        mobile,
+        web,
+        sites_docs,
+    )
 }
 
 
