@@ -1,6 +1,6 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="Build Docs Site" type="js.build_tools.npm" factoryName="npm">
-    <package-json value="$PROJECT_DIR$/docs/site/package.json" />
+    <package-json value="$PROJECT_DIR$/sites/docs/package.json" />
     <command value="run" />
     <scripts>
       <script value="build" />
