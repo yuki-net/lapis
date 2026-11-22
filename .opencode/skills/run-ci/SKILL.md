@@ -11,7 +11,7 @@ route の検証内容は `scripts/ci/routes/<route>.py`、変更 path との対�
 
 ## 手順
 
-1. 何を検証すべきか決める。`python -m scripts.ci.plan --selected --base HEAD~1` が変更 path から route を選ぶ。
+1. 何を検証すべきか決める。`python -m scripts.ci.plan --selected --reason` が変更 path から route を選ぶ。既定は PR の差分（three-dot）と未コミットの和。`--worktree` で未コミットだけ、`--full` で全部。
 2. route を実行する。
 
 ```sh
@@ -23,7 +23,7 @@ python -m scripts.ci.run rust_core --json
 3. 失敗したら、その step のログだけ読む。全文は `.ci/logs/<route>/<step>.log` に落ちている。
 4. 直したら同じ route を再実行する。全 route を回す必要はない。
 
-複数 route をまとめて回すときは `python -m scripts.ci.watch` を使う。GitHub の matrix と同じく route × OS を並列で起動し、進捗・経過・成否を 1 画面に出す。`Ctrl+C` で起動した job ごと止まる。
+複数 route をまとめて回すときは `python -m scripts.ci.watch` を使う。手元の OS で 1 job/route を並列に起動し、進捗・成否を 1 画面に出す。`Ctrl+C` で起動した job ごと止まる。範囲は `--worktree` / `--full` で切り替える。
 
 所要時間の内訳が要るときは `python -m scripts.ci.measure <route>` を使う（step 別の分数と占有比が出る）。
 

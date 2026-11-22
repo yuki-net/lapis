@@ -144,6 +144,47 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(json.loads(buffer.getvalue()), list(ORDER))
         self.assertEqual(plan.matrix(["desktop"])[0]["job"], "desktop")
 
+    def test_full_mode_selects_every_route_without_touching_git(self):
+        import io
+        from contextlib import redirect_stdout
+
+        buffer = io.StringIO()
+        with patch.object(plan, "changed_paths") as diff, patch.object(plan, "worktree_paths") as worktree, \
+             patch("sys.argv", ["plan", "--selected", "--full"]), redirect_stdout(buffer):
+            self.assertEqual(plan.main(), 0)
+        diff.assert_not_called()
+        worktree.assert_not_called()
+        self.assertEqual(json.loads(buffer.getvalue()), list(ORDER))
+
+    def test_worktree_mode_ignores_committed_changes(self):
+        import io
+        from contextlib import redirect_stdout
+
+        buffer = io.StringIO()
+        with patch.object(plan, "worktree_paths", return_value=["docs/ci.md"]), \
+             patch("sys.argv", ["plan", "--selected", "--worktree"]), redirect_stdout(buffer):
+            self.assertEqual(plan.main(), 0)
+        self.assertEqual(json.loads(buffer.getvalue()), ["repository"])
+
+    def test_default_mode_combines_pull_request_and_worktree(self):
+        with patch.object(plan, "changed_paths", return_value=["clients/web/package.json"]) as changed:
+            scope, paths = plan.select_paths(
+                type("Args", (), {"full": False, "worktree": False, "base": "origin/develop"})()
+            )
+        changed.assert_called_once_with("origin/develop")
+        self.assertEqual(paths, ["clients/web/package.json"])
+        self.assertIn("origin/develop", scope)
+
+    def test_unknown_base_falls_back_to_every_route(self):
+        import io
+        from contextlib import redirect_stdout
+
+        buffer = io.StringIO()
+        with patch.object(plan, "changed_paths", return_value=None), \
+             patch("sys.argv", ["plan", "--selected"]), redirect_stdout(buffer):
+            self.assertEqual(plan.main(), 0)
+        self.assertEqual(json.loads(buffer.getvalue()), list(ORDER))
+
 
 if __name__ == "__main__":
     unittest.main()

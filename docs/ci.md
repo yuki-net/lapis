@@ -31,6 +31,28 @@ CI で走る検証は、ローカルでも同じものが同じコマンドで�
 - `runs_on` に無い OS では job 自体が生まれない。**skip で緑にならない**
 - runner を絞りたいときは `python -m scripts.ci.plan --only-os linux`。`ci.yml` も route 定義も変えずに、その OS の job だけを matrix に入れられる
 
+## どこを見て route を選ぶか
+
+`plan` と `watch` は、どの範囲の変更を見るかを 3 つから選ぶ。既定は「PR の差分＋未コミット」。
+
+| モード | コマンド | 見る範囲 |
+| --- | --- | --- |
+| 既定 | （指定なし） | `base...HEAD`（three-dot）と未コミット（staged/unstaged/untracked）の**和** |
+| 未コミットだけ | `--worktree` | 作業ツリーの変更だけ。コミット済みは見ない |
+| 全部 | `--full`（`--no-diff` も可） | diff を取らず全 route |
+
+- **three-dot** を使うのは、base 側にしか無いコミットを「削除」と誤認しないため。base が HEAD の祖先なら `base..HEAD` と同じ結果になる
+- 未コミットには `git diff HEAD` に加えて `ls-files --others` を含める。新規ディレクトリを足したときに route を取りこぼさない
+- `--reason` で、どの範囲を見て何 route 選んだかを出す
+
+```powershell
+python -m scripts.ci.plan --selected --reason
+# origin/develop...HEAD + worktree: 12 changed path(s) select 3 route(s)
+```
+
+- base が解決できない（浅い clone、CI 外）場合は全 route に倒す。**取りこぼすより回しすぎる方を選ぶ**
+- CI では作業ツリーが clean なので、既定は実質 PR の差分だけになる
+
 ## route 一覧
 
 `python -m scripts.ci.run --list` で確認できる。
@@ -70,8 +92,9 @@ python -m scripts.ci.measure host                # step 別の所要時間を並
 ## まとめて回す（GitHub と同じ並列）
 
 ```powershell
-python -m scripts.ci.watch                  # 変更 path から選ぶ
-python -m scripts.ci.watch --no-diff        # 全 route
+python -m scripts.ci.watch                  # PR の差分 + 未コミット
+python -m scripts.ci.watch --worktree       # 未コミットの変更だけ
+python -m scripts.ci.watch --full           # 全 route
 python -m scripts.ci.watch host desktop     # route を指定
 python -m scripts.ci.watch --jobs 2         # 同時実行数を絞る
 ```

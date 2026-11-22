@@ -258,7 +258,7 @@ def spawn(job: str, state_dir: Path) -> subprocess.Popen:
     )
 
 
-def run(entries: list[dict], jobs: int, colors: bool) -> int:
+def run(entries: list[dict], jobs: int, colors: bool, scope: str = "") -> int:
     state_dir = ROOT / ".ci" / "state"
     shutil.rmtree(state_dir, ignore_errors=True)
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -274,7 +274,7 @@ def run(entries: list[dict], jobs: int, colors: bool) -> int:
         now = time.time()
         raw = state.read_all(state_dir)
         states = merged_states(entries, raw, codes) if final else raw
-        lines = ["CI", ""]
+        lines = [f"CI  {scope}" if scope else "CI", ""]
         for entry in entries:
             lines.append(line_for(entry, status_of(entry, raw, codes), now, palette))
         lines.append("")
@@ -351,7 +351,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("route", nargs="*", help="実行する route（省略時は変更 path から選ぶ）")
     parser.add_argument("--base", default=plan.DEFAULT_BASE, help="diff の基準 ref")
-    parser.add_argument("--no-diff", action="store_true", help="diff を取らずに全 route を対象にする")
+    parser.add_argument(
+        "--full",
+        "--no-diff",
+        dest="full",
+        action="store_true",
+        help="差分を取らずに全 route を対象にする",
+    )
+    parser.add_argument(
+        "--worktree",
+        action="store_true",
+        help="コミット済みの差分を無視し、未コミットの変更だけを対象にする",
+    )
     parser.add_argument("--jobs", type=int, default=0, help="同時実行数（0 は全 job 並列）")
     parser.add_argument("--json", action="store_true", help="最後に結果を JSON で出す")
     parser.add_argument("--no-color", action="store_true", help="色と上書き描画を使わない")
@@ -363,13 +374,14 @@ def main() -> int:
         if unknown:
             print(f"unknown route: {', '.join(unknown)}", file=sys.stderr)
             return 2
+        scope = "route 指定"
     else:
-        paths = None if args.no_diff else plan.changed_paths(args.base)
+        scope, paths = plan.select_paths(args)
         keys = plan.route_keys(paths)
 
     entries = local_entries(keys)
     if not entries:
-        print("no job selected", file=sys.stderr)
+        print(f"no job selected ({scope})", file=sys.stderr)
         return 0
 
     jobs = args.jobs if args.jobs > 0 else len(entries)
@@ -379,7 +391,7 @@ def main() -> int:
         and os.environ.get("NO_COLOR") is None
         and sys.stdout.isatty()
     )
-    code = run(entries, jobs, colors=colors)
+    code = run(entries, jobs, colors=colors, scope=scope)
 
     if args.json:
         states = state.read_all(ROOT / ".ci" / "state")

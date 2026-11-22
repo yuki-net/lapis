@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.ci.jobs import ORDER, ROUTES
-from scripts.ci.paths import ALL_JOBS, PATH_RULES, jobs_for_paths
+from scripts.ci.paths import ALL_JOBS, PATH_RULES, jobs_for_paths, worktree_paths
 from scripts.ci.gate import errors
 from scripts.ci.paths import changed_paths
 
@@ -294,6 +294,70 @@ class TestPathRouting(unittest.TestCase):
                 git("mv", "child.txt", "renamed.txt")
                 git("commit", "-m", "rename")
                 self.assertEqual(set(changed_paths(child)), {"child.txt", "renamed.txt"})
+
+    def test_diff_ignores_commits_that_only_the_base_has(self):
+        """PR の差分は merge-base から見る（base 側の変更を削除と誤認しない）。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def git(*args):
+                return subprocess.check_output(
+                    ["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                     "-c", "core.hooksPath=", *args],
+                    cwd=root,
+                ).decode().strip()
+
+            git("init")
+            (root / "shared.txt").write_text("a")
+            git("add", ".")
+            git("commit", "-m", "base")
+            base = git("rev-parse", "HEAD")
+
+            # base 側にだけ進んだコミット。
+            (root / "base-only.txt").write_text("x")
+            git("add", ".")
+            git("commit", "-m", "base only")
+            moved_base = git("rev-parse", "HEAD")
+
+            # base から分岐した feature。
+            git("checkout", "-b", "feature", base)
+            (root / "feature-only.txt").write_text("y")
+            git("add", ".")
+            git("commit", "-m", "feature")
+
+            with patch("scripts.ci.paths.ROOT", root):
+                self.assertEqual(
+                    changed_paths(moved_base, include_worktree=False), ["feature-only.txt"]
+                )
+
+    def test_changed_paths_includes_uncommitted_and_untracked(self):
+        """未コミットの変更と新規ファイルを PR の差分に足す。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def git(*args):
+                return subprocess.check_output(
+                    ["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                     "-c", "core.hooksPath=", *args],
+                    cwd=root,
+                ).decode().strip()
+
+            git("init")
+            (root / "tracked.txt").write_text("a")
+            git("add", ".")
+            git("commit", "-m", "base")
+
+            (root / "tracked.txt").write_text("b")
+            (root / "untracked.txt").write_text("new")
+
+            with patch("scripts.ci.paths.ROOT", root):
+                self.assertEqual(worktree_paths(), ["tracked.txt", "untracked.txt"])
+                self.assertEqual(
+                    changed_paths("HEAD", include_worktree=False), []
+                )
+                self.assertEqual(
+                    changed_paths("HEAD"), ["tracked.txt", "untracked.txt"]
+                )
 
 
 if __name__ == "__main__":

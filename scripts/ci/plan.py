@@ -14,7 +14,7 @@ from scripts.ci.console import configure
 from scripts.ci.model import RUNNERS
 from scripts.ci.routes import ORDER, job_name
 from scripts.ci.jobs import RUST_TOOLCHAIN, ROUTES, requirements, route_for
-from scripts.ci.paths import ALL_JOBS, changed_paths, jobs_for_paths
+from scripts.ci.paths import ALL_JOBS, changed_paths, jobs_for_paths, worktree_paths
 
 DEFAULT_BASE = "origin/develop"
 
@@ -71,6 +71,20 @@ def matrix(keys: list[str], only_os: str | None = None) -> list[dict]:
     return entries
 
 
+def select_paths(args) -> tuple[str, list[str] | None]:
+    """どの範囲を見るかを決める。
+
+    - `--full`: 全部（paths は None）
+    - `--worktree`: 未コミットの変更だけ
+    - 既定: PR の差分（three-dot）と未コミットの変更の和
+    """
+    if args.full:
+        return "full", None
+    if args.worktree:
+        return "worktree", worktree_paths()
+    return f"{args.base}...HEAD + worktree", changed_paths(args.base)
+
+
 def main() -> int:
     configure()
     parser = argparse.ArgumentParser(description=__doc__)
@@ -85,7 +99,18 @@ def main() -> int:
     )
     parser.add_argument("--reason", action="store_true", help="判定理由を stderr に出す")
     parser.add_argument("--list", action="store_true", help="全 route と前提を表示する")
-    parser.add_argument("--no-diff", action="store_true", help="diff を取らずに全 route を対象にする")
+    parser.add_argument(
+        "--full",
+        "--no-diff",
+        dest="full",
+        action="store_true",
+        help="差分を取らずに全 route を対象にする",
+    )
+    parser.add_argument(
+        "--worktree",
+        action="store_true",
+        help="コミット済みの差分を無視し、未コミットの変更だけを対象にする",
+    )
     parser.add_argument(
         "--only-os",
         choices=("linux", "windows"),
@@ -102,20 +127,16 @@ def main() -> int:
             )
         return 0
 
-    paths = None if args.no_diff else changed_paths(args.base)
+    scope, paths = select_paths(args)
     keys = route_keys(paths)
     entries = matrix(keys, args.only_os)
     if args.reason:
         if paths is None:
-            print(f"base {args.base} not found; selecting every route", file=sys.stderr)
-        elif args.only_os:
-            print(
-                f"{len(paths)} changed path(s) select {len(keys)} route(s); "
-                f"{len(entries)} job(s) run on {args.only_os}",
-                file=sys.stderr,
-            )
+            detail = "no diff (full run)"
         else:
-            print(f"{len(paths)} changed path(s) select {len(keys)} route(s)", file=sys.stderr)
+            detail = f"{len(paths)} changed path(s)"
+        suffix = f"; {len(entries)} job(s) on {args.only_os}" if args.only_os else ""
+        print(f"{scope}: {detail} select {len(keys)} route(s){suffix}", file=sys.stderr)
 
     if args.github_outputs:
         # git diff を 1 回で済ませ、GITHUB_OUTPUT 用の key=value を出す。

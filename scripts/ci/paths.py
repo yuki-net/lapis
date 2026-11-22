@@ -91,6 +91,8 @@ PATH_RULES = [
     # package 生成と Host の読み込みを同じ fixture で検証する。
     (["scripts/extensions/"], {"repository", "rust_core", "host"}),
     (["scripts/"], {"repository"}),
+    # エージェント用の設定・スキルはコードではない。
+    ([".opencode/"], {"repository"}),
     # launcher は release/trusted-keys.json を build 時に埋め込む。
     (["release/"], {"repository", "desktop"}),
 
@@ -134,19 +136,64 @@ def should_run(job: str, paths: list[str], force_all: bool = False) -> bool:
     return job in jobs_for_paths(paths)
 
 
-def changed_paths(base_ref: str = "origin/develop") -> list[str] | None:
-    """base_ref との差分で変更された path のリストを返す。
-
-    base が解決できない場合（CI 外など）は None を返し、呼び出し側が
-    「全 route を実行」に倒せるようにする。
-    """
+def _git(*args: str) -> str | None:
+    """git を実行して標準出力を返す。失敗したら None。"""
     try:
-        output = subprocess.check_output(
-            ["git", "diff", "--no-renames", "--name-only", "--relative", base_ref, "HEAD"],
+        return subprocess.check_output(
+            ["git", *args],
             cwd=ROOT,
             text=True,
             encoding="utf-8",
+            # git の改行警告などを判定結果に混ぜない。
+            stderr=subprocess.DEVNULL,
         )
-    except subprocess.CalledProcessError:
+    except (subprocess.CalledProcessError, FileNotFoundError):
         return None
+
+
+def _lines(output: str) -> list[str]:
     return [line for line in output.strip().splitlines() if line]
+
+
+def pr_paths(base_ref: str) -> list[str] | None:
+    """PR が base から持ち込む変更。
+
+    `A...B`（three-dot）は merge-base からの差分になる。base 側にしか無い
+    コミットを「削除」と誤認しないため、PR の差分はこちらで見る。base が
+    HEAD の祖先なら結果は `A..B` と同じ。解決できなければ None。
+    """
+    output = _git("diff", "--no-renames", "--name-only", "--relative", f"{base_ref}...HEAD")
+    return None if output is None else _lines(output)
+
+
+def worktree_paths() -> list[str] | None:
+    """まだコミットしていない変更（staged + unstaged + untracked）。
+
+    `git diff HEAD` は untracked を含まないので、`ls-files --others` で足す。
+    新規ディレクトリを足したときに route を取りこぼさないため。
+    """
+    tracked = _git("diff", "--no-renames", "--name-only", "--relative", "HEAD")
+    untracked = _git("ls-files", "--others", "--exclude-standard")
+    if tracked is None or untracked is None:
+        return None
+    return sorted(set(_lines(tracked)) | set(_lines(untracked)))
+
+
+def changed_paths(base_ref: str = "origin/develop", include_worktree: bool = True) -> list[str] | None:
+    """変更された path のリストを返す。
+
+    - `include_worktree=True`: PR の差分と、まだコミットしていない変更の和。
+      手元では「PR 全体＋いま触っている所」、CI では作業ツリーが clean なので
+      PR の差分だけになる。
+    - base が解決できない場合（浅い clone、CI 外など）は None を返し、
+      呼び出し側が「全 route を実行」に倒せるようにする。
+    """
+    committed = pr_paths(base_ref)
+    if committed is None:
+        return None
+    if not include_worktree:
+        return committed
+    pending = worktree_paths()
+    if pending is None:
+        return committed
+    return sorted(set(committed) | set(pending))
