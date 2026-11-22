@@ -14,8 +14,9 @@ ROUTE = Route(
     name="Desktop",
     runs_on=("windows",),
     # crate 移設で Cargo の path fingerprint が無効になり、cold build に
-    # なることがある。テスト本体は 20 分、事前ビルドは別枠で余裕を持たせる。
-    timeout_minutes=75,
+    # なることがある。テスト本体は 40 分（cold で 20 分を超えた）、
+    # 事前ビルドは別枠で余裕を持たせる。
+    timeout_minutes=90,
     python=PYTHON_VERSION,
     rust=True,
     rust_components="rustfmt, clippy",
@@ -43,7 +44,7 @@ ROUTE = Route(
              "--target", "wasm32-wasip2", "--target-dir", "target/terminal-component"],
             timeout_minutes=12,
         ),
-        Step("Test Desktop", py("scripts/check.py", "desktop", "test"), timeout_minutes=20),
+        Step("Test Desktop", py("scripts/check.py", "desktop", "test"), timeout_minutes=40),
         # lapis（Desktop 全体）をビルドする必要があるテスト。Desktop の
         # ビルド済み環境でだけ実行する。Host ジョブでは lapis のビルドが
         # job の上限を超える。
