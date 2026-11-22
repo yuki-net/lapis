@@ -8,6 +8,7 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 | --- | --- | --- |
 | `apps/desktop/` | Desktop の起動 entry・Composition Root・表示状態の保存 | 共通 UI の Window / Panel 実装、Host 上の実行資源 |
 | `clients/` | Client の Window、Panel、Tab、focus、selection、表示 cache | Host 上の実行資源 |
+| `apps/web/` | Web の Wasm entry（ページ起動、Host 接続、prototype backend）と配信ページ | Desktop と共通の UI 実装、Host の正規状態 |
 | `apps/launcher/` | staging 済み package の適用と本体の起動、および検証・staging の共通実装 | 更新モードの設定、同意の判断、アプリの実行 |
 | `contracts/domain/` | Transport 非依存の値・ドメイン規則・port | GPUI、通信、外部プロセスの具体実装 |
 | `contracts/domain/extension-ui/` | 拡張が公開する UI 宣言の語彙（配置・表示名・アイコン・表示条件、`UiContribution` / `FeatureDescriptor`） | GPUI の View・Entity 生成、表示状態の解決、Feature の実装 |
@@ -161,12 +162,13 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 
 ## UI の target 分割
 
-- `clients/ui` は単一 crate（`desktop-ui`）のまま、Dashboard の Layout と Window の所有を Shell が担う。target 固有の起動 entry は `apps/desktop/app`（Desktop）と `clients/web/wasm`（Web）が持つ。
+- `clients/ui` は単一 crate（`desktop-ui`）のまま、Dashboard の Layout と Window の所有を Shell が担う。target 固有の起動 entry は `apps/desktop/app`（Desktop）と `apps/web/wasm`（crate `web`、Web）が持つ。
 - `kit` は tokens / theme / components / `LayoutProfile` / `InteractionPolicy` を持ち、Desktop と Web の両方から使う。kit は Host や Client の状態を所有しない。
 - `apps/desktop/app` はネイティブ window の起動（`run`）と Composition Root を持ち、`desktop_ui::desktop_application` / `initialize` / `open_desktop_window` / `on_last_window_closed` をイベントループから呼ぶ。
 - `clients/ui/src/desktop` は window options と `window_host`（Window と Feature の所有、WindowGroup）を持つ。`window_host` は両 target の Shell / Root が共有するため、Desktop 専用の entry として切り出さない。
-- `web` はブラウザーの起動（`run_web`）、wasm 用の backend 組み立て、prototype backend を持つ。ネイティブではビルドしない。
+- Web の起動（`run_web`）、wasm 用の backend 組み立て、prototype backend、Host 接続の wasm entry は `apps/web/wasm`（crate `web`）が持つ。ネイティブではビルドしない。
 - 両 target が共有する `DesktopServices` / `InitialView` / `WindowFactory` / `open_desktop_window` は crate ルートの `app` に置く。target 固有のコードを `app` へ戻さない。
+- target 別の entry が共通 UI を起動する際のフォント・App Global・Keymap・最初の Window の組み立ては `entry` に集約し、platform 固有の初期化だけを各 app が行う。
 - 共通 UI 部品は `kit::components` の wrapper（popup / menu / scroll / row / surface など）を経由して使い、Feature が同じ見た目を個別に組み立てない。
 
 ### 描画系 Feature の wrapper 適用範囲

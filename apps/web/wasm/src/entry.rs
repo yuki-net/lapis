@@ -1,15 +1,6 @@
 //! ブラウザーでDesktop UIを起動する境界。
 
-#[cfg(target_family = "wasm")]
-mod prototype;
-#[cfg(target_family = "wasm")]
-mod startup;
-
-#[cfg(target_family = "wasm")]
-pub use startup::run_web;
-
 use std::{
-    borrow::Cow,
     cell::{Cell, RefCell},
     path::PathBuf,
     sync::Arc,
@@ -29,7 +20,7 @@ use terminal::TerminalBackend;
 use wasm_bindgen::prelude::*;
 use workspace::WorkspaceSearchBackend;
 
-use crate::{DesktopServices, InitialView};
+use desktop_ui::{DesktopServices, InitialView};
 
 thread_local! {
     /// このページが接続した Host URL。設定の接続ページが読み取る。
@@ -51,6 +42,15 @@ fn web_access() -> Option<desktop_client::WebAccess> {
 thread_local! {
     static APPLICATION: RefCell<Option<gpui_preview::ApplicationHandle>> = const { RefCell::new(None) };
     static READY: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Workspace 切替や URL 通知を共通 UI から呼べるようにする。
+fn install_bridge() {
+    desktop_ui::web_bridge::install(desktop_ui::web_bridge::WebBridge {
+        host_sessions,
+        task_selected: notify_task_selected,
+        workspace_switched: notify_workspace_switched,
+    });
 }
 
 #[wasm_bindgen::prelude::wasm_bindgen]
@@ -77,6 +77,7 @@ pub async fn start(
     client_id: String,
 ) -> Result<Option<String>, JsValue> {
     console_error_panic_hook::set_once();
+    install_bridge();
     let Some(url) = url else {
         return start_without_host(backend_preference);
     };
@@ -128,11 +129,14 @@ fn requested_task() -> Option<editor_core::ConversationId> {
 }
 
 /// 切替後の接続情報をページへ渡し、URL と保存済みの選択を更新させる。
-pub(crate) fn notify_workspace_switched(info: &desktop_client::web_host::ConnectionInfo) {
+fn notify_workspace_switched() {
+    let Some(info) = desktop_client::web_host::connection_info() else {
+        return;
+    };
     let Some(window) = web_sys::window() else {
         return;
     };
-    let Ok(detail) = serde_json::to_string(info) else {
+    let Ok(detail) = serde_json::to_string(&info) else {
         return;
     };
     let init = web_sys::CustomEventInit::new();
@@ -158,11 +162,11 @@ pub(crate) fn notify_task_selected(task: &str) {
 }
 
 fn start_prototype(backend_preference: &str) -> Result<(), String> {
-    let backend = Arc::new(crate::web::prototype::PrototypeBackend::new());
+    let backend = Arc::new(crate::prototype::PrototypeBackend::new());
     launch(
         backend,
-        crate::web::prototype::ROOT,
-        Some(PathBuf::from(crate::web::prototype::ROOT).join("README.md")),
+        crate::prototype::ROOT,
+        Some(PathBuf::from(crate::prototype::ROOT).join("README.md")),
         backend_preference,
     )
 }
@@ -258,7 +262,7 @@ pub(crate) fn host_sessions() -> Result<(EditorSession, DesktopServices), String
     .with_extension_terminal(true);
     // 表示用の Workspace 名と切替候補は既存の ConnectionInfo をそのまま使う。
     if let Some(info) = desktop_client::web_host::connection_info() {
-        services = services.with_connection_identity(crate::ConnectionIdentity {
+        services = services.with_connection_identity(desktop_ui::ConnectionIdentity {
             host_name: Some(info.host_name),
             host_id: info.host_id,
             workspace_name: Some(info.workspace_name),
@@ -267,7 +271,7 @@ pub(crate) fn host_sessions() -> Result<(EditorSession, DesktopServices), String
             workspaces: info
                 .workspaces
                 .into_iter()
-                .map(|workspace| crate::WorkspaceOption {
+                .map(|workspace| desktop_ui::WorkspaceOption {
                     id: workspace.id,
                     name: workspace.name,
                 })
@@ -292,17 +296,11 @@ fn launch_host(backend_preference: &str) -> Result<(), String> {
 }
 
 fn run(session: EditorSession, services: DesktopServices, backend_preference: &str) {
-    let mut fonts = vec![
-        Cow::<'static, [u8]>::Borrowed(include_bytes!("../../assets/IBMPlexSans-Regular.ttf")),
-        Cow::<'static, [u8]>::Borrowed(include_bytes!("../../assets/IBMPlexSans-SemiBold.ttf")),
-    ];
-    // UI 用の IBM Plex Sans だけではターミナルの罫線・ブロック要素を描けない。
-    fonts.extend(crate::bundled_font::fonts());
-    let handle = crate::run_web(
+    let handle = crate::startup::run_web(
         session,
         services,
         InitialView::default(),
-        fonts,
+        desktop_ui::web_fonts(),
         backend_preference,
         || READY.with(|ready| ready.set(true)),
     );

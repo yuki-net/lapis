@@ -83,7 +83,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         let mut command = Command::new(desktop);
         command.env("LAPIS_DEV_BUNDLED_REFRESH", "1");
         if env::var_os("LAPIS_WEB_DIST").is_none() {
-            command.env("LAPIS_WEB_DIST", root.join("clients/web/dist"));
+            command.env("LAPIS_WEB_DIST", root.join("apps/web/dist"));
         }
         command
             .current_dir(root)
@@ -315,7 +315,7 @@ fn hot_reload(root: &Path, arguments: &[OsString]) -> Result<i32, Box<dyn std::e
         let mut command = Command::new(&dx);
         command.env("LAPIS_DEV_BUNDLED_REFRESH", "1");
         if env::var_os("LAPIS_WEB_DIST").is_none() {
-            command.env("LAPIS_WEB_DIST", root.join("clients/web/dist"));
+            command.env("LAPIS_WEB_DIST", root.join("apps/web/dist"));
         }
         let status = command
             .current_dir(root)

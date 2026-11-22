@@ -94,6 +94,7 @@ ALLOWED = {
     "desktop_persistence": {"desktop_persistence", "desktop_client", "models"},
     "desktop_entry": {"desktop_entry", "ui", "desktop_client", "desktop_persistence", "desktop_launcher", "host", "runtime", "application", "infrastructure", "transport", "models", "protocol"},
     "desktop_launcher": {"desktop_launcher"},
+    "web_entry": {"web_entry", "ui", "desktop_client", "models", "protocol", "client_core"},
     "client": {"client", "models", "protocol", "client_core"},
     "client_core": {"client_core", "models", "protocol"},
 }
@@ -124,6 +125,7 @@ def layer(manifest, root):
         ("host/tasks/", "runtime"),
         ("host/transport/", "transport"),
         ("host/app/", "host"), ("clients/ui/", "ui"),
+        ("apps/web/", "web_entry"),
         ("clients/state/", "desktop_client"),
         ("apps/desktop/persistence/", "desktop_persistence"),
         ("apps/launcher/", "desktop_launcher"),

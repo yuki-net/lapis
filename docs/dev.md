@@ -68,7 +68,7 @@ Hot Reload は次を守ります。
 
 通常の初回接続は、Desktop が管理する Local Host を使います。別起動 Host の Web 招待管理は対象外です。
 
-1. `clients/web` で `npm ci` と `npm run build` を実行します。Node.js 24、`wasm32-unknown-unknown`、`wasm-bindgen-cli` 0.2.129 が必要です。
+1. `apps/web` で `npm ci` と `npm run build` を実行します。Node.js 24、`wasm32-unknown-unknown`、`wasm-bindgen-cli` 0.2.129 が必要です。
 2. `cargo dev` で Desktop と Local Host を起動し、設定の「Web 接続」を開きます。
 3. 同一 PC または Tailscale のアドレスを選択して公開を開始し、招待リンクをコピーします。
 4. 同じ PC または Tailscale 内のブラウザーで招待リンクを開きます。リンクは5分間有効で一回限りです。
@@ -95,7 +95,7 @@ Desktop からは設定 → 接続 → Web 接続で、いま使える候補（�
 
 | 用途 | 値 | 理由 |
 | --- | --- | --- |
-| ページと WebSocket | `4747` 固定 | `Run Web (Bridge)` は `--listen 127.0.0.1:4747 --dist clients/web/dist` で同じ入口から両方を配信する。ブラウザーはこの URL だけを開く |
+| ページと WebSocket | `4747` 固定 | `Run Web (Bridge)` は `--listen 127.0.0.1:4747 --dist apps/web/dist` で同じ入口から両方を配信する。ブラウザーはこの URL だけを開く |
 | bridge 単体の既定 | `4757` | `--listen` を省いたときの待受。ページと別ポートに分ける場合は、ページ入口の `/remote` を bridge へ転送する別の設定が必要。`lapis-web` はこの転送を行わない |
 | Host | `4787` 固定 | Desktop の保存済み profile と Workspace ID が変わらないようにする |
 
@@ -124,13 +124,13 @@ loopback で待ち受けているときは `open` の 1 行だけです。
 `Run Web` は別起動 Host の bridge 動作を調べる開発用構成で、事前に `npm run build` が必要です。初回は招待リンクを要求します。Desktop が管理する Local Host の招待は別起動 Host では使えないため、`Run Host` のコンソールで `pair-user` を実行し、表示された token から `#/invite?token=<token>` 形式の招待リンクを作って開いてください。製品の招待発行には `cargo dev` の Local Host を使用してください。
 ## Web の UI を確認する
 
-デモ用の `Run Web (Page)`（`lapis-web --dev --dist clients/web/dist`）では変更時に Web が再ビルドされ、ブラウザーが再読み込みします。Host に接続する場合は `npm run build` を実行してから Desktop の設定で公開します。
+デモ用の `Run Web (Page)`（`lapis-web --dev --dist apps/web/dist`）では変更時に Web が再ビルドされ、ブラウザーが再読み込みします。Host に接続する場合は `npm run build` を実行してから Desktop の設定で公開します。
 
 - 反映は再読み込みで行います。Desktop の Hot Reload のように State を保ったまま差し替えるものではありません。
 - 初回と依存 crate を変えたときは数十秒かかります。2回目以降は cargo の増分ビルドで数秒です。
 - 250ms 以内の連続保存は1回にまとまり、ビルド中に保存した分は終わってから1回だけ追加で走ります。ビルドは常に1本です。
 - 失敗すると `lapis-web` のコンソールに `web: build failed` と出力の末尾20行が出て、古い `dist` を配り続けます。画面は壊れず、修正して保存すれば再試行します。
-- 監視するのは上記5ディレクトリの `.rs` と `clients/web` のページ一式です。`vendor/`（patched GPUI）や `clients/web/src/generated` 配下は監視しません。必要なら `npm run wasm` を手で実行してください。
+- 監視するのは `clients/ui`・`clients/state`・`clients/transport`・`contracts`・`extensions` の `.rs` と `apps/web` のページ一式です。`vendor/`（patched GPUI）や `apps/web/src/generated` 配下は監視しません。必要なら `npm run wasm` を手で実行してください。
 - 再ビルドは開発サーバーだけの機能です。`npm run build` と CI は起動時に1回だけ生成します。
 
 ## Windows でのプロセス表示
@@ -160,8 +160,8 @@ dx は自前でリソースをリンクするため、`build.rs` は `DX_RUSTC` 
 | Desktop | `python scripts/check.py desktop` |
 | Host | `python scripts/check.py host` |
 | 全体とアーキテクチャ | `python scripts/check.py repository architecture` |
-| Web のビルド | `cd clients\web; npm run build` |
-| Host と bridge の結合 | `cargo build -p host -p web-bridge` → `python clients/web/wasm/tests/bridge_smoke.py` |
+| Web のビルド | `cd apps\web; npm run build` |
+| Host と bridge の結合 | `cargo build -p host -p web-bridge` → `python apps/web/wasm/tests/bridge_smoke.py` |
 | launcher と Hot Reload | `python -m unittest discover -s scripts -p test_dev_session.py` |
 | 更新 launcher の適用と起動 | `cargo test -p lapis-launcher` |
 | アプリ側の更新（download・検証・staging・同意） | `cargo test -p lapis` |

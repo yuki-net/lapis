@@ -117,9 +117,10 @@ class TestPathRouting(unittest.TestCase):
         for path in (
             "clients/state/src/web_host/extension_terminal.rs",
             "clients/state/src/terminal_extension/web_projection.rs",
-            "clients/ui/src/web/mod.rs",
+            "apps/web/wasm/src/entry.rs",
+            "apps/web/wasm/src/startup.rs",
             "clients/ui/wasm-smoke/src/lib.rs",
-            "clients/web/wasm/tests/extension_terminal_smoke.py",
+            "apps/web/wasm/tests/extension_terminal_smoke.py",
         ):
             self.assertIn("host", jobs_for_paths([path]), path)
 
@@ -182,7 +183,12 @@ class TestPathRouting(unittest.TestCase):
         self.assertIn("mobile", jobs_for_paths(["clients/mobile/sharedUi/src/main.kt"]))
 
     def test_web_path_runs_web(self):
-        self.assertIn("web", jobs_for_paths(["clients/web/package.json"]))
+        for path in ("apps/web/package.json", "apps/web/wasm/src/lib.rs"):
+            self.assertIn("web", jobs_for_paths([path]), path)
+
+    def test_removed_web_path_stays_in_web(self):
+        """移設前の path は削除差分で現れるため、全 job を起こさない。"""
+        self.assertEqual(jobs_for_paths(["clients/web/package.json"]), {"web"})
 
     def test_cargo_toml_runs_all_rust(self):
         jobs = jobs_for_paths(["Cargo.toml"])

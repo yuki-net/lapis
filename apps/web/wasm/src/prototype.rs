@@ -538,9 +538,7 @@ mod tests {
         let edited = backend.edit(&opened.id, revision, 0..0, "prefix ").unwrap();
         assert!(edited.document.content_for_save().starts_with("prefix "));
         assert!(edited.document.is_dirty());
-        backend
-            .save(&opened.id, edited.document.revision(), None)
-            .unwrap();
+        DocumentConnection::save(&backend, &opened.id, edited.document.revision(), None).unwrap();
         backend.close(&opened.id).unwrap();
         let reopened = backend.open(&Path::new(ROOT).join("README.md")).unwrap();
         assert!(reopened.document.content_for_save().starts_with("prefix "));
@@ -556,7 +554,7 @@ mod tests {
             .lock()
             .unwrap()
             .insert(path.clone(), b"changed".to_vec());
-        let inspected = backend.attach(&opened.id).unwrap();
+        let inspected = DocumentConnection::attach(&backend, &opened.id).unwrap();
         assert_eq!(inspected.external_change, ExternalChange::Modified);
     }
 }
