@@ -28,6 +28,19 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 | `host/transport/` | 認証・wire・接続と共通 Runtime への配送 | 独立した Workspace/Document 正本 |
 | `host/app/` | Runtime と具体実装の組み立て、開始・終了 | UI |
 
+## 柱と現行ディレクトリの対応
+
+移行中のため、6本柱とトップレベルのディレクトリはまだ一致していない。新しいコードの置き場所は、まずこの対応で柱を決める。
+
+| 柱 | 現行の主な配置 | 備考 |
+| --- | --- | --- |
+| apps | `apps/desktop/app/`、`apps/launcher/`、`apps/web/wasm/` | 起動 entry と Composition Root |
+| workbench | `clients/ui/`（`shell` / `kit` / `features`）、`clients/state/` | Client の表示状態と操作。`host/workbench/` は含まない |
+| extensions | `extensions/`、`host/extensions/`、`protocol/extension-api/` | 機能ごとの契約・Host 実装・Client UI・assets |
+| host | `host/`（`app` / `runtime` / `adapters` / `documents` / `workspaces` / `tasks` / `workbench` / `auth` / `transport`） | 正規状態と実行資源。`host/workbench/` は host 柱 |
+| protocol | `protocol/types/`、`protocol/wire/`、`protocol/wire-client/`、`protocol/extension-api/` | 境界を越える DTO と操作契約 |
+| tools | `scripts/`、`clients/ui/src/devtools/`、`clients/ui/wasm-smoke/` | 開発・検証・配布。製品の実行時依存にしない |
+
 ## 配置の判断
 
 状態とリソースの所有原則は [全体アーキテクチャ](../ARCHITECTURE.md) を参照する。追加実装の具体的な配置は次のとおり。

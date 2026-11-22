@@ -8,12 +8,23 @@ import unittest
 from check_dependencies import check, load_allowlist, load_metadata
 
 
-def package(name, dependencies=()):
+def package(name, dependencies=(), external=()):
     return {
         "name": name,
         "id": name,
         "manifest_path": f"/workspace/{name}/Cargo.toml",
-        "dependencies": [{"name": dependency} for dependency in dependencies],
+        "dependencies": [
+            {"name": dependency, "source": None, "path": f"/workspace/{dependency}"}
+            for dependency in dependencies
+        ]
+        + [
+            {
+                "name": dependency,
+                "source": "registry+https://github.com/rust-lang/crates.io-index",
+                "path": None,
+            }
+            for dependency in external
+        ],
     }
 
 
@@ -43,6 +54,17 @@ class DependencyAllowlistTests(unittest.TestCase):
     def test_dependency_outside_workspace_is_ignored(self):
         tree = metadata(package("app", ["serde"]))
         self.assertEqual(check(tree, {}), [])
+
+    def test_same_name_external_dependency_is_not_a_workspace_edge(self):
+        for dependency in (
+            {"name": "protocol", "source": "registry+https://github.com/rust-lang/crates.io-index", "path": None},
+            {"name": "protocol", "source": None, "path": "/external/protocol"},
+        ):
+            with self.subTest(dependency=dependency):
+                package_app = package("app")
+                package_app["dependencies"] = [dependency]
+                tree = metadata(package_app, package("protocol"))
+                self.assertEqual(check(tree, {}), [])
 
     def test_allowlist_rejects_invalid_shape(self):
         with tempfile.TemporaryDirectory() as directory:

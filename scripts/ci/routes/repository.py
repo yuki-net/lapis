@@ -16,6 +16,9 @@ ROUTE = Route(
     timeout_minutes=20,
     checkout_depth=0,
     python=PYTHON_VERSION,
+    # architecture stage の check_architecture / check_dependencies が
+    # cargo metadata を呼ぶ。
+    rust=True,
     steps=(
         Step("Run repository checks", py("scripts/check.py", "repository", "architecture")),
     ),

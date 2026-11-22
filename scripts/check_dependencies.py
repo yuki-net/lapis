@@ -36,6 +36,23 @@ def load_allowlist(path=ALLOWLIST):
     return allowlist
 
 
+def is_workspace_dependency(dependency, packages):
+    """依存先が workspace member の path 依存かを判定する。
+
+    package 名だけでは、workspace 外の同名 package を member と誤認する。
+    Cargo metadata の source が無く、path が member の manifest と一致する
+    場合だけ workspace 内の依存として扱う。
+    """
+    target = dependency.get("name")
+    package = packages.get(target)
+    if package is None or dependency.get("source") is not None:
+        return False
+    path = dependency.get("path")
+    if path is None:
+        return False
+    return Path(path).resolve() == Path(package["manifest_path"]).resolve().parent
+
+
 def workspace_edges(metadata):
     """workspace member 間の依存辺と、member の package 情報を返す。"""
     members = set(metadata["workspace_members"])
@@ -48,7 +65,7 @@ def workspace_edges(metadata):
         (name, dependency["name"])
         for name, package in packages.items()
         for dependency in package["dependencies"]
-        if dependency["name"] in packages
+        if is_workspace_dependency(dependency, packages)
     }
     return packages, edges
 

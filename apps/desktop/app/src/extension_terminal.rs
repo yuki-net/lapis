@@ -246,7 +246,8 @@ mod tests {
                 .stderr(Stdio::inherit())
                 .spawn()
                 .unwrap();
-            let deadline = Instant::now() + Duration::from_secs(60);
+            // 子テストの起動・出力・色付き出力の各待機と初期化時間を含める。
+            let deadline = Instant::now() + Duration::from_secs(120);
             let status = loop {
                 if let Some(status) = child.try_wait().unwrap() {
                     break status;
