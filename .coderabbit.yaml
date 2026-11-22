@@ -2,6 +2,12 @@
 # AGENTS.md は構造の憲法に限定し、ここではレビュー動作と領域固有の重点観点だけを設定する。
 language: ja-JP
 
+# 共通のレビュー基準は docs/workflow.md を guideline として読み込む。
+knowledge_base:
+  code_guidelines:
+    filePatterns:
+      - docs/workflow.md
+
 reviews:
   profile: chill
   auto_review:
@@ -13,14 +19,6 @@ reviews:
       # docstring の網羅は本リポジトリの規約ではない。
       mode: "off"
   path_instructions:
-    # AGENTS.md は構造の憲法に限定したため、レビュー基準はここでも明示する。
-    - path: "**"
-      instructions: |
-        共通のレビュー規約は docs/workflow.md を正本とする。
-        変更関連のテスト・CI が通ること、不具合修正の回帰テスト、
-        UI 変更の実機確認を確認する。
-        レビューでは不具合、データ損失、セキュリティ、並行性、リーク、
-        テスト不足を最優先する。
     - path: "host/transport/remote/**"
       instructions: |
         TLS 1.3、ペアリングの期限と一回性、認証情報の失効、

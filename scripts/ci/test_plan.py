@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts.ci import plan
-from scripts.ci.model import ROOT, RUST_TOOLCHAIN
+from scripts.ci.model import ROOT, RUST_TOOLCHAIN, requirements
 from scripts.ci.routes import ORDER, ROUTES, route_for
 from scripts.ci.model import RUNNERS
 from scripts.ci.paths import PATH_RULES
@@ -105,6 +105,10 @@ class PlanTests(unittest.TestCase):
         self.assertIn("solaris", str(raised.exception))
         with self.assertRaises(ValueError):
             validate({"empty": replace(route, runs_on=())})
+
+    def test_repository_route_declares_cargo(self):
+        """architecture stage は cargo metadata を呼ぶため cargo を前提にする。"""
+        self.assertIn("cargo", requirements(ROUTES["repository"]))
 
     def test_matrix_carries_working_directory_indirectly(self):
         """作業ディレクトリは matrix ではなく run.py が route から解決する。"""
