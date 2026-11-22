@@ -108,7 +108,7 @@ jobs:
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
             target/
-          key: rust-core-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('**/Cargo.lock') }}
+          key: rust-core-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
           restore-keys: |
             rust-core-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-
 
@@ -180,7 +180,7 @@ jobs:
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
             target/
-          key: host-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('**/Cargo.lock') }}
+          key: host-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
           restore-keys: |
             host-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-
 
@@ -289,7 +289,7 @@ jobs:
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
             target/
-          key: desktop-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('**/Cargo.lock') }}
+          key: desktop-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
           restore-keys: |
             desktop-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-
 
@@ -308,6 +308,15 @@ jobs:
           cargo build --locked -p extension-runtime --bin lapis-extension-host
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --locked -p lapis-terminal-native
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # crate 移設で workspace 全体の path fingerprint が無効になり、テスト用の
+      # ビルドも cold build になる。テスト本体の 20 分上限を守るため先にビルドする。
+      - name: Build Desktop tests
+        shell: pwsh
+        timeout-minutes: 35
+        run: |
+          cargo test --locked -p lapis --all-targets -p desktop-ui --all-targets -p lapis-launcher --all-targets --no-run
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Test Desktop
