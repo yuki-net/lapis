@@ -150,6 +150,12 @@ class PlanTests(unittest.TestCase):
         self.assertNotIn("matrix.route.runs_on", workflow)
         self.assertNotIn("actions/cache@", workflow)
 
+    def test_workflow_has_a_manual_full_run_input(self):
+        """手動実行では、差分を見ずに全 route・全 OS で回せる。"""
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("inputs.full", workflow)
+        self.assertIn('"${{ inputs.full }}" = "true"', workflow)
+
     def test_workflow_scopes_main_and_develop_differently(self):
         """main は全 route、develop は Linux 優先。"""
         workflow = WORKFLOW.read_text(encoding="utf-8")

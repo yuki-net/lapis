@@ -7,6 +7,11 @@ on:
       - develop
       - main
   workflow_dispatch:
+    inputs:
+      full:
+        description: "全 route を全 OS で回す（差分を見ない）"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -44,9 +49,9 @@ jobs:
           BASE_REF: ${{ github.event.pull_request.base.ref || github.ref_name }}
         run: |
           set -euo pipefail
-          # main は全 route・全 OS。それ以外（develop など）は変更 path から選び、
-          # Linux 実装がある route は Linux に寄せる（Windows 専用 route は残る）。
-          if [ "${BASE_REF}" = "main" ]; then
+          # main と、手動の full 指定は全 route・全 OS。それ以外（develop など）は
+          # 変更 path から選び、Linux 実装がある route は Linux に寄せる。
+          if [ "${BASE_REF}" = "main" ] || [ "${{ inputs.full }}" = "true" ]; then
             scope=(--full)
           else
             scope=(--prefer-os linux)

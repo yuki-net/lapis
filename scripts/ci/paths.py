@@ -22,8 +22,10 @@ ALL_JOBS = frozenset(ROUTES)
 PATH_RULES = [
     (["scripts/stop_dev_host.ps1", "scripts/test_dev_commands.py", "scripts/test_dev_session.py",
       "scripts/dev-session/", ".run/"], {"repository", "dev_commands"}),
-    (["scripts/check.py", "scripts/test_check.py", ".github/workflows/"],
-     {"repository", "rust_core", "host", "desktop", "mobile", "web", "dev_commands"}),
+    # CI の定義そのものと、CI を動かすスクリプト。どの route が壊れたか
+    # 分からないので全 route を回す。
+    (["scripts/check.py", "scripts/test_check.py", "scripts/ci/", ".github/workflows/"],
+     set(ALL_JOBS)),
     # Desktop 関連。
     # clients/state と clients/ui は Web の wasm ビルド（apps/web/wasm）でも
     # コンパイルされる。
