@@ -68,10 +68,8 @@ impl HostIdentity {
     /// 鍵種を P-256 に固定し、有効期間を 13 日にする。
     fn generate(now: OffsetDateTime) -> Result<Self, Error> {
         let key_pair = KeyPair::generate()?;
-        let mut params = CertificateParams::new(vec![
-            "localhost".to_owned(),
-            "lapis-host".to_owned(),
-        ])?;
+        let mut params =
+            CertificateParams::new(vec!["localhost".to_owned(), "lapis-host".to_owned()])?;
         params.not_before = now - Duration::minutes(NOT_BEFORE_BACKDATE_MINUTES);
         params.not_after = params.not_before + certificate_lifetime();
         let certificate = params.self_signed(&key_pair)?;
@@ -129,8 +127,9 @@ impl HostIdentity {
             fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
         }
         let certificate = self.certificate.as_ref();
-        let mut plaintext =
-            Zeroizing::new(Vec::with_capacity(MAGIC.len() + 12 + certificate.len() + 64));
+        let mut plaintext = Zeroizing::new(Vec::with_capacity(
+            MAGIC.len() + 12 + certificate.len() + 64,
+        ));
         plaintext.extend_from_slice(MAGIC);
         let length = u32::try_from(certificate.len())
             .map_err(|_| "Hostの証明書が大きすぎます")?
@@ -205,20 +204,19 @@ mod tests {
         let now = OffsetDateTime::now_utc();
         let first = HostIdentity::load_or_create_at(Some(directory.path()), now).unwrap();
         // 有効期間の途中で再起動しても同じ証明書を使う。
-        let middle = HostIdentity::load_or_create_at(
-            Some(directory.path()),
-            now + Duration::days(6),
-        )
-        .unwrap();
+        let middle =
+            HostIdentity::load_or_create_at(Some(directory.path()), now + Duration::days(6))
+                .unwrap();
         assert_eq!(first.certificate.as_ref(), middle.certificate.as_ref());
         // 有効期限は秒単位で保存する。
-        assert_eq!(first.not_after.unix_timestamp(), middle.not_after.unix_timestamp());
+        assert_eq!(
+            first.not_after.unix_timestamp(),
+            middle.not_after.unix_timestamp()
+        );
         // 残り 1 日を切ったら作り直し、有効期間を延ばす。
-        let renewed = HostIdentity::load_or_create_at(
-            Some(directory.path()),
-            now + Duration::days(13),
-        )
-        .unwrap();
+        let renewed =
+            HostIdentity::load_or_create_at(Some(directory.path()), now + Duration::days(13))
+                .unwrap();
         assert_ne!(first.certificate.as_ref(), renewed.certificate.as_ref());
         assert!(renewed.not_after > now + Duration::days(20));
     }
