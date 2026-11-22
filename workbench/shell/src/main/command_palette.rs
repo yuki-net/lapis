@@ -96,8 +96,6 @@ impl Shell {
             id::COMMAND_FIND => cx.emit(UiCommand::Find),
             id::COMMAND_FIND_NEXT => cx.emit(UiCommand::FindNext),
             id::COMMAND_FIND_WORKSPACE => cx.emit(UiCommand::FindWorkspace),
-            id::COMMAND_COMPLETE => cx.emit(UiCommand::Complete),
-            id::COMMAND_GO_TO_DEFINITION => cx.emit(UiCommand::GoToDefinition),
             id::COMMAND_SHOW_COMMANDS => cx.emit(UiCommand::QuickSearch),
             id::COMMAND_QUIT => cx.emit(UiCommand::Quit),
             id::COMMAND_OPEN_WORKSPACE => {

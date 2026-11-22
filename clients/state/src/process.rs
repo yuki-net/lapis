@@ -163,7 +163,6 @@ fn kind_order(kind: process::ProcessKind) -> u8 {
         Terminal => 2,
         TaskRun => 3,
         Agent => 4,
-        LanguageServer => 5,
         Build => 6,
         Git => 7,
         Other => 8,
@@ -277,7 +276,7 @@ mod tests {
         let local = Arc::new(LocalFixture {
             snapshot: ProcessSnapshot {
                 sampled_at_ms: 20,
-                roots: vec![root(ProcessOrigin::Desktop, 2, ProcessKind::LanguageServer)],
+                roots: vec![root(ProcessOrigin::Desktop, 2, ProcessKind::Agent)],
             },
             terminated: Default::default(),
         });

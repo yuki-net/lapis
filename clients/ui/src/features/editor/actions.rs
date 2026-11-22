@@ -248,15 +248,4 @@ impl Editor {
             cx.emit(EditorEvent::WorkspaceSearch(query));
         }
     }
-    pub(crate) fn complete(&mut self, _: &Complete, _: &mut Window, cx: &mut Context<Self>) {
-        cx.emit(EditorEvent::Completion(false));
-    }
-    pub(crate) fn go_to_definition(
-        &mut self,
-        _: &GoToDefinition,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        cx.emit(EditorEvent::Completion(true));
-    }
 }

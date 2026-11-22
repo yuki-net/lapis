@@ -26,7 +26,6 @@ pub enum ProcessKind {
     Desktop,
     Terminal,
     Agent,
-    LanguageServer,
     TaskRun,
     Build,
     Git,
@@ -39,7 +38,7 @@ impl ProcessKind {
     }
 }
 
-/// 所有元の種別。LSP のように個別 ID を持たないものは `id` を省略する。
+/// 所有元の種別。個別 ID を持たないものは `id` を省略する。
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ProcessOwner {
     pub kind: ProcessKind,
@@ -62,10 +61,6 @@ impl ProcessOwner {
 
     pub fn task_run(id: impl Into<String>) -> Self {
         Self::new(ProcessKind::TaskRun, Some(id.into()))
-    }
-
-    pub fn language_server() -> Self {
-        Self::new(ProcessKind::LanguageServer, None)
     }
 }
 
@@ -341,7 +336,6 @@ mod tests {
             ProcessOwner::task_run("execution-1"),
             ProcessOwner::new(ProcessKind::TaskRun, Some("execution-1".into()))
         );
-        assert_eq!(ProcessOwner::language_server().id, None);
         assert!(ProcessKind::Host.is_self());
         assert!(!ProcessKind::Terminal.is_self());
     }

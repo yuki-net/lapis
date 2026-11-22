@@ -82,7 +82,6 @@ pub(crate) enum EditorEvent {
     Idle,
     Status(String),
     WorkspaceSearch(String),
-    Completion(bool),
 }
 
 pub(crate) struct Editor {
@@ -1055,8 +1054,6 @@ impl Render for Editor {
             .on_action(cx.listener(Self::find))
             .on_action(cx.listener(Self::find_next))
             .on_action(cx.listener(Self::find_workspace))
-            .on_action(cx.listener(Self::complete))
-            .on_action(cx.listener(Self::go_to_definition))
             .child(
                 scroll_viewport(
                     "source-scroll",

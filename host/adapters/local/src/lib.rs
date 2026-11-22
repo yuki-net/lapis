@@ -11,15 +11,11 @@ use editor_core::ExecutionId;
 use git::{FileDiff, GitBackend, GitError, GitErrorKind, RepositoryStatus, TaskWorktree};
 pub use local_credentials::{CredentialStore, CredentialStoreError};
 pub use local_git::LocalGitBackend;
-pub use local_lsp::LocalLspBackend;
 pub use local_search::LocalWorkspaceSearchBackend;
 pub use local_tasks::{LocalTaskBackend, run_task_worker};
 pub use local_workbench::LocalWorkbenchStore;
 pub use local_workspace::LocalWorkspaceRepository;
 pub use local_workspace_store::{WorkspaceRecord, WorkspaceStore, WorkspaceStoreError};
-use lsp::{
-    CompletionItem, DefinitionTarget, Diagnostic, LanguageServerBackend, LspError, LspPosition,
-};
 use task_runner::{TaskBackend, TaskControl, TaskError, TaskRecord};
 use workspace::WorkspaceRepository;
 use workspace::{FileEntry, SearchError, SearchHit, WorkspaceError, WorkspaceSearchBackend};
@@ -247,74 +243,6 @@ impl<T: GitBackend> GitBackend for LoopbackBackend<T> {
             ));
         }
         self.inner.discard_worktree(worktree)
-    }
-}
-
-impl<T: LanguageServerBackend> LanguageServerBackend for LoopbackBackend<T> {
-    fn start(&self, workspace: &Path) -> Result<(), LspError> {
-        if !self.gate.is_connected() {
-            return Err(LspError::new("loopback workspace is disconnected"));
-        }
-        self.inner.start(workspace)
-    }
-    fn did_open(
-        &self,
-        path: &Path,
-        text: &str,
-        revision: document::Revision,
-    ) -> Result<(), LspError> {
-        if !self.gate.is_connected() {
-            return Err(LspError::new("loopback workspace is disconnected"));
-        }
-        self.inner.did_open(path, text, revision)
-    }
-    fn did_change(
-        &self,
-        path: &Path,
-        text: &str,
-        revision: document::Revision,
-    ) -> Result<(), LspError> {
-        if !self.gate.is_connected() {
-            return Err(LspError::new("loopback workspace is disconnected"));
-        }
-        self.inner.did_change(path, text, revision)
-    }
-    fn diagnostics(&self) -> Result<Vec<Diagnostic>, LspError> {
-        if !self.gate.is_connected() {
-            return Err(LspError::new("loopback workspace is disconnected"));
-        }
-        self.inner.diagnostics()
-    }
-    fn diagnostics_changes(&self) -> Option<lsp::DiagnosticsChanges> {
-        self.inner.diagnostics_changes()
-    }
-    fn completion(
-        &self,
-        path: &Path,
-        position: LspPosition,
-        revision: document::Revision,
-    ) -> Result<Vec<CompletionItem>, LspError> {
-        if !self.gate.is_connected() {
-            return Err(LspError::new("loopback workspace is disconnected"));
-        }
-        self.inner.completion(path, position, revision)
-    }
-    fn definition(
-        &self,
-        path: &Path,
-        position: LspPosition,
-        revision: document::Revision,
-    ) -> Result<Option<DefinitionTarget>, LspError> {
-        if !self.gate.is_connected() {
-            return Err(LspError::new("loopback workspace is disconnected"));
-        }
-        self.inner.definition(path, position, revision)
-    }
-    fn shutdown(&self) -> Result<(), LspError> {
-        if !self.gate.is_connected() {
-            return Err(LspError::new("loopback workspace is disconnected"));
-        }
-        self.inner.shutdown()
     }
 }
 

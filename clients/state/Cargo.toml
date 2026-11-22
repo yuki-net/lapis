@@ -12,7 +12,6 @@ extension-ui-contract = { path = "../../protocol/types/extension-ui" }
 document = { path = "../../protocol/types/document" }
 editor-core = { path = "../../protocol/types/editor-core" }
 git = { package = "git-contract", path = "../../extensions/git/contract" }
-lsp = { path = "../../protocol/types/lsp" }
 project = { path = "../../protocol/types/project" }
 process = { path = "../../protocol/types/process" }
 localization = { path = "../../protocol/types/localization" }

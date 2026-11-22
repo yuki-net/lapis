@@ -1,6 +1,6 @@
 use desktop_client::{
-    ConversationSession, EditorSession, GitSession, LspSession, ProcessSession, SettingsSession,
-    TaskSession, TerminalSession, WorkspaceSearchSession,
+    ConversationSession, EditorSession, GitSession, ProcessSession, SettingsSession, TaskSession,
+    TerminalSession, WorkspaceSearchSession,
 };
 use gpui::{App, AppContext, Application};
 
@@ -46,7 +46,6 @@ pub struct DesktopServices {
     pub(crate) initial_task: Option<editor_core::ConversationId>,
     pub(crate) task: TaskSession,
     pub(crate) git: GitSession,
-    pub(crate) lsp: LspSession,
     pub(crate) terminal: TerminalSession,
     pub(crate) extension_terminal: bool,
     pub(crate) search: WorkspaceSearchSession,
@@ -111,7 +110,6 @@ impl DesktopServices {
     pub fn new(
         task: TaskSession,
         git: GitSession,
-        lsp: LspSession,
         terminal: TerminalSession,
         search: WorkspaceSearchSession,
         conversation: ConversationSession,
@@ -123,7 +121,6 @@ impl DesktopServices {
             initial_task: None,
             task,
             git,
-            lsp,
             terminal,
             extension_terminal: false,
             search,
@@ -255,7 +252,6 @@ pub struct InitialView {
     pub native_window_smoke: bool,
     pub show_tasks: bool,
     pub show_terminal: bool,
-    pub show_problems: bool,
 }
 
 /// ネイティブ Desktop のイベントループを開始するための Application を作る。
@@ -332,7 +328,6 @@ pub(crate) struct WindowFactory {
     documents: std::sync::Arc<dyn document::DocumentConnection>,
     task: std::sync::Arc<dyn task::TaskConnection>,
     git: std::sync::Arc<dyn git::GitConnection>,
-    lsp: std::sync::Arc<dyn lsp::LanguageServerBackend>,
     terminal: std::sync::Arc<dyn terminal::TerminalBackend>,
     extension_terminal: bool,
     search: std::sync::Arc<dyn workspace::WorkspaceSearchBackend>,
@@ -364,7 +359,6 @@ impl WindowFactory {
             documents: editor.document_connection(),
             task: services.task.backend(),
             git: services.git.backend(),
-            lsp: services.lsp.backend(),
             terminal: services.terminal.backend(),
             extension_terminal: services.extension_terminal,
             search: services.search.backend(),
@@ -390,7 +384,6 @@ impl WindowFactory {
         let mut services = DesktopServices::new(
             TaskSession::new(self.task),
             GitSession::new(self.git),
-            LspSession::new(self.lsp),
             TerminalSession::new(self.terminal),
             WorkspaceSearchSession::new(self.search),
             conversation,

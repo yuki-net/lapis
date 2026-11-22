@@ -638,7 +638,7 @@ mod tests {
         assert!(state.view_visible_in_layout(id::VIEW_RESOURCES));
 
         // 同じパネルの別タブを選んでいる間は表示されていない。
-        let other = PanelTab::tool(id::VIEW_PROBLEMS);
+        let other = PanelTab::tool(id::VIEW_GIT);
         assert!(
             state
                 .layout

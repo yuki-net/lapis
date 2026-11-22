@@ -7,13 +7,12 @@ use std::{
 };
 
 use desktop_client::{
-    ConversationRepository, ConversationSession, EditorSession, GitSession, LspSession,
-    SettingsSession, TaskSession, TerminalSession, WorkspaceDialog, WorkspaceRepository,
-    WorkspaceSearchSession, WorkspaceStateRepository,
+    ConversationRepository, ConversationSession, EditorSession, GitSession, SettingsSession,
+    TaskSession, TerminalSession, WorkspaceDialog, WorkspaceRepository, WorkspaceSearchSession,
+    WorkspaceStateRepository,
 };
 use document::DocumentConnection;
 use git::GitConnection;
-use lsp::LanguageServerBackend;
 use settings::SettingsRepository;
 use task::TaskConnection;
 use terminal::TerminalBackend;
@@ -185,7 +184,6 @@ where
         + GitConnection
         + TaskConnection
         + TerminalBackend
-        + LanguageServerBackend
         + WorkspaceSearchBackend
         + ConversationRepository
         + SettingsRepository
@@ -210,7 +208,6 @@ where
     let services = DesktopServices::new(
         TaskSession::new(backend.clone()),
         GitSession::new(backend.clone()),
-        LspSession::new(backend.clone()),
         TerminalSession::new(backend.clone()),
         WorkspaceSearchSession::new(backend.clone()),
         conversation,
@@ -253,7 +250,6 @@ pub(crate) fn host_sessions() -> Result<(EditorSession, DesktopServices), String
     let mut services = DesktopServices::new(
         TaskSession::new(backend.clone()),
         GitSession::new(backend.clone()),
-        LspSession::new(backend.clone()),
         TerminalSession::new(terminal),
         WorkspaceSearchSession::new(backend.clone()),
         conversation,

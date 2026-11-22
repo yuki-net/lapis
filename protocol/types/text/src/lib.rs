@@ -2,7 +2,7 @@ use std::{error::Error, fmt, ops::Range};
 
 use ropey::Rope;
 
-/// LSPなどUTF-16基準の外部境界でも安全に扱える0始まりの行列位置。
+/// UTF-16基準の外部境界でも安全に扱える0始まりの行列位置。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Position {
     pub line: u32,

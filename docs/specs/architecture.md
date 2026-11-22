@@ -25,7 +25,7 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 | `host/runtime/` | 正規状態、操作の直列化、購読・revision・実行資源の寿命 | Window、Panel、focus |
 | `host/workbench/` | Workbench の wire 境界・容量検証・永続化 port | 画面描画、Workspace の正規状態全体 |
 | `host/documents/` | Document 資源・未保存状態・snapshot | ファイル I/O、Workspace の正規状態全体 |
-| `host/adapters/` | FS、LSP、runner、検索、永続化 | 画面の判断 |
+| `host/adapters/` | FS、runner、検索、永続化 | 画面の判断 |
 | `host/extensions/git/` | Git 拡張の Host 実装（CLI 操作・監視） | 画面の判断、Workspace の正規状態 |
 | `host/extensions/acp/` | ACP client 境界（ハーネス起動、ACP 送受信、`TaskEvent` への変換） | Task の正規状態、core の型 |
 | `host/extensions-entry/` | 拡張の入口（導入済み拡張の目録・状態、`.lapis` package の読み込み・互換照合・署名検証、package と拡張データの置き場所） | Wasm ランタイム上での実行、画面の判断 |
@@ -43,10 +43,10 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 ### `protocol/types` の集約方針
 
 - ID は `protocol/types/editor-core` に集約する（`ProjectId` / `WorkspaceId` / `ConversationId` / `DocumentId` / `TaskId` / `ExecutionId`）。複数機能が同じ ID を参照するため、機能別 crate へ分散させない。
-- 状態・値・エラーは各機能の domain crate（`document` / `git` / `task` / `workspace` / `workbench` / `lsp` / `settings` など）が所有する。機能をまたぐ移動は、複数 crate が同じ型を必要とする場合だけ行う。
+- 状態・値・エラーは各機能の domain crate（`document` / `git` / `task` / `workspace` / `workbench` / `settings` など）が所有する。機能をまたぐ移動は、複数 crate が同じ型を必要とする場合だけ行う。
 - 拡張へ自己完結させる機能は、型・port を自分の contract crate が正本として持つ。Terminal は `extensions/terminal/contract` が型・wire DTO・`TerminalBackend` port を所有し、`protocol/types/terminal` は置かない。実装を移す前後で正本が二重にならないよう、移動は正本の移送と同じ PR で完結させる。
 - 自己完結した拡張は `extensions/<機能>/` の下を役割ディレクトリで分ける。`contract/` は契約、`host/` は Host 側の正規状態、`adapter/` は OS に触れる具体実装、`assets/` は拡張が配布する固定データを置く。役割を追加するときは、その領域の README に「誰が何を判断するために置くか」を書いてから増やす。層の意味は拡張の中でも変えない（`host/` は runtime、`adapter/` は infrastructure として依存検査する）。
-- port（`WorkspaceRepository` / `TerminalBackend` / `GitBackend` / `TaskBackend` / `LanguageServerBackend` / `WorkspaceSearchBackend` / `DocumentRepository` / `WorkbenchConnection` / `SettingsRepository`）は、実装ではなく利用側が正本を持つ crate に置く。`TerminalBackend` は `extensions/terminal/contract`、それ以外は各機能の domain crate が持つ。実装は `host/adapters/*`、`host/extensions/*`、および自己完結した拡張の `extensions/<機能>/host` / `extensions/<機能>/adapter` が持つ。
+- port（`WorkspaceRepository` / `TerminalBackend` / `GitBackend` / `TaskBackend` / `WorkspaceSearchBackend` / `DocumentRepository` / `WorkbenchConnection` / `SettingsRepository`）は、実装ではなく利用側が正本を持つ crate に置く。`TerminalBackend` は `extensions/terminal/contract`、それ以外は各機能の domain crate が持つ。実装は `host/adapters/*`、`host/extensions/*`、および自己完結した拡張の `extensions/<機能>/host` / `extensions/<機能>/adapter` が持つ。
 - 追加の集約は行わない。現状の配置で「どの crate が正本か」が一意になっており、統合すると domain 間の依存が増えるだけで判断材料が増えない。
 
 ### `host/application` を独立させない
@@ -89,8 +89,8 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 ## Resource Manager（管理下プロセスの計測）
 
 - 対象は Host / Desktop が自ら spawn した root PID と、その PID から辿れる子孫だけとする。OS 全体の一覧や、Lapis 外で起動された同名プロセスを列挙・終了しない。
-- Host と Desktop はそれぞれプロセスレジストリをローカルに持つ。Host のレジストリは Host 自身と Host が起動した Terminal / Task Run などの root を、Desktop のレジストリは Desktop 自身と Desktop が起動した Language Server などの root を所有する。Remote Host から Desktop 側の root は操作できない。
-- Task / Execution のモデルと OS Process は独立させ、レジストリは root ごとに Workspace と所有元（Terminal / Task Run / Language Server 等）を保持する。Terminal 内の Agent CLI は Terminal の子孫として扱う。
+- Host と Desktop はそれぞれプロセスレジストリをローカルに持つ。Host のレジストリは Host 自身と Host が起動した Terminal / Task Run などの root を、Desktop のレジストリは Desktop 自身と Desktop が起動した root を所有する。Remote Host から Desktop 側の root は操作できない。
+- Task / Execution のモデルと OS Process は独立させ、レジストリは root ごとに Workspace と所有元（Terminal / Task Run 等）を保持する。Terminal 内の Agent CLI は Terminal の子孫として扱う。
 - PID 再利用は、登録時と比較時で同じ開始識別子を比べて判定する。識別子は壁時計の変更で値が変わらないもの（Linux は boot 相対の開始 ticks、Windows / macOS は OS が記録した作成時刻）を使い、開始時刻を確定できないプロセスは所有対象にしない。表示用の開始時刻と同一性判定は別の値として扱う。
 - 計測は 1 秒間隔で行い、root ごとに直近 60 サンプル（60 秒分）を保持する。CPU は 100 分の 1 パーセント、メモリは byte の整数として wire に載せる。終了した root は状態確認のため 60 秒残してから削除する。
 - 終了操作は接続中の Workspace に属する root だけを対象とし、root とその子孫を OS のプロセスツリー単位で終了する。Host / Desktop 自身は終了対象にしない。所有外の root ID は存在の有無を区別せず拒否する。

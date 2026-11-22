@@ -11,7 +11,6 @@ use crate::{
         git::{ChangesFeature, GitEvent, GitFeature, GitInputRequest},
         id,
         preview::PreviewFeature,
-        problems::{ProblemsEvent, ProblemsFeature},
         resource_manager::{ProcessWorker, ResourceManagerFeature},
         search::SearchFeature,
         settings::SettingsFeature,
@@ -131,7 +130,6 @@ pub(crate) struct DesktopRoot {
     files: Entity<FilesFeature>,
     git: Entity<GitFeature>,
     tasks: Entity<TasksFeature>,
-    problems: Entity<ProblemsFeature>,
     resources: Entity<ResourceManagerFeature>,
     search: Entity<SearchFeature>,
     conversation: Entity<ConversationFeature>,
@@ -229,7 +227,6 @@ impl DesktopRoot {
         let mut document_client = DocumentClient::new(
             session,
             services.conversation,
-            services.lsp,
             services.git.backend(),
             session_view.clone(),
         );
@@ -277,7 +274,6 @@ impl DesktopRoot {
         let git = cx.new(|cx| GitFeature::new(services.git, cx));
         let changes = cx.new(|cx| ChangesFeature::new(git.clone(), cx));
         let tasks = cx.new(|cx| TasksFeature::new(services.task, cx));
-        let problems = cx.new(|cx| ProblemsFeature::new(worker.clone(), cx));
         let resources =
             cx.new(|_| ResourceManagerFeature::new(process_worker, initial_workspace.clone()));
         let search = cx.new(|cx| SearchFeature::new(services.search, cx));
@@ -363,7 +359,6 @@ impl DesktopRoot {
             (id::VIEW_GIT.into(), git.clone().into()),
             (id::VIEW_CHANGES.into(), changes.into()),
             (id::VIEW_ASSISTANT.into(), tasks.clone().into()),
-            (id::VIEW_PROBLEMS.into(), problems.clone().into()),
             (id::VIEW_RESOURCES.into(), resources.clone().into()),
             (id::VIEW_SEARCH.into(), search.clone().into()),
             (id::VIEW_PROJECT_TASKS.into(), conversation.clone().into()),
@@ -419,17 +414,8 @@ impl DesktopRoot {
             if initial.show_tasks {
                 shell.open_view_in_zone(ZonePosition::Right, id::VIEW_ASSISTANT.into(), cx);
             }
-            if initial.show_terminal || initial.show_problems {
-                shell.open_view_in_zone(
-                    ZonePosition::Bottom,
-                    if initial.show_problems {
-                        id::VIEW_PROBLEMS
-                    } else {
-                        id::VIEW_TERMINAL
-                    }
-                    .into(),
-                    cx,
-                );
+            if initial.show_terminal {
+                shell.open_view_in_zone(ZonePosition::Bottom, id::VIEW_TERMINAL.into(), cx);
             }
             #[cfg(target_family = "wasm")]
             if let Some(view) = desktop_client::web_host::restore_view() {
@@ -577,7 +563,7 @@ impl DesktopRoot {
                     );
                 }
             }),
-            cx.subscribe_in(&editor, window, |root, _, event, window, cx| match event {
+            cx.subscribe_in(&editor, window, |root, _, event, _window, cx| match event {
                 EditorEvent::Snapshot(snapshot) => {
                     root.group
                         .update(cx, |group, cx| group.publish(*snapshot.clone(), cx));
@@ -585,7 +571,7 @@ impl DesktopRoot {
                     #[cfg(not(target_family = "wasm"))]
                     if root.native_smoke_requested {
                         root.native_smoke_requested = false;
-                        crate::window_host::run_native_smoke(root, window, cx);
+                        crate::window_host::run_native_smoke(root, _window, cx);
                     }
                     #[cfg(not(target_family = "wasm"))]
                     root.apply_remote_workbench(cx);
@@ -617,54 +603,16 @@ impl DesktopRoot {
                         shell.open_view_in_zone(ZonePosition::Left, id::VIEW_SEARCH.into(), cx)
                     });
                 }
-                EditorEvent::Completion(definition) => {
-                    let (line, column) = root.editor.read(cx).cursor_line_column();
-                    root.problems.update(cx, |problems, cx| {
-                        problems.request(
-                            *definition,
-                            lsp::LspPosition {
-                                line: line.saturating_sub(1) as u32,
-                                utf16_column: column.saturating_sub(1) as u32,
-                            },
-                            cx,
-                        )
-                    });
-                    let _ = window;
-                }
             }),
             cx.subscribe(&conversation, |root, _, event, cx| {
                 root.handle_conversation_event(event.clone(), cx);
             }),
-            cx.subscribe(&problems, |root, _, event, cx| match event {
-                ProblemsEvent::Status(message) => root.set_status(message.clone(), cx),
-                ProblemsEvent::Definition(target) => {
-                    let target = target.clone();
-                    root.editor.update(cx, |editor, cx| {
-                        editor.submit(
-                            false,
-                            move |client| {
-                                client
-                                    .editor
-                                    .open_definition(&target)
-                                    .map(|_| ())
-                                    .map_err(|error| error.to_string())
-                            },
-                            cx,
-                        )
-                    });
-                }
-            }),
             cx.observe(&editor, |root, editor, cx| {
                 let editor = editor.read(cx);
                 let cursor = editor.cursor_line_column();
-                let target = editor
-                    .document_id()
-                    .map(|id| (id, editor.document().revision()));
                 let selected = editor.selected_text();
                 root.tasks
                     .update(cx, |tasks, _| tasks.set_selected_text(selected));
-                root.problems
-                    .update(cx, |problems, cx| problems.set_target(target, cx));
                 root.shell.update(cx, |shell, cx| {
                     if shell.session.cursor != cursor {
                         shell.session.cursor = cursor;
@@ -730,8 +678,7 @@ impl DesktopRoot {
         if let Some(session) = locale_contributions {
             let receiver = session.subscribe();
             let settings_watch = services.settings.subscribe();
-            let mut pending_terminal =
-                extension_terminal && initial.show_terminal && !initial.show_problems;
+            let mut pending_terminal = extension_terminal && initial.show_terminal;
             cx.spawn(async move |root, cx| {
                 let mut first = true;
                 loop {
@@ -1008,7 +955,6 @@ impl DesktopRoot {
             files,
             git,
             tasks,
-            problems,
             resources,
             search,
             conversation,
@@ -2396,12 +2342,6 @@ impl DesktopRoot {
             }),
             UiCommand::FindWorkspace => self.editor.update(cx, |editor, cx| {
                 editor.find_workspace(&crate::app::FindWorkspace, window, cx)
-            }),
-            UiCommand::Complete => self.editor.update(cx, |editor, cx| {
-                editor.complete(&crate::app::Complete, window, cx)
-            }),
-            UiCommand::GoToDefinition => self.editor.update(cx, |editor, cx| {
-                editor.go_to_definition(&crate::app::GoToDefinition, window, cx)
             }),
             UiCommand::Quit => self.close_application(window, cx),
             UiCommand::Copy => self

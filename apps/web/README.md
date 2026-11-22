@@ -48,7 +48,7 @@ OIDC が設定された Host では「OIDC でログイン」から IdP のロ�
 - Host 接続時、起動時に開くのは1ファイルだけです。他のファイルは開いた直後は空で、Host からの読み込みが終わると次の再取得で表示されます。
 - Workbench は Host へ保存し、接続時に開いていた文書・未保存下書き・パネル配置を復元します。
 - Terminal は Host へ接続して開始・入力・リサイズ・終了・出力の受信まで行います。ページ再読み込み後は Host の snapshot から既存 Terminal を再発見できます。
-- Git、LSP、Search、Task は未接続です。
+- Git、Search、Task は未接続です。
 - Host のイベント購読は Terminal・Document・Workspace view state です。他の Client の文書変更は、イベントと操作時の再取得で反映されます。
 
 ## フォント

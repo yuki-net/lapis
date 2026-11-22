@@ -25,8 +25,6 @@ actions!(
         Find,
         FindWorkspace,
         FindNext,
-        Complete,
-        GoToDefinition,
         ShowCommands,
         Dismiss,
         TogglePreview,
