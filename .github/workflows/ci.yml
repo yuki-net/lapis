@@ -145,7 +145,7 @@ jobs:
     runs-on: windows-2022
     # crate 移設で Cargo の path fingerprint が無効になり、初回は cold build に
     # なることがある。通常は 10 分台で終わるが、再ビルドを含む回を取りこぼさない。
-    timeout-minutes: 70
+    timeout-minutes: 90
     needs: path_filter
     if: >-
       needs.path_filter.outputs.jobs != '[]' &&
