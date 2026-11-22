@@ -1684,8 +1684,7 @@ impl DesktopRoot {
 
     fn notify_task_url(&mut self, id: &editor_core::ConversationId) {
         self.last_task_for_url = Some(id.clone());
-        #[cfg(target_family = "wasm")]
-        crate::web::notify_task_selected(id.as_str());
+        crate::web_bridge::notify_task_selected(id.as_str());
     }
 
     fn dispatch_workbench_command(&mut self, command: UiCommand, cx: &mut Context<Self>) {
@@ -2419,7 +2418,7 @@ impl DesktopRoot {
                                 // ブラウザーのWindowは閉じると再生成できないため、
                                 // 同じWindowのRootを新しいWorkspaceのSessionで組み直す。
                                 let outcome = handle.update(cx, |root, window, cx| {
-                                    let (session, services) = crate::web::host_sessions()?;
+                                    let (session, services) = crate::web_bridge::host_sessions()?;
                                     *root = DesktopRoot::new(
                                         session,
                                         services,
@@ -2438,11 +2437,7 @@ impl DesktopRoot {
                                     // 画面の再構築が成功してから URL と保存済み選択を追従させる。
                                     None => {
                                         desktop_client::web_host::finish_workspace_switch();
-                                        if let Some(info) =
-                                            desktop_client::web_host::connection_info()
-                                        {
-                                            crate::web::notify_workspace_switched(&info);
-                                        }
+                                        crate::web_bridge::notify_workspace_switched();
                                     }
                                     Some(error) => {
                                         // 画面を作れない場合は、attachmentと複製を元へ戻す。

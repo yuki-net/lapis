@@ -2,7 +2,7 @@
 
 Desktop と同じ Rust/GPUI の UI を WebAssembly でブラウザーに表示します。ページの HTML は GPUI を起動するための最小限のシェルだけです。
 
-`clients/ui` が GPUI の起動と Wasm エントリを持ち、`clients/web` はその Wasm を読み込んで配信します。Host へ接続した場合は、ファイルの読み込み・編集・保存を Host 経由で行います。
+`apps/web/wasm` が GPUI の Wasm エントリ（Host 接続とページ起動）を持ち、`clients/ui`（`desktop-ui`）は Desktop と共通の UI を提供します。このディレクトリはその Wasm を読み込んで配信します。Host へ接続した場合は、ファイルの読み込み・編集・保存を Host 経由で行います。
 
 ## Host へ接続する
 
@@ -63,11 +63,11 @@ Web の GPUI は空の fontdb から起動し、ブラウザーや OS のフォ�
 ## 開発
 
 ```powershell
-cd clients/web
+cd apps/web
 npm ci
 ```
 
-`npm run build` で `clients/web/dist` を作成してから、Desktop の Web 接続設定で公開します。`Run Web (Page)` は Host に接続しないデモの確認用です。起動手順は [開発時の起動](../../docs/dev.md) を参照してください。
+`npm run build` で `apps/web/dist` を作成してから、Desktop の Web 接続設定で公開します。`Run Web (Page)` は Host に接続しないデモの確認用です。起動手順は [開発時の起動](../../docs/dev.md) を参照してください。
 
 `npm run build` は Wasm を生成し、`dist` に HTML・JS・CSS・Wasm を揃えます。Node.js 24（`tsc` 用）と `wasm-bindgen-cli` 0.2.129 が必要です。型チェックだけを行う場合は `npm run typecheck` を使います。
 
@@ -84,7 +84,7 @@ Desktop の設定で Tailscale のアドレスを選んで公開し、コピー�
 ```powershell
 cargo build -p host -p web-bridge
 cargo build -p web --target wasm32-unknown-unknown --profile web --features bridge-smoke
-python clients/web/wasm/tests/bridge_smoke.py
+python apps/web/wasm/tests/bridge_smoke.py
 ```
 
 Windows では拡張 Terminal の起動・再接続も、分離した Host / Bridge を使って検証できます。
@@ -93,5 +93,5 @@ Windows では拡張 Terminal の起動・再接続も、分離した Host / Bri
 cargo build -p host -p web-bridge -p extension-runtime --bins
 cargo build -p lapis-terminal-native
 cargo build -p web-terminal-smoke --target wasm32-unknown-unknown --profile web
-python clients/web/wasm/tests/extension_terminal_smoke.py
+python apps/web/wasm/tests/extension_terminal_smoke.py
 ```

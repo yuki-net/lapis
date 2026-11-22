@@ -7,6 +7,7 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 | 領域 | 所有するもの | 所有しないもの |
 | --- | --- | --- |
 | `clients/` | Client の Window、Panel、Tab、focus、selection、表示 cache | Host 上の実行資源 |
+| `apps/web/` | Web の Wasm entry（ページ起動、Host 接続、prototype backend）と配信ページ | Desktop と共通の UI 実装、Host の正規状態 |
 | `clients/desktop/launcher/` | staging 済み package の適用と本体の起動、および検証・staging の共通実装 | 更新モードの設定、同意の判断、アプリの実行 |
 | `contracts/domain/` | Transport 非依存の値・ドメイン規則・port | GPUI、通信、外部プロセスの具体実装 |
 | `contracts/domain/extension-ui/` | 拡張が公開する UI 宣言の語彙（配置・表示名・アイコン・表示条件、`UiContribution` / `FeatureDescriptor`） | GPUI の View・Entity 生成、表示状態の解決、Feature の実装 |
@@ -160,11 +161,12 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 
 ## UI の target 分割
 
-- `clients/ui` は単一 crate（`desktop-ui`）のまま、target 別の責務を内側のモジュールで分ける。Dashboard の Layout は Shell が所有し、Desktop / Web は起動と window 生成だけを持つ。
+- `clients/ui` は単一 crate（`desktop-ui`）のまま、Desktop と Web が共有する UI を持つ。Dashboard の Layout は Shell が所有し、target 別の起動コードを内側に持たない。
 - `kit` は tokens / theme / components / `LayoutProfile` / `InteractionPolicy` を持ち、Desktop と Web の両方から使う。kit は Host や Client の状態を所有しない。
-- `desktop` はネイティブ window の起動（`run`）、window options、`window_host`（Window と Feature の所有）を持つ。Web ではビルドしない。
-- `web` はブラウザーの起動（`run_web`）、wasm 用の backend 組み立て、prototype backend を持つ。ネイティブではビルドしない。
+- Desktop のネイティブ起動（`run`）、window options、`window_host`（Window と Feature の所有）は Desktop の entry が持つ（`apps/desktop` への切り出しは #354 PR1）。Web ではビルドしない。
+- Web の起動（`run_web`）、wasm 用の backend 組み立て、prototype backend、Host 接続の wasm entry は `apps/web/wasm`（crate `web`）が持つ。ネイティブではビルドしない。
 - 両 target が共有する `DesktopServices` / `InitialView` / `WindowFactory` / `open_desktop_window` は crate ルートの `app` に置く。target 固有のコードを `app` へ戻さない。
+- target 別の entry が共通 UI を起動する際のフォント・App Global・Keymap・最初の Window の組み立ては `entry` に集約し、platform 固有の初期化だけを各 app が行う。
 - 共通 UI 部品は `kit::components` の wrapper（popup / menu / scroll / row / surface など）を経由して使い、Feature が同じ見た目を個別に組み立てない。
 
 ### 描画系 Feature の wrapper 適用範囲
