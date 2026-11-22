@@ -38,4 +38,4 @@ Lapis の構造を守るための憲法。作業手順は [docs/workflow.md](doc
 - 機能追加は 6 本柱のいずれか 1 つを主な置き場所とし、層ごとに部品を散らさない。
 - 柱をまたぐ移動は「がわの移動」と「中身の refactor」を同じ PR に混ぜない。
 - 移行完了までの現行ディレクトリとの対応は [docs/specs/architecture.md](docs/specs/architecture.md) に従う。
-- 変更時は `python scripts/check.py <surface> architecture` で構造と依存ホワイトリストを検査する。
+- 変更時は CI と同じ検証をローカルで実行する。手順は `.opencode/skills/run-ci/SKILL.md` を正本とする。

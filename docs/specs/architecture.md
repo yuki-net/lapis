@@ -253,4 +253,4 @@ Backend と共通契約から GPUI/native dialog への依存は禁止。
 
 `python scripts/check_dependencies.py` は同じ `cargo metadata --locked --no-deps` から workspace member 間の依存辺（dev / build / target 条件を含む）を集め、`scripts/dependency-allowlist.json` にある辺だけを許可する。
 失敗するのは許可リストに無い辺の追加だけで、辺の削除や workspace 外への依存は失敗にしない。許可リストを更新するときは、追加する依存の理由を PR で説明する。
-CI の `Dependency Policy` job が path routing に関係なくこの検査を実行し、`Gate` の必須条件にする。
+CI の `dependency_policy` route が path routing に関係なくこの検査を実行し、`Gate` の必須条件にする。
