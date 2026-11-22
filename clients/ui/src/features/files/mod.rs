@@ -1,10 +1,9 @@
 use crate::features::id;
 use extension_ui_contract::{ActivationCondition, FeatureDescriptor, UiContribution, UiSlot};
 
-mod display;
 mod view;
 
-pub(crate) use display::display_info;
+pub(crate) use workbench_shell::file_display::display_info;
 
 pub(super) fn descriptor() -> FeatureDescriptor {
     FeatureDescriptor::bundled(id::FEATURE_FILES, [ActivationCondition::OnWorkspaceOpen])

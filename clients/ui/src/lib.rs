@@ -5,36 +5,33 @@ extern crate gpui_preview as gpui;
 mod bundled_font;
 mod client_adapter;
 mod client_worker;
-mod commands;
+pub(crate) use workbench_shell::commands;
 mod desktop;
 #[cfg(all(debug_assertions, not(target_family = "wasm")))]
+#[path = "../../../tools/devtools/mod.rs"]
 mod devtools;
 mod entry;
 #[cfg(not(target_family = "wasm"))]
 mod extension_loading;
-pub mod extension_ui;
+pub use workbench_shell::extension_ui;
 mod features;
-mod gpui_compat;
+pub(crate) use ui_kit::gpui_compat;
 #[cfg(all(feature = "hot-reload", debug_assertions))]
 mod hot_reload;
 pub mod keymap;
-pub mod kit;
-pub mod localization;
-pub mod notification;
+pub use ui_kit as kit;
+pub use ui_kit::localization;
+pub use ui_kit::notification;
 mod root;
-mod shell;
-mod timer;
+pub(crate) use ui_kit::time;
+pub(crate) use ui_kit::timer;
+pub(crate) use workbench_shell as shell;
 pub mod web_bridge;
-mod workbench;
+pub(crate) use workbench_shell::workbench;
 
 pub(crate) use desktop::window_host;
-pub(crate) use kit::components;
-pub use kit::{theme, tokens};
-
-/// wasmにはstdの時刻APIが無いため、ブラウザーではweb-timeを使う。
-pub(crate) mod time {
-    pub(crate) use web_time::{Duration, Instant, SystemTime};
-}
+pub(crate) use ui_kit::components;
+pub use ui_kit::{theme, tokens};
 
 pub use app::{ConnectionIdentity, DesktopServices, InitialView, UpdaterHandle, WorkspaceOption};
 #[cfg(not(target_family = "wasm"))]

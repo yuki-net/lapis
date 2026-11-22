@@ -106,8 +106,13 @@ class TestPathRouting(unittest.TestCase):
 
     def test_ui_path_runs_desktop_and_web(self):
         """clients/ui は desktop-ui として wasm でもビルドされるため Web ジョブも実行する。"""
-        for path in ("clients/ui/src/shell/layout.rs", "clients/ui/assets/themes/dark.json"):
+        for path in ("clients/ui/src/root.rs", "clients/ui/assets/IBMPlexSans-Regular.ttf"):
             self.assertEqual(jobs_for_paths([path]), {"desktop", "web"}, path)
+
+    def test_workbench_paths_run_ui_surfaces(self):
+        """workbench は Desktop と Web の UI に組み込まれる。"""
+        for path in ("workbench/shell/src/layout.rs", "workbench/ui-kit/assets/themes/dark.json"):
+            self.assertEqual(jobs_for_paths([path]), {"rust_core", "desktop", "web"}, path)
 
     def test_state_path_runs_web_for_wasm_build(self):
         """clients/state は wasm ビルドの依存に入るため Web ジョブも実行する。"""
@@ -119,7 +124,7 @@ class TestPathRouting(unittest.TestCase):
             "clients/state/src/terminal_extension/web_projection.rs",
             "apps/web/wasm/src/entry.rs",
             "apps/web/wasm/src/startup.rs",
-            "clients/ui/wasm-smoke/src/lib.rs",
+            "tools/wasm-smoke/src/lib.rs",
             "apps/web/wasm/tests/extension_terminal_smoke.py",
         ):
             self.assertIn("host", jobs_for_paths([path]), path)

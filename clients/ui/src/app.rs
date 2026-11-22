@@ -2,7 +2,7 @@ use desktop_client::{
     ConversationSession, EditorSession, GitSession, LspSession, ProcessSession, SettingsSession,
     TaskSession, TerminalSession, WorkspaceSearchSession,
 };
-use gpui::{App, AppContext, Application, actions};
+use gpui::{App, AppContext, Application};
 
 use crate::root::DesktopRoot;
 
@@ -12,81 +12,15 @@ pub type SessionViewHandle = std::sync::Arc<desktop_client::SessionViewSync>;
 #[cfg(target_family = "wasm")]
 pub type SessionViewHandle = desktop_client::SessionViewWatch;
 
-actions!(
-    editor,
-    [
-        Backspace,
-        Delete,
-        Left,
-        Right,
-        SelectLeft,
-        SelectRight,
-        SelectAll,
-        Home,
-        End,
-        Enter,
-        Paste,
-        Cut,
-        Copy,
-        Open,
-        Save,
-        SaveAs,
-        New,
-        Undo,
-        Redo,
-        Find,
-        FindWorkspace,
-        FindNext,
-        Complete,
-        GoToDefinition,
-        ShowCommands,
-        Dismiss,
-        TogglePreview,
-        ToggleBottomZone,
-        ToggleLeftZone,
-        ToggleRightZone,
-        ToggleAssistant,
-        Quit,
-    ]
-);
-
-#[derive(Clone, Debug, PartialEq, gpui::Action)]
-#[action(namespace = lapis, no_json)]
-pub(crate) struct InvokeCommand(pub String);
-
-pub(crate) const EXTRA_COMMANDS: &[&str] = &[
-    crate::features::id::COMMAND_OPEN_WORKSPACE,
-    crate::features::id::COMMAND_TOGGLE_PANEL_CONTROLS,
-    crate::features::id::COMMAND_WORKBENCH_IDE,
-    crate::features::id::COMMAND_WORKBENCH_AGENT,
-    crate::features::id::COMMAND_BIND_VIEW_SHARED,
-    crate::features::id::COMMAND_BIND_VIEW_TASK,
-    #[cfg(debug_assertions)]
-    crate::features::id::COMMAND_TOGGLE_DEVTOOL,
-];
-
-/// 接続先の Workspace 切替候補。
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WorkspaceOption {
-    pub id: String,
-    pub name: String,
+pub(crate) use workbench_shell::actions::*;
+pub(crate) use workbench_shell::commands::{EXTRA_COMMANDS, InvokeCommand};
+pub use workbench_shell::{ConnectionIdentity, WorkspaceOption};
+pub(crate) fn shortcut_label(cx: &gpui::App, command: &extension_ui_contract::CommandId) -> String {
+    cx.try_global::<crate::keymap::KeymapRegistry>()
+        .map(|registry| registry.shortcut_label(command))
+        .unwrap_or_default()
 }
 
-/// 接続中の Host を UI に示すための表示情報。
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ConnectionIdentity {
-    pub host_name: Option<String>,
-    pub host_id: Option<String>,
-    /// Web のように Host 側の Workspace 名を UI が持つ場合だけ入れる。
-    pub workspace_name: Option<String>,
-    pub workspace_id: Option<String>,
-    /// この接続で Workspace を切り替えられるか。
-    pub can_switch: bool,
-    /// 切り替え候補。`workspace.list` の応答をそのまま使う。
-    pub workspaces: Vec<WorkspaceOption>,
-}
-
-/// ローカル Web の接続情報を表示のたびに集める供給元。
 pub type WebAccessSource =
     std::sync::Arc<dyn Fn() -> Option<desktop_client::WebAccess> + Send + Sync>;
 
@@ -353,8 +287,13 @@ pub fn initialize(cx: &mut App, services: &DesktopServices) {
     #[cfg(all(feature = "hot-reload", debug_assertions))]
     crate::hot_reload::init(cx);
     crate::keymap::gpui::bind_keys(cx);
+    cx.set_global(workbench_shell::ShortcutLabels(Some(shortcut_label)));
     #[cfg(debug_assertions)]
     crate::devtools::init(cx);
+    #[cfg(all(debug_assertions, not(target_family = "wasm")))]
+    cx.set_global(workbench_shell::DevtoolsToggle(Some(
+        crate::devtools::toggle_devtool,
+    )));
 }
 
 /// 最後の Window が閉じたときに、保留中の保存完了後にアプリを終了する。

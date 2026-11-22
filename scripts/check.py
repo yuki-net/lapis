@@ -16,10 +16,10 @@ STAGES = ("architecture", "format", "check", "test", "lint", "build")
 # surface → cargo scopeのマップ
 SURFACE_SCOPES = {
     "repository": [],  # repositoryはcargoコマンドを使わない
-    "rust_core": ["--workspace", "--all-targets", "--exclude", "lapis", "--exclude", "desktop-ui", "--exclude", "host"],
+    "rust_core": ["--workspace", "--all-targets", "--exclude", "lapis", "--exclude", "desktop-ui", "--exclude", "host", "--exclude", "ui-kit", "--exclude", "workbench-shell"],
     "host": ["-p", "host", "--all-targets"],
-    "desktop": ["-p", "lapis", "--all-targets", "-p", "desktop-ui", "-p", "lapis-launcher"],
-    "backend": ["--workspace", "--all-targets", "--exclude", "lapis", "--exclude", "desktop-ui"],
+    "desktop": ["-p", "lapis", "--all-targets", "-p", "desktop-ui", "-p", "lapis-launcher", "-p", "ui-kit", "-p", "workbench-shell"],
+    "backend": ["--workspace", "--all-targets", "--exclude", "lapis", "--exclude", "desktop-ui", "--exclude", "ui-kit", "--exclude", "workbench-shell"],
 }
 
 

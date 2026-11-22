@@ -37,7 +37,7 @@ def check_desktop_layout(root=ROOT):
     errors = []
     client_root = root / "clients"
     # Desktop の entry は apps/ 側にもあるため、Layout の旧識別子は両方から検査する。
-    sources = [client_root, root / "apps"]
+    sources = [client_root, root / "apps", root / "workbench", root / "tools"]
     for path in (path for source in sources if source.exists() for path in source.rglob("*.rs")):
         text = path.read_text(encoding="utf-8")
         identifiers = set(rust_identifiers(text))
@@ -69,12 +69,12 @@ def check_desktop_layout(root=ROOT):
                 )
         if "/shell/main/" in path.as_posix() and identifiers & {"PanelLayout", "ZonePolicy", "Arrangement"}:
             errors.append(f"{path.relative_to(root)}: 描画・操作からLayout内部表現へ依存")
-        if ("/shell/" in path.as_posix() and "/shell/main/header/" not in path.as_posix()
+        if ("/shell/" in path.as_posix() and "/main/header/" not in path.as_posix()
                 or path.as_posix().endswith("/state/src/lib.rs")):
             for name in ("main-panel", "left-panel", "right-panel", "bottom-panel"):
                 if re.search(rf'"{name}"', code_text):
                     errors.append(f"{path.relative_to(root)}: 旧Zone保存識別子 {name}")
-    shell_mod = client_root / "ui/src/shell/mod.rs"
+    shell_mod = root / "workbench/shell/src/lib.rs"
     if shell_mod.exists():
         module_text = shell_mod.read_text(encoding="utf-8")
         for module in ("panel_layout", "zone_policy", "zone"):
@@ -89,7 +89,7 @@ ALLOWED = {
     "infrastructure": {"infrastructure", "application", "runtime", "models"},
     "transport": {"transport", "runtime", "protocol", "models", "client_core"},
     "host": {"host", "runtime", "application", "infrastructure", "transport", "models", "protocol"},
-    "ui": {"ui", "desktop_client", "models", "protocol"},
+    "ui": {"ui", "workbench_shell", "workbench_ui", "desktop_client", "models", "protocol"},
     "desktop_client": {"desktop_client", "models", "protocol", "client_core"},
     "desktop_persistence": {"desktop_persistence", "desktop_client", "models"},
     "desktop_entry": {"desktop_entry", "ui", "desktop_client", "desktop_persistence", "desktop_launcher", "host", "runtime", "application", "infrastructure", "transport", "models", "protocol"},
@@ -97,6 +97,9 @@ ALLOWED = {
     "web_entry": {"web_entry", "ui", "desktop_client", "models", "protocol", "client_core"},
     "client": {"client", "models", "protocol", "client_core"},
     "client_core": {"client_core", "models", "protocol"},
+    "workbench_ui": {"workbench_ui", "models", "protocol"},
+    "workbench_shell": {"workbench_shell", "workbench_ui", "desktop_client", "models", "protocol"},
+    "tools": {"tools", "desktop_client", "models", "protocol"},
 }
 
 
@@ -125,6 +128,9 @@ def layer(manifest, root):
         ("host/tasks/", "runtime"),
         ("host/transport/", "transport"),
         ("host/app/", "host"), ("clients/ui/", "ui"),
+        ("workbench/ui-kit/", "workbench_ui"),
+        ("workbench/shell/", "workbench_shell"),
+        ("tools/", "tools"),
         ("apps/web/", "web_entry"),
         ("clients/state/", "desktop_client"),
         ("apps/desktop/persistence/", "desktop_persistence"),
@@ -166,7 +172,7 @@ def crate_name_of(path, root):
 
 def check_duplicate_type_names(root=ROOT):
     """crate をまたいだ同名の公開型を検出する。"""
-    source = root / "apps", root / "clients", root / "host", root / "contracts", root / "extensions"
+    source = root / "apps", root / "clients", root / "host", root / "contracts", root / "extensions", root / "workbench", root / "tools"
     found = {}
     for base in source:
         if not base.exists():

@@ -2264,11 +2264,13 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ttf-parser 0.25.1",
+ "ui-kit",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
  "web-time",
  "windows 0.61.3",
+ "workbench-shell",
  "workspace",
  "zeroize",
 ]
@@ -9793,6 +9795,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "ui-kit"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "extension-ui-contract",
+ "gloo-timers",
+ "gpui",
+ "gpui-pre",
+ "localization",
+ "serde",
+ "serde_json",
+ "settings",
+ "syntect",
+ "tracing",
+ "web-time",
+]
+
+[[package]]
 name = "unicase"
 version = "2.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11876,6 +11896,28 @@ dependencies = [
  "editor-core",
  "serde",
  "serde_json",
+ "workspace",
+]
+
+[[package]]
+name = "workbench-shell"
+version = "0.1.0"
+dependencies = [
+ "desktop-client",
+ "document",
+ "editor-core",
+ "extension-ui-contract",
+ "getrandom 0.3.4",
+ "gpui",
+ "gpui-pre",
+ "language",
+ "localization",
+ "raw-window-handle",
+ "serde_json",
+ "settings",
+ "tracing",
+ "ui-kit",
+ "windows 0.61.3",
  "workspace",
 ]
 

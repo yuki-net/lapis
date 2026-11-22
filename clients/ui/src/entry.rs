@@ -47,6 +47,9 @@ pub fn boot(
     );
     crate::features::settings_coordinator::SettingsCoordinator::init(services.settings.clone(), cx);
     crate::keymap::gpui::bind_keys(cx);
+    cx.set_global(workbench_shell::ShortcutLabels(Some(
+        crate::app::shortcut_label,
+    )));
     crate::app::open_desktop_window(session, services, initial_view, cx);
     on_ready();
 }

@@ -28,7 +28,7 @@ UIの共通の意図は [Design](../../docs/DESIGN.md)、手動検証の扱い�
 - `../../clients/state/` は Host の表示 cache・Client 操作・復元用表示状態を所有し、GPUI や具体的な OS 実装には依存しません。
 - `persistence/` は Desktop の Conversation・Window 表示状態・設定を保存します。Backend の実行資源を復元・再起動する責務は持ちません。
 - Local Host は Web 等の端末 credential と失効状態を Host の状態ディレクトリに保存します。Desktop bootstrap 用の credential は起動ごとに生成し、端末用の保存対象から除きます。
-- `../../clients/ui/src/shell/` は Window・Panel・Tab・Layout、`../../clients/ui/src/features/` は個別機能の表示・入力・描画を担当します。
+- `../../workbench/shell/` は Window・Panel・Tab・Layout、`../../clients/ui/src/features/` は個別機能の表示・入力・描画を担当します。
 - 左のProject / Taskで既存フォルダをProjectへ登録し、登録先からPrimaryを一つ、Subを任意で一つ選んで作業Taskを作成します。Git管理されていない既存ソースフォルダも選べます。
 - 作業Taskの選択・Primary/Sub・文書とPanelの復元参照はDesktopの保存状態です。既存のConversation IDを復元キーに再利用し、HostのAgent実行Task/Executionとは区別します。切替ではHostの文書・PTY・CLIを終了しません。Worktreeの作成・カスタマイズはGit操作として扱います。
 - Project / Taskの保存状態が壊れている場合はエラーを表示して書き戻しを拒否します。従来の会話はrootごとのProjectへ移行し、Project未所属の下書きはTask外の復元項目として残します。

@@ -41,12 +41,16 @@ class CheckTests(unittest.TestCase):
                     self.assertIn("--locked", command)
                     if surface == "backend":
                         self.assertIn("--workspace", command)
-                        self.assertEqual(command.count("--exclude"), 2)
+                        self.assertEqual(command.count("--exclude"), 4)
                         self.assertIn("lapis", command)
                         self.assertIn("desktop-ui", command)
+                        self.assertIn("ui-kit", command)
+                        self.assertIn("workbench-shell", command)
                     else:
                         self.assertNotIn("--exclude", command)
                         self.assertIn("lapis", command)
+                        self.assertIn("ui-kit", command)
+                        self.assertIn("workbench-shell", command)
                         if stage != "build":
                             self.assertIn("desktop-ui", command)
                     if stage == "lint":
