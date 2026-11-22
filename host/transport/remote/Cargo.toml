@@ -29,9 +29,11 @@ subtle.workspace = true
 tokio = { workspace = true, features = ["macros"] }
 url = "2"
 web-transport-proto = "0.6"
+web-transport-quinn = "0.13"
 zeroize.workspace = true
 
 [dev-dependencies]
+time = { version = "0.3", default-features = false, features = ["std"] }
 git = { package = "git-contract", path = "../../../extensions/git/contract" }
 document = { path = "../../../protocol/types/document" }
 editor-core = { path = "../../../protocol/types/editor-core" }

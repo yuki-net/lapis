@@ -2,7 +2,7 @@ use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
-use crate::webtransport::{ConnectReader, ConnectWriter};
+use crate::webtransport::{SessionReader, SessionWriter};
 
 type Frames = LengthDelimitedCodec;
 
@@ -21,11 +21,11 @@ pub(crate) enum RemoteSocket {
         reader: FramedRead<quinn::RecvStream, Frames>,
         writer: FramedWrite<quinn::SendStream, Frames>,
     },
-    /// WebTransport の CONNECT ストリーム。同一 QUIC 接続で複数セッションを
-    /// 併存できるため、終了はこのストリームの FIN だけで、接続は閉じない。
+    /// WebTransport のセッション。終了は CONNECT ストリームの FIN だけで、
+    /// 同じ QUIC 接続の他のセッションを閉じない。
     WebTransport {
-        reader: FramedRead<ConnectReader, Frames>,
-        writer: FramedWrite<ConnectWriter, Frames>,
+        reader: FramedRead<SessionReader, Frames>,
+        writer: FramedWrite<SessionWriter, Frames>,
     },
 }
 
@@ -68,13 +68,8 @@ impl RemoteSocket {
                     .send(text.as_bytes().to_vec().into())
                     .await
                     .map_err(|_| ()),
-                Message::Close(_) => {
-                    writer.close().await.map_err(|_| ())?;
-                    // FIN を送るだけでは未送信データが破棄され得るため、peer が stream を
-                    // 読み切って stopped() を返すまで待つ。接続自体は閉じない。
-                    let _ = writer.get_mut().0.stopped().await;
-                    Ok(())
-                }
+                // 送信済みの応答が失われないよう、FIN で正常に閉じる。
+                Message::Close(_) => writer.close().await.map_err(|_| ()),
                 _ => Err(()),
             },
         }
