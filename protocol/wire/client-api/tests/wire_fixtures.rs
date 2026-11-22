@@ -13,16 +13,16 @@ use client_api::{
     WorkspaceListRequest,
 };
 
-const CLIENT_HELLO: &str = r#"{"protocol":{"major":0,"minimum_minor":13,"maximum_minor":13},"client_id":"mobile-1","client_name":"Mobile","client_kind":"android","requested_capabilities":[]}"#;
-const AUTHENTICATE: &str = r#"{"type":"auth.authenticate","payload":{"hello":{"protocol":{"major":0,"minimum_minor":13,"maximum_minor":13},"client_id":"mobile-1","client_name":"Mobile","client_kind":"android","requested_capabilities":[]},"workspace_id":"workspace-1","credential_id":"0123456789abcdef0123456789abcdef","secret":"abababababababababababababababababababababababababababababababab"}}"#;
-const OIDC: &str = r#"{"type":"auth.oidc","payload":{"hello":{"protocol":{"major":0,"minimum_minor":13,"maximum_minor":13},"client_id":"mobile-1","client_name":"Mobile","client_kind":"android","requested_capabilities":[]},"workspace_id":"workspace-1","id_token":"test-token"}}"#;
+const CLIENT_HELLO: &str = r#"{"protocol":{"major":0,"minimum_minor":14,"maximum_minor":14},"client_id":"mobile-1","client_name":"Mobile","client_kind":"android","requested_capabilities":[]}"#;
+const AUTHENTICATE: &str = r#"{"type":"auth.authenticate","payload":{"hello":{"protocol":{"major":0,"minimum_minor":14,"maximum_minor":14},"client_id":"mobile-1","client_name":"Mobile","client_kind":"android","requested_capabilities":[]},"workspace_id":"workspace-1","credential_id":"0123456789abcdef0123456789abcdef","secret":"abababababababababababababababababababababababababababababababab"}}"#;
+const OIDC: &str = r#"{"type":"auth.oidc","payload":{"hello":{"protocol":{"major":0,"minimum_minor":14,"maximum_minor":14},"client_id":"mobile-1","client_name":"Mobile","client_kind":"android","requested_capabilities":[]},"workspace_id":"workspace-1","id_token":"test-token"}}"#;
 const AUTH_REQUIRED: &str = r#"{"type":"auth.required","payload":{"methods":["token","oidc"],"oidc":{"issuer":"https://idp.example","client_id":"lapis","scopes":["openid","profile"]}}}"#;
 const REQUEST_ENVELOPE: &str = r#"{"request_id":"request-1","type":"workspace.list","payload":{}}"#;
 const EVENT_ENVELOPE: &str =
     r#"{"event_sequence":7,"type":"workspace.changed","payload":{"workspace_id":"workspace-1"}}"#;
 const PROTOCOL_ERROR: &str =
     r#"{"type":"error","payload":{"code":"invalid_request","retryable":false}}"#;
-const PAIRED_RESPONSE: &str = r#"{"type":"auth.paired","payload":{"hello":{"protocol":{"major":0,"minor":13},"session_id":"session-1","granted_capabilities":[]},"credential_id":"0123456789abcdef0123456789abcdef","secret":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"}}"#;
+const PAIRED_RESPONSE: &str = r#"{"type":"auth.paired","payload":{"hello":{"protocol":{"major":0,"minor":14},"session_id":"session-1","granted_capabilities":[]},"credential_id":"0123456789abcdef0123456789abcdef","secret":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"}}"#;
 /// view state 共有の wire 形式。Mobile はこの機能を持たないため Rust 側だけで固定する。
 const VIEW_SUBSCRIBE: &str = r#"{"request_id":"request-2","type":"workspace.view.subscribe","payload":{"workspace_id":"workspace-1"}}"#;
 const VIEW_UPDATE: &str = r#"{"request_id":"request-3","type":"workspace.view.update","payload":{"workspace_id":"workspace-1","view":{"open_documents":[],"active_path":null,"active_document_id":null}}}"#;
