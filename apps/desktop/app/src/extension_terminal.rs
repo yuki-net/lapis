@@ -323,13 +323,13 @@ mod tests {
         let workspace_id = host.register_workspace(workspace.path()).unwrap();
         let backend = Arc::new(ExtensionTerminals::new(BackendClient::from(host.clone())));
         let mut terminals = TerminalSession::new(backend);
-        let deadline = Instant::now() + Duration::from_secs(20);
+        let start_deadline = Instant::now() + Duration::from_secs(20);
         let id = loop {
             match terminals.start(workspace.path(), 80, 24) {
                 Ok(id) => break id,
                 Err(error) => {
                     assert!(
-                        Instant::now() < deadline,
+                        Instant::now() < start_deadline,
                         "terminal startup failed: {error}"
                     );
                     std::thread::sleep(Duration::from_millis(100));
@@ -357,15 +357,21 @@ mod tests {
                 )
                 .is_err()
         );
-        terminals
-            .input(&id, "[console]::WriteLine('lapis'+'proof')\r")
-            .unwrap();
+        let command = "[console]::WriteLine('lapis'+'proof')\r";
+        terminals.input(&id, command).unwrap();
+        let output_deadline = Instant::now() + Duration::from_secs(20);
+        let mut last_input = Instant::now();
         while !terminals.terminals()[0]
             .screen
             .plain_text()
             .contains("lapisproof")
         {
-            assert!(Instant::now() < deadline, "terminal output missing");
+            assert!(Instant::now() < output_deadline, "terminal output missing");
+            // shell の起動が遅い環境では先頭の入力が失われるため、未出力なら再送する。
+            if last_input.elapsed() >= Duration::from_secs(2) {
+                terminals.input(&id, command).unwrap();
+                last_input = Instant::now();
+            }
             terminals.refresh().unwrap();
             std::thread::sleep(Duration::from_millis(50));
         }
