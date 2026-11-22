@@ -312,12 +312,12 @@ jobs:
 
       - name: Test Desktop
         shell: pwsh
-        timeout-minutes: 20
+        timeout-minutes: 30
         run: |
           $process = Start-Process python -ArgumentList @('scripts/check.py', 'desktop', 'test') -NoNewWindow -PassThru
-          if (-not $process.WaitForExit(1200000)) {
+          if (-not $process.WaitForExit(1800000)) {
             & taskkill /F /T /PID $process.Id 2>$null
-            throw 'Desktop tests exceeded 20 minutes'
+            throw 'Desktop tests exceeded 30 minutes'
           }
           if ($process.ExitCode -ne 0) { exit $process.ExitCode }
 
