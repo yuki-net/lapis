@@ -1,17 +1,17 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { hostWebSocketUrl, parseInviteFragment, selectClientId } from "../src/invite.ts";
+import { hostIdentity, parseInviteFragment, selectClientId } from "../src/invite.ts";
 
-test("同じ公開入口の WebSocket を使い、招待情報を送らない", () => {
+test("Host の識別子は同じ公開入口の Origin だけを持ち、招待情報を送らない", () => {
   assert.equal(
-    hostWebSocketUrl("http://100.64.0.1:4747/#/invite?token=secret"),
-    "ws://100.64.0.1:4747/remote",
+    hostIdentity("http://100.64.0.1:4747/#/invite?token=secret"),
+    "http://100.64.0.1:4747/",
   );
   assert.equal(
-    hostWebSocketUrl("https://lapis.example/host/workspace?backend=webgl#/invite?token=secret"),
-    "wss://lapis.example/remote",
+    hostIdentity("https://lapis.example/host/workspace?backend=webgl#/invite?token=secret"),
+    "https://lapis.example/",
   );
-  assert.throws(() => hostWebSocketUrl("file:///index.html"));
+  assert.throws(() => hostIdentity("file:///index.html"));
 });
 
 test("招待による再登録だけ新しい端末 ID を使う", () => {

@@ -1995,7 +1995,6 @@ impl SettingsFeature {
         let access = access.with_loopback_fallback();
         let selected = self.selected_web_address(&access);
         let page_url = access.page_url(selected.as_ref());
-        let bridge_url = access.bridge_url(selected.as_ref());
 
         container =
             container.child(
@@ -2060,14 +2059,6 @@ impl SettingsFeature {
             "settings.web.page-url",
             page_url.clone(),
             "settings.web.copy-page-url",
-            "settings.web.copied",
-            cx,
-        ));
-        container = container.child(self.render_web_value_row(
-            "web-bridge-url",
-            "settings.web.bridge-url",
-            bridge_url.clone(),
-            "settings.web.copy-bridge-url",
             "settings.web.copied",
             cx,
         ));
@@ -3339,7 +3330,6 @@ mod tests {
             let source: crate::app::WebAccessSource = Arc::new(move || {
                 Some(desktop_client::WebAccess::new(
                     4747,
-                    4757,
                     addresses.clone(),
                     workspace_id.clone(),
                 ))
@@ -3462,10 +3452,6 @@ mod tests {
                 access.page_url(Some(&selected)).as_deref(),
                 Some("http://127.0.0.1:4747/")
             );
-            assert_eq!(
-                access.bridge_url(Some(&selected)).as_deref(),
-                Some("ws://127.0.0.1:4757/remote")
-            );
         });
     }
 
@@ -3485,10 +3471,6 @@ mod tests {
                 access.page_url(Some(&selected)).as_deref(),
                 Some("http://100.64.1.23:4747/")
             );
-            assert_eq!(
-                access.bridge_url(Some(&selected)).as_deref(),
-                Some("ws://100.64.1.23:4757/remote")
-            );
         });
     }
 
@@ -3505,7 +3487,6 @@ mod tests {
                 let host = observed.lock().unwrap().clone();
                 Some(desktop_client::WebAccess::new(
                     4747,
-                    4757,
                     vec![
                         desktop_client::WebAddress::new(
                             desktop_client::WebAddressKind::Local,
@@ -3612,7 +3593,6 @@ mod tests {
             let source: crate::app::WebAccessSource = std::sync::Arc::new(|| {
                 Some(desktop_client::WebAccess::new(
                     4747,
-                    4757,
                     vec![
                         desktop_client::WebAddress::new(
                             desktop_client::WebAddressKind::Local,

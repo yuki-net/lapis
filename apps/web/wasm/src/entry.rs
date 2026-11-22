@@ -26,14 +26,13 @@ thread_local! {
     static CONNECTED_HOST_URL: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
-/// ブラウザーで開いているページと、接続した Host URL から接続情報を作る。
+/// ブラウザーで開いているページから表示情報を作る。
+/// 接続先はページが WebTransport で直接取得するため、Host URL の表示は持たない。
 fn web_access() -> Option<desktop_client::WebAccess> {
     let page = web_sys::window()?.location().href().ok();
-    let host = CONNECTED_HOST_URL.with(|url| url.borrow().clone());
     let workspace = desktop_client::web_host::connection_info().map(|info| info.workspace_id);
     Some(desktop_client::WebAccess::from_urls(
         page.as_deref(),
-        host.as_deref(),
         workspace,
     ))
 }
@@ -83,7 +82,6 @@ pub async fn start(
     if url.trim().is_empty() {
         return start_without_host(backend_preference);
     }
-    // 設定の接続ページは、このページ自身と接続した Host URL を表示する。
     CONNECTED_HOST_URL.with(|current| *current.borrow_mut() = Some(url.clone()));
     // WebTransport の接続先と証明書ハッシュは同じ Origin の lapis-web から取得する。
     let endpoint = desktop_client::web_host::fetch_endpoint()

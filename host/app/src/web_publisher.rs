@@ -50,10 +50,10 @@ impl WebPublisher {
             .parent()
             .ok_or_else(|| std::io::Error::other("実行ファイルの場所が不明です"))?
             .to_path_buf();
-        let executable = std::env::var_os("LAPIS_WEB_BRIDGE_EXECUTABLE")
+        let executable = std::env::var_os("LAPIS_WEB_EXECUTABLE")
             .map(PathBuf::from)
             .unwrap_or_else(|| {
-                executable_dir.join(format!("lapis-web-bridge{}", std::env::consts::EXE_SUFFIX))
+                executable_dir.join(format!("lapis-web{}", std::env::consts::EXE_SUFFIX))
             });
         let dist = std::env::var_os("LAPIS_WEB_DIST")
             .map(PathBuf::from)
@@ -181,14 +181,13 @@ impl WebPublisher {
             .arg(self.connection.path())
             .arg("--listen")
             .arg(address.to_string())
+            .arg("--origin")
+            .arg(format!("http://{address}/"))
             .arg("--dist")
             .arg(&self.dist)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
-        if !address.ip().is_loopback() {
-            command.arg("--allow-remote");
-        }
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
