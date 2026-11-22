@@ -33,7 +33,7 @@ const ASSET_FIELDS: [&str; 2] = ["source", "sha256"];
 const REGISTRY_FIELDS: [&str; 2] = ["schema", "keys"];
 
 /// launcher 自身に埋め込む信頼済み公開鍵 registry。鍵の追加・失効は launcher の再配布を伴う。
-const REPOSITORY_REGISTRY: &str = include_str!("../../../../release/trusted-keys.json");
+const REPOSITORY_REGISTRY: &str = include_str!("../../../release/trusted-keys.json");
 
 pub(crate) struct Asset {
     pub(crate) source: String,
@@ -499,7 +499,7 @@ mod tests {
     #[test]
     fn embedded_registry_matches_the_repository_file() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../..")
+            .join("../..")
             .join("release/trusted-keys.json");
         let raw = std::fs::read(path).expect("repository registry");
         let keys = TrustedKeys::parse(&raw).expect("repository registry parses");

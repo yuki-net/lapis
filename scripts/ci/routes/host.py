@@ -94,7 +94,7 @@ ROUTE = Route(
             ["cargo", "build", "--locked", "-p", "web-terminal-smoke", "--target", "wasm32-unknown-unknown",
              "--profile", "web"],
         ),
-        Step("Test web extension terminal", py("clients/web/wasm/tests/extension_terminal_smoke.py"), timeout_minutes=5),
+        Step("Test web extension terminal", py("apps/web/wasm/tests/extension_terminal_smoke.py"), timeout_minutes=5),
         Step("Build web-bridge", ["cargo", "build", "--locked", "-p", "web-bridge"]),
         Step(
             "Test managed Web publication",

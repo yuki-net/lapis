@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "wasm": "cargo build -p desktop-ui --target wasm32-unknown-unknown --profile web && wasm-bindgen --target web --out-dir src/generated/wasm --out-name lapis_ui ../../target/wasm32-unknown-unknown/web/desktop_ui.wasm",
+    "wasm": "cargo build -p web --target wasm32-unknown-unknown --profile web && wasm-bindgen --target web --out-dir src/generated/wasm --out-name lapis_ui ../../target/wasm32-unknown-unknown/web/web.wasm",
     "prepare:dist": "node scripts/prepare-dist.mjs",
     "typecheck": "tsc -b",
     "test": "node --test tests/invite.test.mjs",

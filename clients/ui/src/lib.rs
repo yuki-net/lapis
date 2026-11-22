@@ -9,6 +9,7 @@ mod commands;
 mod desktop;
 #[cfg(all(debug_assertions, not(target_family = "wasm")))]
 mod devtools;
+mod entry;
 #[cfg(not(target_family = "wasm"))]
 mod extension_loading;
 pub mod extension_ui;
@@ -23,16 +24,12 @@ pub mod notification;
 mod root;
 mod shell;
 mod timer;
-#[cfg(target_family = "wasm")]
-mod web;
+pub mod web_bridge;
 mod workbench;
 
 pub(crate) use desktop::window_host;
 pub(crate) use kit::components;
 pub use kit::{theme, tokens};
-
-#[cfg(target_family = "wasm")]
-pub use web::{connection_info, is_ready, start};
 
 /// wasmにはstdの時刻APIが無いため、ブラウザーではweb-timeを使う。
 pub(crate) mod time {
@@ -41,6 +38,9 @@ pub(crate) mod time {
 
 pub use app::{ConnectionIdentity, DesktopServices, InitialView, UpdaterHandle, WorkspaceOption};
 #[cfg(not(target_family = "wasm"))]
-pub use desktop::run;
+pub use app::{
+    desktop_application, init_tracing, initialize, on_last_window_closed, open_desktop_window,
+};
 #[cfg(target_family = "wasm")]
-pub use web::run_web;
+pub use entry::web_fonts;
+pub use entry::{application_assets, boot};

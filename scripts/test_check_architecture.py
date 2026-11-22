@@ -40,6 +40,19 @@ class ArchitectureTests(unittest.TestCase):
             source.write_text('use crate::shell::panel_layout::PanelLayout;\n', encoding="utf-8")
             self.assertTrue(any("Feature" in error for error in check_desktop_layout(root)))
 
+    def test_desktop_layout_scans_apps_entry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "apps/desktop/app/src/desktop.rs"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                '// TabGroupId was removed\nconst TEXT: &str = "DropZone";\n',
+                encoding="utf-8",
+            )
+            self.assertEqual(check_desktop_layout(root), [])
+            source.write_text('fn use_old(_: TabGroupId) {}\n', encoding="utf-8")
+            self.assertTrue(any("TabGroupId" in error for error in check_desktop_layout(root)))
+
     def test_feature_viewport_and_user_agent_access_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -224,10 +237,20 @@ class ArchitectureTests(unittest.TestCase):
     def test_desktop_entry_can_compose_backend(self):
         self.metadata["workspace_members"].extend(["desktop", "infra"])
         self.metadata["packages"].extend([
-            package("desktop", "clients/desktop/app", ["ui", "runtime", "infra"]),
+            package("desktop", "apps/desktop/app", ["ui", "runtime", "infra"]),
             package("infra", "host/adapters/local"),
         ])
         self.assertEqual(check(self.metadata, {}), [])
+
+    def test_launcher_is_an_independent_entry(self):
+        self.metadata["workspace_members"].extend(["launcher", "infra"])
+        self.metadata["packages"].extend([
+            package("launcher", "apps/launcher"),
+            package("infra", "host/adapters/local"),
+        ])
+        self.assertEqual(check(self.metadata, {}), [])
+        self.metadata["packages"][-2]["dependencies"].append({"name": "infra"})
+        self.assertIn("launcher -> infra", "\n".join(check(self.metadata, {})))
 
     def test_extension_role_directories_keep_their_layer(self):
         """自己完結した拡張でも `host` は runtime、`adapter` は infrastructure として検査する。"""
@@ -265,7 +288,7 @@ class ArchitectureTests(unittest.TestCase):
     def test_only_desktop_composition_root_can_depend_on_host(self):
         self.metadata["workspace_members"].extend(["desktop", "cli", "host"])
         self.metadata["packages"].extend([
-            package("desktop", "clients/desktop/app", ["host"]),
+            package("desktop", "apps/desktop/app", ["host"]),
             package("cli", "clients/cli"),
             package("host", "host/app", ["runtime"]),
         ])
@@ -282,9 +305,9 @@ class ArchitectureTests(unittest.TestCase):
     def test_desktop_client_and_persistence_are_not_backend_or_ui(self):
         self.metadata["workspace_members"].extend(["desktop", "adapter", "store", "infra"])
         self.metadata["packages"].extend([
-            package("desktop", "clients/desktop/app", ["ui", "adapter", "store"]),
+            package("desktop", "apps/desktop/app", ["ui", "adapter", "store"]),
             package("adapter", "clients/state", ["model"]),
-            package("store", "clients/desktop/persistence", ["adapter", "model"]),
+            package("store", "apps/desktop/persistence", ["adapter", "model"]),
             package("infra", "host/adapters/local", ["runtime"]),
         ])
         self.metadata["packages"][2]["dependencies"].append({"name": "adapter"})
@@ -298,7 +321,7 @@ class ArchitectureTests(unittest.TestCase):
                 self.assertIn(f"{source} -> {target}", "\n".join(check(metadata, {})))
 
     def test_client_adapter_and_store_cannot_import_gpui_or_native_dialog(self):
-        for path in ("clients/state", "clients/desktop/persistence"):
+        for path in ("clients/state", "apps/desktop/persistence"):
             for dependency in ("gpui", "rfd"):
                 with self.subTest(path=path, dependency=dependency):
                     metadata = copy.deepcopy(self.metadata)

@@ -13,7 +13,9 @@ ROUTE = Route(
     key="desktop",
     name="Desktop",
     runs_on=("windows",),
-    timeout_minutes=60,
+    # crate 移設で Cargo の path fingerprint が無効になり、cold build に
+    # なることがある。テスト本体は 20 分、事前ビルドは別枠で余裕を持たせる。
+    timeout_minutes=75,
     python=PYTHON_VERSION,
     rust=True,
     rust_components="rustfmt, clippy",
@@ -23,16 +25,23 @@ ROUTE = Route(
     steps=(
         Step("Check architecture", py("scripts/check.py", "desktop", "architecture")),
         Step("Check formatting", py("scripts/check.py", "desktop", "format")),
+        # テストの前提になるビルド。3 step で合計 35 分を上限の目安にする。
         Step(
             "Build extension host",
             ["cargo", "build", "--locked", "-p", "extension-runtime", "--bin", "lapis-extension-host"],
+            timeout_minutes=12,
         ),
-        Step("Build lapis-terminal-native", ["cargo", "build", "--locked", "-p", "lapis-terminal-native"]),
+        Step(
+            "Build lapis-terminal-native",
+            ["cargo", "build", "--locked", "-p", "lapis-terminal-native"],
+            timeout_minutes=12,
+        ),
         # terminal component の wasm は、拡張 package を作るテストの前提。
         Step(
             "Build terminal component",
             ["cargo", "build", "--locked", "--manifest-path", "extensions/terminal/component/Cargo.toml",
              "--target", "wasm32-wasip2", "--target-dir", "target/terminal-component"],
+            timeout_minutes=12,
         ),
         Step("Test Desktop", py("scripts/check.py", "desktop", "test"), timeout_minutes=20),
         # lapis（Desktop 全体）をビルドする必要があるテスト。Desktop の

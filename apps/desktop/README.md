@@ -22,21 +22,21 @@ UIの共通の意図は [Design](../../docs/DESIGN.md)、手動検証の扱い�
 
 ## ディレクトリの責務
 
-- `app/` は Desktop の起動・終了と依存注入を行う Composition Root。Backend の具体実装を組み立てるのはここに限定します。
-- `launcher/` は起動時に staging 済みの更新を適用してから本体を起動します。manifest の取得・download・更新の同意画面は持ちません（[配布と更新の内部契約](../../docs/specs/release.md)）。
+- `app/` は Desktop の起動・終了と依存注入を行う Composition Root。Backend の具体実装を組み立てるのはここに限定します。ネイティブ window の起動 entry は `app/src/desktop.rs` が持ち、`desktop_ui` の初期化 API をイベントループから呼びます。
+- `../launcher/` は起動時に staging 済みの更新を適用してから本体を起動します。manifest の取得・download・更新の同意画面は持ちません（[配布と更新の内部契約](../../docs/specs/release.md)）。
   - library として検証・staging・適用を公開し、`app/` の更新処理と同じ規則を使います。manifest の取得と download は `app/` が行うため、launcher の実行ファイルは network をリンクしません。
-- `../state/` は Host の表示 cache・Client 操作・復元用表示状態を所有し、GPUI や具体的な OS 実装には依存しません。
+- `../../clients/state/` は Host の表示 cache・Client 操作・復元用表示状態を所有し、GPUI や具体的な OS 実装には依存しません。
 - `persistence/` は Desktop の Conversation・Window 表示状態・設定を保存します。Backend の実行資源を復元・再起動する責務は持ちません。
 - Local Host は Web 等の端末 credential と失効状態を Host の状態ディレクトリに保存します。Desktop bootstrap 用の credential は起動ごとに生成し、端末用の保存対象から除きます。
-- `../ui/src/shell/` は Window・Panel・Tab・Layout、`../ui/src/features/` は個別機能の表示・入力・描画を担当します。
+- `../../clients/ui/src/shell/` は Window・Panel・Tab・Layout、`../../clients/ui/src/features/` は個別機能の表示・入力・描画を担当します。
 - 左のProject / Taskで既存フォルダをProjectへ登録し、登録先からPrimaryを一つ、Subを任意で一つ選んで作業Taskを作成します。Git管理されていない既存ソースフォルダも選べます。
 - 作業Taskの選択・Primary/Sub・文書とPanelの復元参照はDesktopの保存状態です。既存のConversation IDを復元キーに再利用し、HostのAgent実行Task/Executionとは区別します。切替ではHostの文書・PTY・CLIを終了しません。Worktreeの作成・カスタマイズはGit操作として扱います。
 - Project / Taskの保存状態が壊れている場合はエラーを表示して書き戻しを拒否します。従来の会話はrootごとのProjectへ移行し、Project未所属の下書きはTask外の復元項目として残します。
 - UI に Backend の正規状態や実行ロジックを移さず、機能横断的な `#[path]` 取り込みは禁止します。
 - 依存方向の詳細は [責務と依存方向](../../docs/specs/architecture.md) を参照してください。
 
-- 更新の適用は `launcher/` が行います。起動時に `staging/<version>/` の検証済み package を `versions/<version>/` へ入れ、`current.json` を進めてから本体を起動します。失敗しても起動を止めず、`current.json` の version で立ち上げます。`breaking: true` の適用（data 世代の切替）は同意を伴うためアプリ側の範囲です。
-- `launcher/` は GPUI を読み込まず、署名検証・zip 展開・pointer の読み書きだけを持ちます。更新の検出・download・更新モードの設定を launcher に足さないでください（launcher 自身の更新は手動になるため）。
+- 更新の適用は `../launcher/` が行います。起動時に `staging/<version>/` の検証済み package を `versions/<version>/` へ入れ、`current.json` を進めてから本体を起動します。失敗しても起動を止めず、`current.json` の version で立ち上げます。`breaking: true` の適用（data 世代の切替）は同意を伴うためアプリ側の範囲です。
+- `../launcher/` は GPUI を読み込まず、署名検証・zip 展開・pointer の読み書きだけを持ちます。更新の検出・download・更新モードの設定を launcher に足さないでください（launcher 自身の更新は手動になるため）。
 - 信頼済み公開鍵は `release/trusted-keys.json` を build 時に埋め込みます。鍵の追加・失効は launcher の再配布を伴います。
 - 更新の検出・download・検証・staging は `app/` の `updater.rs` が行い、状態だけを UI へ流します。軸A は次回起動で無言適用し、軸B は同意画面を出してから新しい data 世代を並置します。失敗しても起動・編集・接続を止めません。
 
@@ -62,7 +62,7 @@ WindowsのRustRoverでは `Run Host` と `Run Desktop`、`Run Desktop (Hot Reloa
 
 Web をブラウザーから使う手順は [開発時の起動](../../docs/dev.md) を参照してください。
 
-managed Host の Web 公開では、Host と同じディレクトリの `lapis-web-bridge` と `web/` の配信ファイルを使用します。開発ランチャーは bridge をビルドして Host と同じ session に配置し、`clients/web/dist` を参照します。Web の利用前に `clients/web` で `npm run build` が必要です。
+managed Host の Web 公開では、Host と同じディレクトリの `lapis-web-bridge` と `web/` の配信ファイルを使用します。開発ランチャーは bridge をビルドして Host と同じ session に配置し、`apps/web/dist` を参照します。Web の利用前に `apps/web` で `npm run build` が必要です。
 
 `cargo dev` は `target/debug/` のbinaryを使い、開発用の設定・会話・復元状態・Host接続情報を `target/dev-state/` に保存します。他のworktreeや通常起動の保存先とは共有しません。アプリとHostの処理は通常版と同じで、起動引数だけが異なります。明示的に同じファイルやRemote Hostを開いた場合、その実体の共有まで防ぐ仕組みではありません。新しい保存先に既存の個人設定を自動コピーしません。
 
@@ -77,10 +77,10 @@ managed Host の Web 公開では、Host と同じディレクトリの `lapis-w
 起動方法・制約は [開発時の起動](../../docs/dev.md) を参照してください。ここでは実装側の前提だけを書きます。
 
 - GPUIの共通View dispatchにHot Reload境界を置き、各Entity / AnyViewの通常描画を対象とします。Theme / Syntaxの可変状態はApp Globalで所有します。
-- 旧TLS実装ではHot Patch後にアクセス違反を確認しました。App Globalへの移行後、ShellとSettingsの表示変更を同一PIDで確認しています。検証範囲は [evidence.txt](../ui/experiments/hot-reload/evidence.txt) を参照してください。
+- 旧TLS実装ではHot Patch後にアクセス違反を確認しました。App Globalへの移行後、ShellとSettingsの表示変更を同一PIDで確認しています。検証範囲は [evidence.txt](../../clients/ui/experiments/hot-reload/evidence.txt) を参照してください。
 - Document / 未保存編集 / Tab / Panel / Task / Terminalの状態維持を意図していますが、Hot Reload中の一通りの確認は未実施です。
 - 接続先はDioxus CLIが設定する環境変数から取得し、接続は起動時の1回だけです。
-- 実装の詳細は [ui/experiments/hot-reload/README.md](../ui/experiments/hot-reload/README.md) を参照してください。
+- 実装の詳細は [ui/experiments/hot-reload/README.md](../../clients/ui/experiments/hot-reload/README.md) を参照してください。
 
 ## Host接続
 

@@ -1,9 +1,8 @@
 //! Web の起動処理（GPUI Web backend と初期 window）。
 
 use desktop_client::EditorSession;
+use desktop_ui::{DesktopServices, InitialView};
 use gpui::Application;
-
-use crate::app::{DesktopServices, InitialView, open_desktop_window};
 
 pub fn run_web(
     session: EditorSession,
@@ -27,23 +26,8 @@ pub fn run_web(
     let http_client = std::sync::Arc::new(platform.fetch_http_client());
     Application::with_platform(platform)
         .with_http_client(http_client)
-        .with_assets(crate::components::IconAssets)
+        .with_assets(desktop_ui::application_assets())
         .run_embedded(move |cx| {
-            cx.text_system()
-                .add_fonts(fonts)
-                .expect("Web fonts should load");
-            let settings = services.settings.settings();
-            crate::theme::init(
-                &extension_ui_contract::ThemeId::new(settings.theme().to_owned()),
-                settings.syntax_theme(),
-                cx,
-            );
-            crate::features::settings_coordinator::SettingsCoordinator::init(
-                services.settings.clone(),
-                cx,
-            );
-            crate::keymap::gpui::bind_keys(cx);
-            open_desktop_window(session, services, initial_view, cx);
-            on_ready();
+            desktop_ui::boot(session, services, initial_view, fonts, on_ready, cx);
         })
 }

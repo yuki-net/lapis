@@ -23,7 +23,7 @@ WORKFLOW = ROOT / ".github/workflows/ci.yml"
 class PlanTests(unittest.TestCase):
     def test_route_keys_follow_order(self):
         self.assertEqual(plan.route_keys(None), list(ORDER))
-        keys = plan.route_keys(["clients/desktop/app/src/main.rs"])
+        keys = plan.route_keys(["apps/desktop/app/src/main.rs"])
         self.assertEqual(keys, [key for key in ORDER if key in {"desktop"}])
         self.assertEqual(keys, sorted(keys, key=ORDER.index))
 
@@ -196,12 +196,12 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(json.loads(buffer.getvalue()), ["repository"])
 
     def test_default_mode_combines_pull_request_and_worktree(self):
-        with patch.object(plan, "changed_paths", return_value=["clients/web/package.json"]) as changed:
+        with patch.object(plan, "changed_paths", return_value=["apps/web/package.json"]) as changed:
             scope, paths = plan.select_paths(
                 type("Args", (), {"full": False, "worktree": False, "base": "origin/develop"})()
             )
         changed.assert_called_once_with("origin/develop")
-        self.assertEqual(paths, ["clients/web/package.json"])
+        self.assertEqual(paths, ["apps/web/package.json"])
         self.assertIn("origin/develop", scope)
 
     def test_unknown_base_falls_back_to_every_route(self):

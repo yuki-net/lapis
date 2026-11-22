@@ -25,16 +25,17 @@ PATH_RULES = [
     (["scripts/check.py", "scripts/test_check.py", ".github/workflows/"],
      {"repository", "rust_core", "host", "desktop", "mobile", "web", "dev_commands"}),
     # Desktop 関連。
-    # clients/state と clients/ui は Web の wasm ビルド（desktop-ui）でも
+    # clients/state と clients/ui は Web の wasm ビルド（apps/web/wasm）でも
     # コンパイルされる。
     (["clients/state/src/web_host.rs", "clients/state/src/web_host/extension_terminal.rs",
       "clients/state/src/terminal_extension/", "clients/state/src/terminal_extension.rs",
-      "clients/ui/src/web/mod.rs", "clients/ui/wasm-smoke/",
-      "clients/web/wasm/tests/extension_terminal_smoke.py"], {"host", "desktop", "rust_core", "web"}),
+      "apps/web/wasm/src/entry.rs", "apps/web/wasm/src/startup.rs",
+      "clients/ui/wasm-smoke/", "apps/web/wasm/tests/extension_terminal_smoke.py"],
+     {"host", "desktop", "rust_core", "web"}),
     (["clients/state/"], {"desktop", "rust_core", "web"}),
-    (["clients/desktop/persistence/"], {"desktop", "rust_core"}),
-    (["clients/desktop/launcher/"], {"desktop", "rust_core"}),
-    (["clients/desktop/"], {"desktop"}),
+    (["apps/desktop/persistence/"], {"desktop", "rust_core"}),
+    (["apps/launcher/"], {"desktop", "rust_core"}),
+    (["apps/desktop/"], {"desktop"}),
     (["clients/ui/"], {"desktop", "web"}),
     (["vendor/gpui/"], {"desktop"}),
     (["patches/gpui-"], {"desktop"}),
@@ -83,7 +84,9 @@ PATH_RULES = [
     (["clients/mobile/"], {"mobile"}),
 
     # Web。
+    # 移設前の path は削除差分として現れるため、全 job を起こさず Web の検証へ割り当てる。
     (["clients/web/"], {"web"}),
+    (["apps/web/"], {"web"}),
 
     # CI・scripts。
     # package 生成と Host の読み込みを同じ fixture で検証する。
@@ -95,8 +98,8 @@ PATH_RULES = [
     (["release/"], {"repository", "desktop"}),
 
     # Cargo 設定。
-    (["Cargo.toml"], {"repository", "rust_core", "host", "desktop"}),
-    (["Cargo.lock"], {"repository", "rust_core", "host", "desktop"}),
+    (["Cargo.toml"], {"repository", "rust_core", "host", "desktop", "web"}),
+    (["Cargo.lock"], {"repository", "rust_core", "host", "desktop", "web"}),
     ([".cargo/"], {"repository", "rust_core", "host", "desktop", "dev_commands"}),
 
     # ドキュメント。

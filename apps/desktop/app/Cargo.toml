@@ -12,11 +12,11 @@ hot-reload = ["desktop-ui/hot-reload"]
 host = { path = "../../../host/app" }
 client-api = { path = "../../../contracts/protocol" }
 zeroize.workspace = true
-desktop-client = { path = "../../state" }
-desktop-ui = { path = "../../ui" }
+desktop-client = { path = "../../../clients/state" }
+desktop-ui = { path = "../../../clients/ui" }
 terminal = { package = "terminal-contract", path = "../../../extensions/terminal/contract" }
 futures-channel = "0.3"
-lapis-launcher = { path = "../launcher" }
+lapis-launcher = { path = "../../launcher" }
 platform = { path = "../../../host/adapters/local" }
 local-process = { path = "../../../host/adapters/process" }
 process = { path = "../../../contracts/domain/process" }

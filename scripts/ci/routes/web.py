@@ -12,11 +12,11 @@ ROUTE = Route(
     timeout_minutes=20,
     node=NODE_VERSION,
     node_cache="npm",
-    node_cache_path="clients/web/package-lock.json",
+    node_cache_path="apps/web/package-lock.json",
     rust=True,
     rust_targets="wasm32-unknown-unknown",
     wasm_bindgen=WASM_BINDGEN_VERSION,
-    working_directory="clients/web",
+    working_directory="apps/web",
     steps=(
         Step("Install dependencies", ["{npm}", "ci"]),
         Step("Build Web", ["{npm}", "run", "build"]),

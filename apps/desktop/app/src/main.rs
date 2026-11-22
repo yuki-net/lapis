@@ -1,4 +1,5 @@
 mod connection;
+mod desktop;
 mod extension_poll;
 mod install;
 mod update_fetch;
@@ -321,7 +322,7 @@ fn main() {
     if let Some(connection) = connection_identity {
         desktop_services = desktop_services.with_connection_identity(connection);
     }
-    desktop_ui::run(session, desktop_services, initial_view);
+    desktop::run(session, desktop_services, initial_view);
 }
 
 fn connection_hint(error: &dyn std::fmt::Display) -> String {

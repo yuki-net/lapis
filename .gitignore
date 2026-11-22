@@ -2,9 +2,9 @@
 /clients/mobile/.gradle/
 /clients/mobile/**/build/
 /clients/mobile/local.properties
-/clients/web/dist/
-/clients/web/node_modules/
-/clients/web/src/generated/
+/apps/web/dist/
+/apps/web/node_modules/
+/apps/web/src/generated/
 *.tsbuildinfo
 *.log
 # scripts.ci.run のローカルログ
@@ -12,7 +12,7 @@
 .idea/libraries
 .idea/modules
 
-# Junie の作業用プラン（共有する設定は .junie/AGENTS.md 等として追跡可能に残す）
-.junie/plans/
+# Junie の作業ディレクトリ（ローカル専用）
+.junie/
 
 __pycache__/
