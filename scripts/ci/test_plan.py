@@ -121,10 +121,17 @@ class PlanTests(unittest.TestCase):
     def test_matrix_is_json_serializable_with_empty_selection(self):
         self.assertEqual(plan.matrix([]), [])
 
-    def test_workflow_defines_only_plan_ci_gate(self):
+    def test_workflow_defines_only_plan_ci_policy_gate(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         jobs = re.findall(r"(?m)^  ([a-z_]+):\s*$", workflow.split("\njobs:\n", 1)[1])
-        self.assertEqual(jobs, ["plan", "ci", "gate"])
+        self.assertEqual(jobs, ["plan", "ci", "policy", "gate"])
+
+    def test_policy_runs_only_on_pull_requests(self):
+        """保護パスは PR のときだけ見る。マージ後の push を恒久的に赤くしない。"""
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("if: github.event_name == 'pull_request'", workflow)
+        self.assertIn("needs: [plan, ci, policy]", workflow)
+        self.assertIn("python -m scripts.ci.policy", workflow)
 
     def test_workflow_delegates_every_route_to_run_py(self):
         """step 列を YAML に書かず、run.py に委譲していること。"""

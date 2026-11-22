@@ -305,7 +305,11 @@ class TestPathRouting(unittest.TestCase):
     def test_gate_checks_mapped_jobs_and_expected_skips(self):
         for route, path in (("desktop", "apps/desktop/app/src/main.rs"), ("host", "host/app/src/main.rs")):
             selected = sorted(jobs_for_paths([path]))
-            needs = {"plan": {"result": "success"}, "ci": {"result": "success"}}
+            needs = {
+                "plan": {"result": "success"},
+                "ci": {"result": "success"},
+                "policy": {"result": "success"},
+            }
             self.assertEqual(errors(selected, needs, len(selected)), [])
             if not selected:
                 self.assertTrue(errors(selected, needs, 1))

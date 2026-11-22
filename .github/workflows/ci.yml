@@ -139,11 +139,31 @@ jobs:
           RUNNER_TEMP: ${{ runner.temp }}
         run: python -m scripts.ci.run ${{ matrix.route.job }} --no-prerequisite-check --os ${{ matrix.route.os }}
 
+  # 保護パス（lints/・CI 定義）の変更を検出する。path routing ではなく PR 全体の
+  # 性質なので route にせず、PR のときだけ独立した job として走らせる。
+  # 変更があれば無条件で失敗し、人間が admin でマージする（ラベル免除は無い）。
+  policy:
+    name: Policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Check protected paths
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python -m scripts.ci.policy --base "$BASE_SHA"
+
   gate:
     name: Gate
     runs-on: ubuntu-latest
     if: always()
-    needs: [plan, ci]
+    needs: [plan, ci, policy]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -154,4 +174,6 @@ jobs:
           SELECTED_ROUTES: ${{ needs.plan.outputs.selected }}
           SELECTED_COUNT: ${{ needs.plan.outputs.count }}
           NEEDS_JSON: ${{ toJSON(needs) }}
+          # policy は PR のときだけ走る。push / 手動実行では skipped が正しい。
+          EVENT_NAME: ${{ github.event_name }}
         run: python -m scripts.ci.gate

@@ -27,6 +27,12 @@ python -m scripts.ci.run rust_core --json
 
 所要時間の内訳が要るときは `python -m scripts.ci.measure <route>` を使う（step 別の分数と占有比が出る）。
 
+保護パス（`lints/`、`AGENTS.md`、`.github/`、`scripts/ci/` など）を触ったときは、`Policy` チェックと同じ判定をローカルで確認できる。変更があれば終了コード 1。
+
+```sh
+python -m scripts.ci.policy --base origin/develop
+```
+
 ## 判断の指針
 
 - 成功 step の出力は既定で捨てられる。情報が要るなら `--step` で絞るか、ログファイルを開く
@@ -37,6 +43,7 @@ python -m scripts.ci.run rust_core --json
 - 検証を足すときは `scripts/ci/routes/<route>.py` の `Route.steps` に `Step` を足す。`ci.yml` と `jobs.py` は触らない
 - OS 固有の step は `runs_on` に OS を足し、`scripts/ci/routes/platforms/<route>_<os>.py` に置く
 - path の振り分けを変えるときは `scripts/ci/paths.py` の `PATH_RULES` を編集する
+- レビューで見つけたミスを再発防止するときは `lints/README.md` の手順でルールを足す（カタログ・実装・テスト・fail/pass fixture の 4 点セット）
 
 ## やってはいけないこと
 

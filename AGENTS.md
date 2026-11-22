@@ -48,6 +48,12 @@
     - **判断・理由**: なぜその修正としたか（局所修正の妥当性など）
     - **コミット**: 7桁SHA（例: `bffb2ab`）
 
+## 保護パス（改変検知）
+- 次の path は **保護パス**。変更すると PR の `Policy` チェックが無条件に赤くなる：`lints/`、`AGENTS.md`、`.github/`、`scripts/check*.py`、`scripts/ci/`、`scripts/architecture-exceptions.json`、`clippy.toml`、`rust-toolchain.toml`、`rustfmt.toml`
+- 保護パスを変更する PR は、人間が差分を確認して管理者権限でマージする。ラベル・コメントによる免除は作らない（AI と人間が同じアカウントで動くため、AI が自分で免除できてしまう）。
+- この仕組みを導入する PR（bootstrap）も同じ扱い。赤を消すための特別扱いを追加しない。
+- 一度直した指摘をルールにするときは `lints/README.md` の手順に従い、カタログ・実装・テスト・fail/pass の fixture を同じ PR で足す。
+
 ## アーキテクチャ
 - 状態の所有・配置・依存方向は `docs/specs/architecture.md` を正本とし、領域固有の判断はその `README.md` を参照する。
 - 変更時は `python scripts/check_architecture.py` を実行し、例外を増やして回避しない。

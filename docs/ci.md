@@ -15,10 +15,12 @@ CI で走る検証は、ローカルでも同じものが同じコマンドで�
 | `scripts/ci/run.py` | 1 route をローカル / GitHub 共通で実行 |
 | `scripts/ci/report.py` | ログ装飾・失敗注釈・実行サマリ |
 | `scripts/ci/gate.py` | plan と matrix の結果から CI の成否を決める |
+| `scripts/ci/policy.py` | **保護パス（lint 基盤・CI 定義）の変更検出**。PR のときだけ独立 job で走る |
 | `scripts/ci/measure.py` | route の step 別所要時間を測る |
 | `scripts/ci/watch.py` | route × OS を並列に実行し、進捗を 1 画面で描く |
 | `scripts/ci/state.py` | 実行中の route の状態（`.ci/state/<job>.json`） |
-| `.github/workflows/ci.yml` | `plan` / `ci`（matrix）/ `gate` の 3 job のみ。step 列は持たない |
+| `lints/` | **ルールのカタログ・baseline・fixture**。1 ルール = 1 ファイルで、実装・テストと三者一致を検査する |
+| `.github/workflows/ci.yml` | `plan` / `ci`（matrix）/ `policy` / `gate` の 4 job のみ。step 列は持たない |
 
 `.github/workflows/ci.yml` に step を書き足さないこと。検証を追加するときは `scripts/ci/routes/<route>.py` を、path の振り分けを変えるときは `scripts/ci/paths.py` を編集する（`scripts/ci/plan.py` のテストが YAML への直書きを検出して落とす）。
 
@@ -87,6 +89,39 @@ Rust のビルドは `Swatinem/rust-cache` に任せる。
 - **PR では保存しない**（`save-if: github.event_name != 'pull_request'`）。PR のキャッシュは他の PR から見えないため、`develop` / `main` の push で暖めたものだけを全 PR が読む
 - 復元された中身は job サマリに出す（`target` のサイズと `*.rlib` の数）。**効果は次回の復元時に分かる**
 - キャッシュの実在とサイズは `gh api repos/<owner>/<repo>/actions/caches` で確認できる（CI 不要）
+
+## 保護パス（policy）
+
+`lints/`・`AGENTS.md`・`.github/`・`scripts/check*.py`・`scripts/ci/`・`clippy.toml` などの
+**保護パス**を PR が変更したら、`Policy` チェックを無条件で失敗させる。
+
+- path routing ではなく **PR 全体の性質**なので route にしない。`ci.yml` の独立 job
+- `pull_request` のときだけ走る。`develop` / `main` への push では走らせない（マージ済みの正当な変更で恒久的に赤くしない）
+- ラベル・コメントによる免除は無い（AI と人間が同じアカウントのため、AI が自分で免除できてしまう）
+- 失敗したら人間が差分を確認し、管理者権限でマージする。判定を変える `scripts/ci/policy.py` 自体も保護パス
+- この仕組みを入れる PR（bootstrap）も赤くなる
+
+ローカルでは次で確認できる。
+
+```powershell
+python -m scripts.ci.policy --base origin/develop
+```
+
+## lint のカタログ（lints/）
+
+レビューで見つけた実装ミスを、次からは機械で止める。**1 ルール = 1 カタログ**で、
+カタログ・実装・テスト・fail/pass の fixture を揃える。
+
+| 場所 | 内容 |
+| --- | --- |
+| `lints/README.md` | 索引と追加手順、手段の優先順位（design → static → test → schema → policy → prose） |
+| `lints/catalog/<id>.md` | 何を検知するか、直し方、例外、導入背景（先頭に front matter） |
+| `lints/fixtures/<id>/fail` / `pass` | 落ちる例・通る例。**fail が落ちることを CI で証明する** |
+| `lints/baseline.json` | 行数上限の既存違反（ラチェット） |
+
+- `scripts/ci/test_catalog.py` が三者一致（カタログ・実装・テスト）と fixture の発火を検査する
+- `lints/` の変更は `repository` route が選ばれ、同時に保護パスとして `Policy` も赤くなる
+- 設計で消せるものを lint にしない。`remedy` が `design` 以外なら `why_not_design` を書く
 
 ## route 一覧
 
@@ -189,7 +224,7 @@ Host / Windows  Test Host
 
 ## GitHub での見え方
 
-`ci.yml` は job を 3 つしか持たないが、次の情報は失われない。
+`ci.yml` は job を 4 つしか持たないが、次の情報は失われない。
 
 | 見え方 | 手段 |
 | --- | --- |
