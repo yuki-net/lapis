@@ -102,6 +102,10 @@ PATH_RULES = [
     (["Cargo.lock"], {"repository", "rust_core", "host", "desktop", "web"}),
     ([".cargo/"], {"repository", "rust_core", "host", "desktop", "dev_commands"}),
 
+    # サイト。サイトごとに route を分け、触っていないサイトは走らせない。
+    (["sites/docs/"], {"sites_docs"}),
+    (["sites/"], {"sites_docs"}),
+
     # ドキュメント。
     (["docs/"], {"repository"}),
     (["locales/"], {"repository", "rust_core", "desktop"}),

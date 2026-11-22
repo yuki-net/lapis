@@ -95,6 +95,20 @@ Rust のビルドは `Swatinem/rust-cache` に任せる。
 | `desktop` | windows | Desktop の architecture / format / test / lint / build と GPUI patch 検証 |
 | `mobile` | linux, windows | KMP のユニットテストと Android ビルド（Linux では `./gradlew`、Windows では `gradlew.bat`） |
 | `web` | linux, windows | Web のビルドと接続処理テスト（`{npm}` が OS の実行ファイル名になる） |
+| `sites_docs` | linux | 利用者向けドキュメントサイト（`sites/docs`）のビルド |
+
+## サイト（sites/）
+
+デプロイする静的サイトは `sites/<name>/` に置き、**サイトごとに route を分ける**。触っていないサイトは path routing で選ばれないので、CI はそのサイトをビルドしない。
+
+| 場所 | 内容 |
+| --- | --- |
+| `sites/docs/` | 利用者向けドキュメント（Astro Starlight） |
+| `sites/home/` | ホームページ（予定） |
+| `docs/` | 仕様・設計の markdown（サイトではない） |
+
+- サイトを足すときは `routes/sites_<name>.py` と `paths.py` の規則をセットで足す
+- デプロイはまだ行わない。将来 `main` への push を契機に、サイトごとの workflow で行う（検証は CI、公開は別 workflow）
 
 GitHub の job 名は `name` と `runs_on`（または `target`）から作る（例 `Host / Windows`, `Mobile / Android / Windows`）。
 

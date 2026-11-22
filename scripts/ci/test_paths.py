@@ -200,6 +200,18 @@ class TestPathRouting(unittest.TestCase):
         """移設前の path は削除差分で現れるため、全 job を起こさない。"""
         self.assertEqual(jobs_for_paths(["clients/web/package.json"]), {"web"})
 
+    def test_docs_site_paths_run_only_the_docs_site(self):
+        """サイトは触ったときだけ、そのサイトの route を回す。"""
+        for path in (
+            "sites/docs/astro.config.mjs",
+            "sites/docs/package.json",
+            "sites/docs/src/content/docs/index.md",
+        ):
+            self.assertEqual(jobs_for_paths([path]), {"sites_docs"}, path)
+
+    def test_docs_specs_do_not_build_the_site(self):
+        self.assertEqual(jobs_for_paths(["docs/specs/architecture.md"]), {"repository"})
+
     def test_cargo_toml_runs_all_rust(self):
         jobs = jobs_for_paths(["Cargo.toml"])
         self.assertIn("repository", jobs)
