@@ -118,6 +118,14 @@ class PlanTests(unittest.TestCase):
         for entry in plan.matrix(list(ORDER)):
             self.assertEqual(entry["toolchain"], RUST_TOOLCHAIN)
 
+    def test_lint_collects_diagnostics_instead_of_failing_early(self):
+        """lint は -D warnings で止めず、JSON 診断を集めてから失敗させる。"""
+        for step in route_for("lint").steps:
+            self.assertTrue(step.json_diagnostics, step.name)
+            self.assertIn("--message-format=json", step.command)
+            self.assertIn("--keep-going", step.command)
+            self.assertNotIn("-D", step.command)
+
     def test_matrix_is_json_serializable_with_empty_selection(self):
         self.assertEqual(plan.matrix([]), [])
 

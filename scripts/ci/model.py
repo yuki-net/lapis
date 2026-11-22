@@ -50,6 +50,9 @@ class Step:
     # 前提を満たさない環境では実行せず unsupported として扱う。
     requires: tuple[str, ...] = ()
     env: dict[str, str] = field(default_factory=dict)
+    # cargo の `--message-format=json` 出力を診断として解釈する。成否は診断の
+    # 有無で決め、GitHub の注釈とジョブサマリに変換する（collect-then-fail）。
+    json_diagnostics: bool = False
 
 
 @dataclass(frozen=True)

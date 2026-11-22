@@ -16,7 +16,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from scripts.ci import report, state
+from scripts.ci import diagnostics, report, state
 from scripts.ci.console import configure
 from scripts.ci.model import ROOT, local_os, requirements
 from scripts.ci.routes import ORDER, route_for
@@ -159,7 +159,9 @@ def run_step(route, step, log: report.LocalLog | None, writer=None, os_name: str
         started = time.perf_counter()
         retryable = True
         try:
-            output, ok = execute_step(command, directory, environment, limit, writer)
+            output, ok = execute_step(
+                command, directory, environment, limit, writer, step.json_diagnostics
+            )
         except StepStartError as error:
             # 実行ファイルが無い等は待っても変わらないので再試行しない。
             output, ok, retryable = str(error), False, False
@@ -193,11 +195,16 @@ def execute_step(
     environment: dict[str, str],
     limit: float | None,
     writer=None,
+    json_diagnostics: bool = False,
 ) -> tuple[str, bool]:
     """コマンドを実行し、(出力, 成功したか) を返す。
 
     出力は一時ファイルへ書き、待っている間に追記分を stdout へ流す。
     タイムアウト時は子孫プロセスも含めて止める。
+
+    `json_diagnostics=True` のときは cargo の JSON 出力を解釈し、ログには
+    人間向けの `rendered` を流す。警告・エラーが 1 件でもあれば失敗にする
+    （cargo の終了コードだけに頼らない collect-then-fail）。
     """
     capture = tempfile.NamedTemporaryFile(suffix=".log", delete=False)
     try:
@@ -220,6 +227,21 @@ def execute_step(
             raise StepStartError(f"{type(error).__name__}: {error}") from error
         capture.close()
 
+        collector = diagnostics.Collector() if json_diagnostics else None
+
+        def show(chunk: str) -> None:
+            if not chunk:
+                return
+            if report.on_github():
+                # step の進行が CI ログから見えるようにする。ハング箇所の特定に要る。
+                for line in chunk.splitlines():
+                    print(line, flush=True)
+            if writer is not None:
+                writer.observe(chunk)
+
+        def consume(chunk: str) -> str:
+            return collector.feed(chunk) if collector is not None else chunk
+
         deadline = (time.perf_counter() + limit) if limit else None
         timed_out = False
         position = 0
@@ -230,21 +252,36 @@ def execute_step(
             except subprocess.TimeoutExpired:
                 pass
             position, chunk = pump_output(capture.name, position)
+            show(consume(chunk))
             if writer is not None:
-                writer.observe(chunk)
                 writer.pulse()
             if deadline is not None and time.perf_counter() > deadline:
                 terminate_tree(process)
                 timed_out = True
                 break
 
-        position, _ = pump_output(capture.name, position)
-        output = decode_output(Path(capture.name).read_bytes())
+        position, chunk = pump_output(capture.name, position)
+        show(consume(chunk))
+        if collector is not None:
+            show(collector.flush())
+            output = collector.text
+        else:
+            output = decode_output(Path(capture.name).read_bytes())
+
         if timed_out:
             output += f"\nstep exceeded {limit / 60:g} minutes\n"
             report.error("step timed out; terminated the process tree")
-            return output, False
-        return output, process.returncode == 0
+
+        ok = not timed_out and process.returncode == 0
+        if collector is not None:
+            ok = ok and not collector.failed()
+            if report.on_github():
+                for annotation in collector.annotations():
+                    print(annotation, flush=True)
+            summary = collector.summary()
+            if summary:
+                report.write_summary(summary)
+        return output, ok
     finally:
         capture.close()
         try:
@@ -281,10 +318,7 @@ def pump_output(path: str, position: int) -> tuple[int, str]:
             chunk = handle.read()
     except FileNotFoundError:
         return position, ""
-    if chunk and report.on_github():
-        # step の進行が CI ログから見えるようにする。ハング箇所の特定に要る。
-        for line in chunk.splitlines():
-            print(line, flush=True)
+    # 表示は呼び出し側（execute_step）が行う。JSON 診断は解釈後のテキストを出す。
     return position + len(chunk), chunk
 
 
