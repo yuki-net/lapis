@@ -1,0 +1,19 @@
+---
+// Starlight の PageTitle 差し替え。タイトルの上にセクション名のパンくずを足すだけ。
+// 浮島を増やさず、記事が主役だと分かる手がかりにする。
+import { currentSection } from '../data/nav';
+
+const title = Astro.locals.starlightRoute.entry.data.title;
+const section = currentSection(Astro.url.pathname);
+// セクション名とページ名が同じ場合は「はじめに › はじめに」にならないよう出さない。
+const parent = section?.label && section.label !== title ? section.label : null;
+---
+
+{parent && (
+  <nav class="lapis-breadcrumb" aria-label="パンくず">
+    <span>{parent}</span>
+    <span class="sep" aria-hidden="true">›</span>
+    <span class="current">{title}</span>
+  </nav>
+)}
+<h1 id="_top">{title}</h1>
