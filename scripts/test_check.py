@@ -8,9 +8,10 @@ import check
 
 
 class CheckTests(unittest.TestCase):
-    def test_desktop_architecture_runs_boundary_check(self):
+    def test_desktop_architecture_runs_boundary_and_dependency_checks(self):
         commands = check.commands("desktop", "architecture")
         self.assertTrue(any(command[1:] == ["scripts/check_architecture.py"] for command in commands))
+        self.assertTrue(any(command[1:] == ["scripts/check_dependencies.py"] for command in commands))
 
     def test_format_runs_for_both_surfaces_and_propagates_failure(self):
         for surface in ("backend", "desktop"):
@@ -58,7 +59,8 @@ class CheckTests(unittest.TestCase):
         commands = [call.args[0] for call in execute.call_args_list]
         self.assertEqual(commands[0][1:4], ["-m", "unittest", "discover"])
         self.assertEqual(commands[1][1], "scripts/check_architecture.py")
-        self.assertEqual([command[1] for command in commands[2:]], ["fmt", "check", "test", "clippy", "build"])
+        self.assertEqual(commands[2][1], "scripts/check_dependencies.py")
+        self.assertEqual([command[1] for command in commands[3:]], ["fmt", "check", "test", "clippy", "build"])
 
 
 if __name__ == "__main__":

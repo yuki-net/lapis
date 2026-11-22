@@ -425,6 +425,21 @@ jobs:
       - name: Test Web connection handling
         run: npm test
 
+  # path routing に依存させず、クレート間依存の追加を常に検出する。
+  dependency_policy:
+    name: Dependency Policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: Check dependency allowlist
+        run: python3 scripts/check_dependencies.py
+
   ci_gate:
     name: Gate
     runs-on: ubuntu-latest
@@ -438,6 +453,7 @@ jobs:
       - dev_windows
       - mobile
       - web
+      - dependency_policy
     steps:
       - uses: actions/checkout@v4
       - name: Check results

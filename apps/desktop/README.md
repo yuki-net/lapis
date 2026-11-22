@@ -18,7 +18,7 @@ Command ID は操作を識別し、Keymap は Desktop 上のキーから既存�
 
 Preset 登録と portable な設定値は Desktop UI が持ち、Host に Keymap を送らない。設定の保存先への接続、外部 Extension のロード、Keymap の設定 UI は未実装。
 
-UIの共通の意図は [Design](../../docs/DESIGN.md)、手動検証の扱いは [AGENTS.md](../../AGENTS.md) を参照してください。
+UIの共通の意図は [Design](../../docs/DESIGN.md)、手動検証の扱いは [変更の進め方](../../docs/workflow.md) を参照してください。
 
 ## ディレクトリの責務
 

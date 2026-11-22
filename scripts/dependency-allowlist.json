@@ -1,0 +1,304 @@
+{
+  "acp-contract": [],
+  "auth-state": [],
+  "backend-state": [
+    "auth-state",
+    "client-api",
+    "document",
+    "document-state",
+    "editor-core",
+    "process",
+    "task",
+    "task-state",
+    "text",
+    "workbench",
+    "workbench-state",
+    "workspace-state"
+  ],
+  "client-api": [
+    "document",
+    "editor-core",
+    "extension-ui-contract",
+    "git-contract",
+    "process",
+    "task",
+    "workbench",
+    "workspace"
+  ],
+  "client-core": [
+    "client-api",
+    "wire",
+    "workbench"
+  ],
+  "desktop-client": [
+    "acp-contract",
+    "client-api",
+    "client-core",
+    "document",
+    "editor-core",
+    "extension-ui-contract",
+    "git-contract",
+    "localization",
+    "lsp",
+    "process",
+    "project",
+    "settings",
+    "task",
+    "terminal-contract",
+    "terminal-portable-renderer",
+    "terminal-renderer",
+    "terminal-session-api",
+    "wire",
+    "workbench",
+    "workspace"
+  ],
+  "desktop-ui": [
+    "client-api",
+    "desktop-client",
+    "document",
+    "editor-core",
+    "extension-ui-contract",
+    "git-contract",
+    "language",
+    "localization",
+    "lsp",
+    "process",
+    "settings",
+    "task",
+    "terminal-contract",
+    "workspace"
+  ],
+  "document": [
+    "editor-core",
+    "text"
+  ],
+  "document-state": [
+    "client-api",
+    "document"
+  ],
+  "editor-core": [],
+  "extension-native-api": [],
+  "extension-runtime": [
+    "extension-native-api",
+    "process"
+  ],
+  "extension-ui-contract": [
+    "language",
+    "localization",
+    "settings"
+  ],
+  "extensions-entry": [],
+  "git": [
+    "editor-core"
+  ],
+  "git-contract": [
+    "git"
+  ],
+  "host": [
+    "backend-state",
+    "client-api",
+    "document",
+    "editor-core",
+    "extension-runtime",
+    "extension-ui-contract",
+    "extensions-entry",
+    "git-contract",
+    "local-process",
+    "platform",
+    "process",
+    "remote",
+    "task",
+    "wire",
+    "workbench",
+    "workspace"
+  ],
+  "language": [],
+  "lapis": [
+    "client-api",
+    "desktop-client",
+    "desktop-ui",
+    "editor-core",
+    "host",
+    "lapis-launcher",
+    "local-process",
+    "local-terminal",
+    "persistence",
+    "platform",
+    "process",
+    "remote",
+    "settings",
+    "task",
+    "terminal-contract",
+    "wire",
+    "workbench",
+    "workspace"
+  ],
+  "lapis-launcher": [],
+  "lapis-terminal-native": [
+    "extension-native-api",
+    "terminal-logic"
+  ],
+  "lapis-web": [],
+  "local-acp": [
+    "task"
+  ],
+  "local-credentials": [
+    "backend-state"
+  ],
+  "local-fs": [],
+  "local-git": [
+    "editor-core",
+    "git",
+    "local-fs"
+  ],
+  "local-lsp": [
+    "document",
+    "lsp",
+    "process"
+  ],
+  "local-process": [
+    "editor-core",
+    "process"
+  ],
+  "local-search": [
+    "workspace"
+  ],
+  "local-tasks": [
+    "acp-contract",
+    "editor-core",
+    "local-acp",
+    "local-fs",
+    "process",
+    "task",
+    "task-runner"
+  ],
+  "local-terminal": [
+    "terminal-contract",
+    "terminal-renderer"
+  ],
+  "local-workbench": [
+    "backend-state",
+    "editor-core",
+    "workbench"
+  ],
+  "local-workspace": [
+    "backend-state",
+    "document",
+    "workspace"
+  ],
+  "local-workspace-store": [],
+  "localization": [],
+  "lsp": [
+    "document"
+  ],
+  "persistence": [
+    "desktop-client",
+    "editor-core",
+    "localization",
+    "settings",
+    "terminal-contract",
+    "workbench",
+    "workspace"
+  ],
+  "platform": [
+    "document",
+    "editor-core",
+    "git-contract",
+    "local-credentials",
+    "local-git",
+    "local-lsp",
+    "local-search",
+    "local-tasks",
+    "local-workbench",
+    "local-workspace",
+    "local-workspace-store",
+    "lsp",
+    "task-runner",
+    "workbench",
+    "workspace"
+  ],
+  "process": [
+    "editor-core"
+  ],
+  "project": [
+    "editor-core"
+  ],
+  "remote": [
+    "backend-state",
+    "client-api",
+    "client-core",
+    "document",
+    "editor-core",
+    "git-contract",
+    "task",
+    "wire"
+  ],
+  "settings": [
+    "localization"
+  ],
+  "task": [
+    "editor-core"
+  ],
+  "task-runner": [
+    "editor-core",
+    "task"
+  ],
+  "task-state": [
+    "editor-core",
+    "git-contract",
+    "task"
+  ],
+  "terminal-contract": [],
+  "terminal-logic": [
+    "terminal-session-api"
+  ],
+  "terminal-portable-renderer": [
+    "terminal-contract"
+  ],
+  "terminal-renderer": [
+    "terminal-contract"
+  ],
+  "terminal-session-api": [],
+  "text": [],
+  "web": [
+    "client-api",
+    "client-core",
+    "desktop-client",
+    "desktop-ui",
+    "document",
+    "editor-core",
+    "git-contract",
+    "lsp",
+    "settings",
+    "task",
+    "terminal-contract",
+    "wire",
+    "workbench",
+    "workspace"
+  ],
+  "web-bridge": [
+    "client-core",
+    "wire"
+  ],
+  "web-terminal-smoke": [
+    "client-api",
+    "desktop-client",
+    "terminal-contract"
+  ],
+  "wire": [],
+  "workbench": [
+    "editor-core",
+    "workspace"
+  ],
+  "workbench-state": [
+    "client-api",
+    "workbench"
+  ],
+  "workspace": [
+    "editor-core"
+  ],
+  "workspace-state": [
+    "client-api",
+    "document"
+  ]
+}

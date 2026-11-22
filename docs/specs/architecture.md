@@ -184,6 +184,7 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 
 ## Desktop の共通Tab操作
 
+- Desktop の Layout を変更するときは、Panel / Feature ごとの独自 Tab 管理を追加せず、`clients/ui/src/shell/layout.rs` の共通 Layout API を使う。`apps/desktop/README.md` と本節の責務分離を先に確認する。
 - `UiContribution` がViewの表示名・アイコン・カテゴリ・初期配置・複数起動方針・配置能力・表示条件・タブの参照方法を宣言し、`FeatureRegistry`が共通Pickerへ提供する。FeatureごとのTabBarやPanel所有者を作らない。宣言の型は `contracts/domain/extension-ui`（crate `extension-ui-contract`）が正本で、`FeatureRegistry` は GPUI の実体と表示状態を `clients/ui` 側で所有する。
 - 通知履歴はGPUI App全体で共有し、Rootごとに分かれるWindowGroupには所有させない。通知種別の既定PolicyがPopupへの配送を決め、発生時のActive Windowだけに最新3件まで一時表示する。Popupの終了と履歴の削除は別操作とする。CenterはPickerへ表示しない通常のTabとして共通Layoutを使う。
 - Tabの追加・選択・非表示・Closeは配置状態を更新する操作であり、HostのDocument・Terminal・Agentを終了する操作ではない。
@@ -247,3 +248,9 @@ Desktop の Composition Root は `apps/desktop/app/` として具体実装を組
 Backend と共通契約から GPUI/native dialog への依存は禁止。
 
 既存違反は `scripts/architecture-exceptions.json` の完全一致した crate 対と理由に限定する。未使用例外も失敗するため、削除した違反を再導入する余地を残さない。新規違反を「移行中」として追加しない。
+
+### 依存ホワイトリスト
+
+`python scripts/check_dependencies.py` は同じ `cargo metadata --locked --no-deps` から workspace member 間の依存辺（dev / build / target 条件を含む）を集め、`scripts/dependency-allowlist.json` にある辺だけを許可する。
+失敗するのは許可リストに無い辺の追加だけで、辺の削除や workspace 外への依存は失敗にしない。許可リストを更新するときは、追加する依存の理由を PR で説明する。
+CI の `Dependency Policy` job が path routing に関係なくこの検査を実行し、`Gate` の必須条件にする。

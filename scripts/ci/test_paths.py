@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.ci.paths import jobs_for_paths, PATH_RULES, ALL_JOBS
-from scripts.ci.gate import errors
+from scripts.ci.gate import ALWAYS_JOBS, errors
 from scripts.ci.paths import JOB_IDS
 from scripts.ci.paths import changed_paths
 
@@ -25,7 +25,7 @@ class TestPathRouting(unittest.TestCase):
 
     def test_ci_workflow_uses_final_check_names_and_no_release_validation(self):
         workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-        for name in ("Changes", "Dev Commands / Windows", "Mobile / Android", "Gate"):
+        for name in ("Changes", "Dev Commands / Windows", "Mobile / Android", "Dependency Policy", "Gate"):
             self.assertIn(f"name: {name}", workflow)
         self.assertNotIn("Build Release Desktop", workflow)
         self.assertNotIn("Test Release Inspector boundary", workflow)
@@ -257,6 +257,7 @@ class TestPathRouting(unittest.TestCase):
             selected = list(jobs_for_paths([path]))
             needs = {"path_filter": {"result": "success"}}
             needs.update({job: {"result": "success" if name in selected else "skipped"} for name, job in JOB_IDS.items()})
+            needs.update({job: {"result": "success"} for job in ALWAYS_JOBS})
             self.assertEqual(errors(selected, needs), [])
             for result in ("failure", "cancelled", "timed_out", "skipped"):
                 needs[JOB_IDS[route]]["result"] = result
@@ -264,6 +265,18 @@ class TestPathRouting(unittest.TestCase):
             needs[JOB_IDS[route]]["result"] = "success"
             needs["path_filter"]["result"] = "failure"
             self.assertTrue(errors(selected, needs))
+
+    def test_gate_requires_always_jobs(self):
+        selected = list(jobs_for_paths(["apps/desktop/app/src/main.rs"]))
+        needs = {"path_filter": {"result": "success"}}
+        needs.update({job: {"result": "success" if name in selected else "skipped"} for name, job in JOB_IDS.items()})
+        needs.update({job: {"result": "success"} for job in ALWAYS_JOBS})
+        self.assertEqual(errors(selected, needs), [])
+        for job in ALWAYS_JOBS:
+            for result in ("failure", "cancelled", "timed_out", "skipped"):
+                with self.subTest(job=job, result=result):
+                    failed = dict(needs, **{job: {"result": result}})
+                    self.assertTrue(errors(selected, failed))
 
     def test_diff_uses_given_parent_for_stacked_pr_and_push(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -1,55 +1,41 @@
 # AGENTS.md — Lapis
 
-リポジトリは開発中プロトタイプ。再設計や破壊的変更を躊躇しないこと。
+Lapis の構造を守るための憲法。作業手順は [docs/workflow.md](docs/workflow.md)、
+全体の判断原則は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)、内部契約は
+[docs/specs/README.md](docs/specs/README.md) を正本とする。
 
-## 基本原則
-- コードとテストを実行時挙動の正本とし、内部契約・設計制約は `docs/specs/` を正本とする。未確定事項や推測を恒久仕様化しない。
-- 不要な抽象化・空モジュール・重複実装は作らない（YAGNI）。
-- 依頼範囲外の変更や、未コミットの差分に手を触れない。
-- シークレット、資格情報、実環境固有の値をコードやリポジトリに含めない。
-- コメント・ドキュメント・説明は日本語で簡潔に書く。識別子・API・技術用語は無理に日本語化しない。
+## 所有権モデル
 
-## Git・ブランチ運用
-- **ブランチ作成**: `git fetch origin develop` で最新化し、`origin/develop` から作業ブランチを分岐する。
-  - **Stacked PR**: 依存元ブランチから分岐し、PR作成時も `--base <依存元ブランチ>` を指定してGitHubのネイティブStack機能に連動させる。
-- **ブランチ命名**: `<type>/<概要>` または `<type>/<issue番号>-<概要>`
-  - `type` はGitHubラベルや一般的な区分（`feat`, `fix`, `refactor`, `docs`, `chore` 等）に準拠。
-  - 例: `feat/issue-123-terminal`, `fix/remote-reconnect`, `refactor/desktop-state`
-- **PR・Issue作成・更新**:
-  - 指示を受けて新規作成する場合は差分確認のため原則 **Draft PR** とする（テンプレート準拠、ラベル付与、`@me` アサイン）。
-  - 実装・検証が完了したら **Open（Ready for review）** にし、以降の追加修正やレビュー対応で勝手に Draft へ戻さない。
-- **PR・Issue・コミット参照表記**:
-  - フルURLは使用せず、リポジトリ内は `PR #<番号>`、`Issue #<番号>`、コミットは 7桁SHA（例: `bffb2ab`）で統一する（GitHubの自動リンクを活用）。
-  - 外部リポジトリは `owner/repo#<番号>` を用いる（Issue解決の `Fixes #123` 等を除く）。
+- **BYO-Host**: 実行環境は利用者が用意・所有する Host であり、中央集約サーバーを前提にしない。
+- Client（workbench / apps）は自分の **Home Host** にだけ接続する。他の Host や環境へ直接接続しない。
+- 他の環境は **ExecutionTarget** として Home Host が仲介する。Client の操作は Home Host を経由して対象へ届く。
+- Host は正規状態と実行資源（Workspace / Document / Terminal / Task / プロセス / ファイル / Git / Agent）を所有する。Client は表示状態と cache だけを所有する。
+- Local / Remote で所有権と操作の意味を変えない。接続の切断は attachment の解除であり、実行資源の終了ではない。
+- 状態の更新入口を一意にし、複数の正本を作らない。
 
-## 実装・技術制約
-- **Desktop (GPUI)**: 描画処理・UIスレッド中にブロッキングI/Oを行わない。
-- **非同期・状態**: 古い非同期結果による状態の上書きや、破棄済みリソースへのアクセスを防ぐ。
-- **Remote / Local**: 接続切断だけでプロセス終了と誤認しない。環境差異で共通操作の意味を変えない。
-- **状態の所有**: 状態やリソースの所有者を明確にし、不要な責務の重複を作らない。
+## 依存の向き
 
-## ドキュメント参照・管理
-- ドキュメントの一括読み込みは禁止（コンテキスト圧迫と過去仕様への誤認防止）。
-- 仕様参照は「作業対象の領域（各ディレクトリ直下）の `README.md`」および必要な仕様書のみピンポイントで読む。
-- 全体文書の分類基準は [docs/README.md](docs/README.md) を正とする。
-- コードやテストで十分なら新規文書は作らない。新設時は「誰が何を判断するための文書か」を明記する。
-- 仕様変更時は、正本となる関連文書の更新・不要記述の削除を行う。
+- **protocol** は境界を越える DTO と操作契約だけを持ち、他の柱の実装・OS・UI・業務判断に依存しない。
+- 実装は契約に依存する。契約が実装に依存せず、循環依存を作らない。
+- **host** は protocol と extensions の Host 側実装に依存できる。workbench / apps に依存しない。
+- **workbench** は protocol、共通 UI kit、extensions の Client 側契約に依存できる。host / apps に依存しない。
+- **extensions** は protocol と共通 UI kit に依存できる。host / apps に依存しない。機能を垂直に閉じる。
+- **apps** は Composition Root として全柱を組み立てる。どの柱からも apps へ依存しない。
+- **tools** は製品の実行時依存にしない。製品コードから tools へ依存しない。
+- 新しいクレート間依存は `scripts/dependency-allowlist.json` に追加し、理由をレビューで説明する。
 
-## 検証・品質
-- 変更関連のテスト・CIを必ず通す。テスト条件の緩和によるパスは禁止。
-- 不具合修正には回帰テストを追加する。
-- UI変更は可能なら実画面で確認する。未確認箇所がある場合は再現手順と残存リスクを報告する。
-- レビューでは不具合、データ損失、セキュリティ、並行性、リーク、テスト不足を最優先とする。
-- **レビュー指摘への対応**:
-  - 指摘に対する反射的なオウム返しや、場当たり的な局所パッチ（ワークアラウンド）の追加を禁止する。
-  - 指摘が「局所的な実装漏れ」か「設計・状態の所有境界の歪み」かを判断し、根本的な見直しが必要な場合はコードを継ぎ接ぎせず人間に相談する。
-  - 修正コミット後は、PR（または該当スレッド）に以下を明記して返信・報告する：
-    - **対応内容**: 変更箇所の概要（簡潔に）
-    - **判断・理由**: なぜその修正としたか（局所修正の妥当性など）
-    - **コミット**: 7桁SHA（例: `bffb2ab`）
+## 6本柱の配置
 
-## アーキテクチャ
-- 状態の所有・配置・依存方向は `docs/specs/architecture.md` を正本とし、領域固有の判断はその `README.md` を参照する。
-- 変更時は `python scripts/check_architecture.py` を実行し、例外を増やして回避しない。
+| 柱 | 置くもの | 置かないもの |
+| --- | --- | --- |
+| apps | 起動 entry、Composition Root、target 固有の初期化 | 機能ロジック、正規状態、表示状態 |
+| workbench | Window / Panel / Tab / Layout、表示状態と cache、共通 UI kit | 実行資源の正規状態、OS 実装 |
+| extensions | 機能の垂直統合（契約、Host 側状態、adapter、Client UI、assets） | 他機能の内部、将来像だけの共通層 |
+| host | 正規状態、操作の直列化、実行資源、永続化、通信境界 | UI、Window / Panel、表示 cache |
+| protocol | 境界を越える DTO、操作契約、拡張 API | 実装、OS 依存、UI、業務判断、非同期処理 |
+| tools | 開発・検証・配布のツール（devtools、wasm-smoke、scripts） | 製品の実行時依存になるコード |
 
-DesktopのLayoutを変更するときは、Panel/Featureごとの独自Tab管理を追加せず、`clients/ui/src/shell/layout.rs` の共通Layout APIと、`apps/desktop/README.md` および `docs/specs/architecture.md` の責務分離を先に確認する。
+- 機能追加は 6 本柱のいずれか 1 つを主な置き場所とし、層ごとに部品を散らさない。
+- 柱をまたぐ移動は「がわの移動」と「中身の refactor」を同じ PR に混ぜない。
+- 移行完了までの現行ディレクトリとの対応は [docs/specs/architecture.md](docs/specs/architecture.md) に従う。
+- 変更時は `python scripts/check.py <surface> architecture` で構造と依存ホワイトリストを検査する。

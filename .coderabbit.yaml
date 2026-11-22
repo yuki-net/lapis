@@ -1,5 +1,5 @@
-# 共通レビュー規約は CodeRabbit が自動検出する AGENTS.md を正本とする。
-# ここではレビュー動作と領域固有の重点観点だけを設定する。
+# 共通レビュー規約は docs/workflow.md を正本とする。
+# AGENTS.md は構造の憲法に限定し、ここではレビュー動作と領域固有の重点観点だけを設定する。
 language: ja-JP
 
 reviews:

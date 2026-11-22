@@ -7,6 +7,10 @@ import sys
 from scripts.ci.paths import JOB_IDS
 
 
+# path routing に関係なく毎回実行し、成功を必須とする job。
+ALWAYS_JOBS = ("dependency_policy",)
+
+
 def errors(selected, needs):
     problems = []
     if needs.get("path_filter", {}).get("result") != "success":
@@ -18,6 +22,10 @@ def errors(selected, needs):
         expected = "success" if route in selected else "skipped"
         if result != expected:
             problems.append(f"{job}: expected {expected}, got {result}")
+    for job in ALWAYS_JOBS:
+        result = needs.get(job, {}).get("result")
+        if result != "success":
+            problems.append(f"{job}: expected success, got {result}")
     return problems
 
 
