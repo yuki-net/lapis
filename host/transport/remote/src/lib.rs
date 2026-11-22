@@ -19,6 +19,7 @@ mod session;
 mod socket;
 mod sync_client;
 mod tls;
+mod webtransport;
 mod wire;
 
 pub use auth::{
@@ -50,6 +51,7 @@ pub use server::{RemoteServer, RemoteServerConfig, RemoteServerError};
 pub use session::SharedRemoteAuth;
 pub use sync_client::{QuicAuth, QuicConnection, QuicConnectionConfig};
 pub use tls::{Tls13ServerConfig, tls13_server_config};
+pub use webtransport::{ConnectStream, SessionError, connect_session};
 pub use wire::{
     AuthenticateRequest, ClientMessage, InvalidSecretHex, PairRequest, PairedResponse,
     REMOTE_WEBSOCKET_PATH, REMOTE_WEBSOCKET_PROTOCOL, ServerMessage,
