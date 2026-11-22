@@ -16,6 +16,7 @@ usage:
 import argparse
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -47,6 +48,11 @@ MARKS = {
 }
 
 BAR_WIDTH = 10
+
+# 出力から「今処理しているファイル」を拾うための拡張子。
+FILE_PATTERN = re.compile(
+    r"[\w./\\-]+\.(?:rs|py|ts|tsx|js|mjs|kt|kts|java|json|toml|md|lock|yml|yaml)"
+)
 
 
 class Palette:
@@ -99,8 +105,24 @@ def status_of(entry: dict, states: dict[str, dict], codes: dict[str, int]) -> di
     return found
 
 
+def activity_of(found: dict) -> str:
+    """いま処理しているファイル（無ければ出力の最終行）。
+
+    出力が変われば表示も変わるので、止まっていないことの目安になる。
+    """
+    line = found.get("last_line")
+    if not line:
+        return ""
+    match = FILE_PATTERN.search(line)
+    if match:
+        # パスは省略せずそのまま返す（呼び出し側で幅に切る）。crate 名が
+        # 落ちると、どの領域の話か分からなくなる。
+        return match.group(0).replace("\\", "/")
+    return line[:72]
+
+
 def line_for(entry: dict, found: dict, now: float, palette: Palette) -> str:
-    """1 job の表示行。止まっているか分かるよう、最終出力からの経過も出す。"""
+    """1 job の表示行。名前は GitHub の job 名、右は今処理しているファイル。"""
     status = found.get("status", state.PENDING)
     mark, color = MARKS.get(status, ("?", ""))
     total = found.get("steps_total") or entry.get("steps", 0)
@@ -113,31 +135,45 @@ def line_for(entry: dict, found: dict, now: float, palette: Palette) -> str:
     else:
         elapsed_text = "-"
 
-    step = found.get("current_step") or ""
-    if status == state.FAILED and found.get("failed_step"):
-        step = found["failed_step"]
-    if status == state.PENDING:
-        step = "(waiting)"
-    if status == state.SKIPPED:
-        step = found.get("reason") or "(skipped)"
-    step = step[:30]
-
-    if status == state.RUNNING and found.get("last_output_at"):
-        silence = now - found["last_output_at"]
-        quiet = f"no output {duration(silence)}"
-    elif status == state.RUNNING:
-        quiet = "starting"
+    if status == state.RUNNING:
+        activity = activity_of(found)
+    elif status == state.PENDING:
+        activity = "(waiting)"
+    elif status == state.SKIPPED:
+        activity = found.get("reason") or "(skipped)"
     else:
-        quiet = ""
+        activity = ""
+    activity = activity[:72]
 
     head = palette.paint(mark, color)
-    name = palette.paint(f"{found.get('name', entry['name']):<22}", color if status in (state.FAILED, state.PASSED) else "")
-    return f"{head} {name} [{bar}] {done:>2}/{total:<2} {elapsed_text:>7}  {step:<30} {quiet}"
+    name = palette.paint(f"{entry['name']:<26}", color if status in (state.FAILED, state.PASSED) else "")
+    return f"{head} {name} [{bar}] {done:>2}/{total:<2} {elapsed_text:>7}  {activity}"
 
 
 def merged_states(entries: list[dict], raw: dict[str, dict], codes: dict[str, int]) -> dict[str, dict]:
     """表示・集計用に、終了コードで補った状態を job 名で引けるようにする。"""
     return {entry["job"]: status_of(entry, raw, codes) for entry in entries}
+
+
+def failure_lines(entries: list[dict], states: dict[str, dict], palette: Palette) -> list[str]:
+    """終了後に「何がどこで落ちたか」を出す。これが無いと原因を追えない。"""
+    lines = []
+    for entry in entries:
+        found = states.get(entry["job"], {})
+        if found.get("status") != state.FAILED:
+            continue
+        step = found.get("failed_step") or "(unknown step)"
+        lines.append("")
+        lines.append(
+            palette.paint(f"{entry['name']}", RED) + palette.paint(f"  {step}", DIM)
+        )
+        reason = found.get("failure") or found.get("last_line")
+        if reason:
+            lines.append(f"    {reason[:160]}")
+        logs = ROOT / ".ci" / "logs" / entry["job"]
+        if logs.exists():
+            lines.append(palette.paint(f"    logs: {logs}", DIM))
+    return lines
 
 
 def summary_lines(entries: list[dict], states: dict[str, dict], palette: Palette) -> list[str]:
@@ -243,6 +279,7 @@ def run(entries: list[dict], jobs: int, colors: bool) -> int:
         lines.append("")
         if final:
             lines.extend(summary_lines(entries, states, palette))
+            lines.extend(failure_lines(entries, states, palette))
         else:
             lines.append(
                 palette.paint(

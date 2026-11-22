@@ -74,20 +74,30 @@ python -m scripts.ci.watch host desktop     # route を指定
 python -m scripts.ci.watch --jobs 2         # 同時実行数を絞る
 ```
 
-route × OS の job を GitHub の matrix と同じように並列で起動し、1 画面に進捗を出す。
+route × OS の job を GitHub の matrix と同じように並列で起動し、1 画面に進捗を出す。名前は GitHub に出る job 名（`Host / Windows`, `Mobile / Android`）に合わせている。
 
 ```
 CI
 
-OK Host / Windows       [########--] 14/18   12m03s  Lint Host
->> Desktop / Windows    [#####-----]  9/18    7m41s  Test Desktop      no output 12s
-.. Web                  [----------]  0/3      -      (waiting)
+OK Host / Windows         [########--] 14/18   12m03s
+>> Desktop / Windows      [#####-----]  9/18    7m41s  clients/ui/src/shell/layout.rs
+.. Web                    [----------]  0/3      -      (waiting)
 ```
 
-- 実行中は**最終出力からの経過**を出すので、止まっていないか分かる
+- 右側は**いま処理しているファイル**。出力が変わると表示も変わるので、止まっていないことの目安になる
 - `Ctrl+C` で起動した job を子孫ごと止める（終了コード 130）
 - `OK` は緑、`NG` は赤、`>>` は黄、`..` は待機。記号は ASCII なので cp932 の端末でも崩れない（色は TTY のときだけ付く）
 - 全部通れば 0、1 つでも失敗すれば 1。前提不足で実行しなかった job は skip 扱いで失敗にしない
+- 失敗すると、終了時に**どの job がどの step で何を出して落ちたか**を出す
+
+```
+1 passed  1 failed
+
+Host / Windows  Test Host
+    error[E0433]: failed to resolve: use of undeclared crate or module `foo`
+    logs: .ci/logs/host
+```
+
 - `--json` で最後に job ごとの成否を出し、`--no-color` で色と上書き描画を切る
 - 状態は `.ci/state/<job>.json`、step のログは `.ci/logs/<route>/<step>.log`
 

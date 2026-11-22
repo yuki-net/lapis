@@ -95,7 +95,9 @@ class Writer:
             "current_step": None,
             "current_step_started_at": None,
             "last_output_at": None,
+            "last_line": None,
             "failed_step": None,
+            "failure": None,
         }
         self.flush()
 
@@ -122,6 +124,16 @@ class Writer:
         self._last_pulse = now
         self.data["last_output_at"] = now
         self.flush()
+
+    def observe(self, chunk: str) -> None:
+        """出力の最終行を控える。watch が「今どこを処理しているか」に使う。"""
+        lines = [line.strip() for line in chunk.splitlines() if line.strip()]
+        if lines:
+            self.data["last_line"] = lines[-1][:200]
+
+    def note_failure(self, text: str) -> None:
+        """失敗理由を残す。watch が終了後に「なぜ落ちたか」を出すのに使う。"""
+        self.data["failure"] = text[:300]
 
     def finish(self, ok: bool) -> None:
         self.data["status"] = PASSED if ok else FAILED

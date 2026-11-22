@@ -116,13 +116,18 @@ def run_step(route, step, log: report.LocalLog | None, writer=None) -> dict:
     for attempt in range(1, attempts + 1):
         report.group(step.name)
         started = time.perf_counter()
-        output, ok = execute_step(command, directory, environment, limit, writer)
+        retryable = True
+        try:
+            output, ok = execute_step(command, directory, environment, limit, writer)
+        except StepStartError as error:
+            # 実行ファイルが無い等は待っても変わらないので再試行しない。
+            output, ok, retryable = str(error), False, False
         report.endgroup()
 
         if log is not None:
             log.write(output)
 
-        if ok or attempt == attempts:
+        if ok or attempt == attempts or not retryable:
             if log is not None:
                 log.end(route.key, step.name, show=not ok and not report.on_github())
             break
@@ -135,6 +140,10 @@ def run_step(route, step, log: report.LocalLog | None, writer=None) -> dict:
         "seconds": report.elapsed(started),
         "output": output,
     }
+
+
+class StepStartError(RuntimeError):
+    """step のコマンドを起動できなかった（実行ファイルが無い等）。"""
 
 
 def execute_step(
@@ -151,18 +160,23 @@ def execute_step(
     """
     capture = tempfile.NamedTemporaryFile(suffix=".log", delete=False)
     try:
-        process = subprocess.Popen(
-            command,
-            cwd=directory,
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=capture,
-            stderr=subprocess.STDOUT,
-            # タイムアウト時に子孫まで止められるよう、独立したプロセス
-            # グループ / セッションで起動する。
-            start_new_session=(os.name != "nt"),
-            creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0),
-        )
+        try:
+            process = subprocess.Popen(
+                command,
+                cwd=directory,
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=capture,
+                stderr=subprocess.STDOUT,
+                # タイムアウト時に子孫まで止められるよう、独立したプロセス
+                # グループ / セッションで起動する。
+                start_new_session=(os.name != "nt"),
+                creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0),
+            )
+        except OSError as error:
+            # 実行ファイルが無い（別 OS 用の ./gradlew など）。route 全体を
+            # 落とさず、その step の失敗として扱う。
+            raise StepStartError(f"{type(error).__name__}: {error}") from error
         capture.close()
 
         deadline = (time.perf_counter() + limit) if limit else None
@@ -174,16 +188,17 @@ def execute_step(
                 break
             except subprocess.TimeoutExpired:
                 pass
-            position = pump_output(capture.name, position)
+            position, chunk = pump_output(capture.name, position)
             if writer is not None:
+                writer.observe(chunk)
                 writer.pulse()
             if deadline is not None and time.perf_counter() > deadline:
                 terminate_tree(process)
                 timed_out = True
                 break
 
-        position = pump_output(capture.name, position)
-        output = Path(capture.name).read_text(encoding="utf-8", errors="replace")
+        position, _ = pump_output(capture.name, position)
+        output = decode_output(Path(capture.name).read_bytes())
         if timed_out:
             output += f"\nstep exceeded {limit / 60:g} minutes\n"
             report.error("step timed out; terminated the process tree")
@@ -198,19 +213,38 @@ def execute_step(
             pass
 
 
-def pump_output(path: str, position: int) -> int:
-    """出力ファイルの position 以降を読み、GitHub では即座に表示する。"""
+def decode_output(data: bytes) -> str:
+    """step の出力を復号する。
+
+    cargo などは UTF-8、Windows の OS メッセージは cp932 で出る。UTF-8 で
+    読めなければ OS のコードページで読み直す（日本語の失敗理由が化けるのを
+    防ぐ）。
+    """
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    for encoding in ("mbcs", "cp1252"):
+        try:
+            return data.decode(encoding)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return data.decode("utf-8", errors="replace")
+
+
+def pump_output(path: str, position: int) -> tuple[int, str]:
+    """出力ファイルの position 以降を読み、(新しい位置, 読んだ分) を返す。"""
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as handle:
             handle.seek(position)
             chunk = handle.read()
     except FileNotFoundError:
-        return position
+        return position, ""
     if chunk and report.on_github():
         # step の進行が CI ログから見えるようにする。ハング箇所の特定に要る。
         for line in chunk.splitlines():
             print(line, flush=True)
-    return position + len(chunk)
+    return position + len(chunk), chunk
 
 
 def terminate_tree(process: subprocess.Popen) -> None:
@@ -239,6 +273,38 @@ def tail(output: str, lines: int = 40) -> str:
     return "\n".join(parts[-lines:])
 
 
+# 失敗理由として拾う行の手がかり。上から順に優先する。
+ERROR_HINTS = (
+    "error[E",
+    "error:",
+    "ERROR:",
+    "npm ERR",
+    "FAILED",
+    "failed",
+    "panic",
+    "assertion",
+    "Traceback",
+    "FileNotFoundError",
+    "WinError",
+    "not recognized",
+    "No such file",
+)
+
+
+def error_excerpt(output: str, lines: int = 2) -> str:
+    """失敗理由になる行だけを抜き出す。
+
+    末尾を丸ごと出すと watch の一覧が潰れるので、エラーらしい行を優先し、
+    無ければ最後の数行に落とす。
+    """
+    stripped = [line.strip() for line in output.splitlines() if line.strip()]
+    if not stripped:
+        return ""
+    picked = [line for line in stripped if any(hint in line for hint in ERROR_HINTS)]
+    chosen = picked[-lines:] if picked else stripped[-lines:]
+    return " / ".join(chosen)[:300]
+
+
 def execute(route, only: list[str] | None, quiet: bool, os_name: str | None = None) -> dict:
     """route の step を実行する。`os_name` の差分 step も後ろに足す。"""
     os_name = os_name or local_os()
@@ -265,6 +331,7 @@ def execute(route, only: list[str] | None, quiet: bool, os_name: str | None = No
             result = run_step(route, step, log, writer)
             writer.end(step.name, result["ok"])
             if not result["ok"]:
+                writer.note_failure(error_excerpt(result["output"]))
                 report.error(f"{route.name}: {step.name} failed")
                 if not quiet and not report.on_github():
                     print(tail(result["output"]), file=sys.stderr, flush=True)
@@ -274,9 +341,15 @@ def execute(route, only: list[str] | None, quiet: bool, os_name: str | None = No
 
         ok = all(result["ok"] for result in results)
         writer.finish(ok)
-    except BaseException:
+    except KeyboardInterrupt:
         # 中断（Ctrl+C など）でも、watch 側が「実行中」のまま残らないようにする。
         writer.data["status"] = state.CANCELLED
+        writer.flush()
+        raise
+    except BaseException as error:
+        # 想定外の例外は失敗として残す（理由が消えると追えない）。
+        writer.data["status"] = state.FAILED
+        writer.data["failure"] = f"{type(error).__name__}: {error}"[:300]
         writer.flush()
         raise
     payload = {

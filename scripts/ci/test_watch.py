@@ -57,11 +57,29 @@ class LineTests(unittest.TestCase):
             line = watch.line_for(entry("host"), found, now=200.0, palette=NO_COLOR)
             self.assertIn(mark, line, status)
 
-    def test_running_line_shows_time_since_last_output(self):
-        """止まっていないかを判断できるよう、無出力の経過を出す。"""
-        found = running_state("host", last_output_at=180.0)
+    def test_running_line_shows_the_file_being_processed(self):
+        """出力が変わると分かるよう、今処理しているファイルを出す。"""
+        found = running_state("host", last_line="   Compiling host v0.1.0 (host/app)")
         line = watch.line_for(entry("host"), found, now=200.0, palette=NO_COLOR)
-        self.assertIn("no output 20s", line)
+        self.assertIn("host/app", line)
+
+    def test_activity_prefers_a_file_path_over_the_raw_line(self):
+        self.assertEqual(
+            watch.activity_of({"last_line": "warning: unused import in clients/ui/src/shell/layout.rs:12"}),
+            "clients/ui/src/shell/layout.rs",
+        )
+        self.assertEqual(
+            watch.activity_of({"last_line": "test result: ok. 12 passed"}),
+            "test result: ok. 12 passed",
+        )
+        self.assertEqual(watch.activity_of({}), "")
+
+    def test_left_name_is_the_github_job_name(self):
+        """左は GitHub に出る job 名（Mobile / Android など）に統一する。"""
+        line = watch.line_for(
+            entry("mobile"), running_state("mobile", status=state.PASSED), now=200.0, palette=NO_COLOR
+        )
+        self.assertIn("Mobile / Android", line)
 
     def test_pending_line_shows_total_steps_before_it_starts(self):
         target = entry("host")
@@ -71,10 +89,12 @@ class LineTests(unittest.TestCase):
         self.assertIn(f"0/{target['steps']}", line)
         self.assertIn("(waiting)", line)
 
-    def test_failed_line_names_the_failed_step(self):
+    def test_failed_line_leaves_the_reason_to_the_end_summary(self):
+        """行には理由を出さない（終了後にまとめて出す）。"""
         found = running_state("host", status=state.FAILED, failed_step="Test Host")
         line = watch.line_for(entry("host"), found, now=200.0, palette=NO_COLOR)
-        self.assertIn("Test Host", line)
+        self.assertNotIn("Test Host", line)
+        self.assertIn("NG", line)
 
 
 class SummaryTests(unittest.TestCase):
@@ -101,6 +121,30 @@ class SummaryTests(unittest.TestCase):
         text = "\n".join(watch.summary_lines(entries, states, NO_COLOR))
         self.assertIn("1 passed", text)
         self.assertIn("1 failed", text)
+
+    def test_failure_lines_explain_why_each_job_failed(self):
+        """終了後に、どの job がどの step で何を出して落ちたかを出す。"""
+        entries = [entry("host"), entry("web")]
+        states = {
+            "host": {
+                "job": "host",
+                "name": "Host / Windows",
+                "status": state.FAILED,
+                "failed_step": "Test Host",
+                "failure": "error[E0433]: failed to resolve",
+            },
+            "web": {"job": "web", "name": "Web / Linux", "status": state.PASSED},
+        }
+        text = "\n".join(watch.failure_lines(entries, states, NO_COLOR))
+        self.assertIn("Host / Windows", text)
+        self.assertIn("Test Host", text)
+        self.assertIn("error[E0433]", text)
+        self.assertNotIn("Web / Linux", text)
+
+    def test_failure_lines_are_empty_when_nothing_failed(self):
+        entries = [entry("host")]
+        states = {"host": {"job": "host", "status": state.PASSED}}
+        self.assertEqual(watch.failure_lines(entries, states, NO_COLOR), [])
 
     def test_finished_process_without_final_state_is_reported_by_exit_code(self):
         """状態を書けずに落ちても、実行中のまま見せない。"""
