@@ -6,3 +6,9 @@ ide-build = "build --locked --target-dir target/dev-build -p lapis -p host -p we
 host-build = "build --locked --target-dir target/dev-build -p host -p extension-runtime --bins"
 # Hot Reload 付き開発起動。Windows x64 で Subsecond devserver を使用する。
 dev-hot-reload = "run --locked --manifest-path scripts/dev-session/Cargo.toml --target-dir target/dev-launcher -- --hot-reload --state-directory target/dev-state --local-host-directory target/dev-state/hosts"
+
+# WebTransport の web-sys バインディングは unstable API として提供される。
+# ブラウザー向けの wasm ビルドだけに適用し、native ビルドへは影響させない。
+[target.'cfg(target_arch = "wasm32")']
+rustflags = ["--cfg=web_sys_unstable_apis"]
+rustdocflags = ["--cfg=web_sys_unstable_apis"]

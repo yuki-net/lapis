@@ -14,9 +14,13 @@ sha2.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 futures-util = "0.3"
+gloo-net = { version = "0.6", default-features = false, features = ["http"] }
 gloo-timers = { version = "0.3", features = ["futures"] }
+url = "2"
+web-transport-wasm = "0.8"
 wire = { path = "../../protocol/wire/dto" }
 serde.workspace = true
 wasm-bindgen = "=0.2.129"
-web-sys = { version = "=0.3.106", features = ["WebSocket", "MessageEvent", "Event", "ErrorEvent"] }
+wasm-bindgen-futures = "=0.4.79"
+web-sys = { version = "=0.3.106", features = ["Window", "Location"] }
 zeroize.workspace = true

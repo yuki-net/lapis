@@ -13,11 +13,35 @@ use client_api::{
 use futures_channel::{mpsc, oneshot};
 use futures_util::future::{Either, select};
 use gloo_timers::future::TimeoutFuture;
-use wasm_bindgen::{JsCast, closure::Closure};
-use web_sys::{Event, MessageEvent, WebSocket};
+use std::pin::pin;
+use web_transport_wasm::{RecvStream, SendStream, Session};
 use zeroize::Zeroize;
 
 type Reply<T> = oneshot::Sender<Result<T, String>>;
+
+/// フレームの長さ（4 byte big-endian）+ UTF-8 JSON。Host の QUIC 経路と同じ。
+type Frame = Vec<u8>;
+
+fn encode_frame(bytes: &[u8]) -> Frame {
+    let mut frame = Vec::with_capacity(4 + bytes.len());
+    frame.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+    frame.extend_from_slice(bytes);
+    frame
+}
+
+/// 受信バッファから完成したフレームを取り出す。不足なら `None`。
+fn take_frame(buffer: &mut Vec<u8>) -> Option<Vec<u8>> {
+    if buffer.len() < 4 {
+        return None;
+    }
+    let length = u32::from_be_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]) as usize;
+    if buffer.len() < 4 + length {
+        return None;
+    }
+    let frame = buffer[4..4 + length].to_vec();
+    buffer.drain(..4 + length);
+    Some(frame)
+}
 
 struct Shared {
     core: ClientCore,
@@ -48,19 +72,17 @@ impl Shared {
     }
 }
 
-/// Browser WebSocketと共通Clientの寿命を一緒に管理する。
+/// WebTransport セッションと共通 Client の寿命を一緒に管理する。
+///
+/// Desktop と同じ長さ付きフレームで `ClientMessage` / `ServerMessage` を運ぶ。
 pub struct BrowserConnection {
-    socket: WebSocket,
+    session: Session,
+    writer: Rc<RefCell<SendStream>>,
     shared: Rc<RefCell<Shared>>,
     events: Option<mpsc::Receiver<EventEnvelope>>,
-    _onopen: Closure<dyn FnMut(Event)>,
-    _onmessage: Closure<dyn FnMut(MessageEvent)>,
-    _onclose: Closure<dyn FnMut(Event)>,
-    _onerror: Closure<dyn FnMut(Event)>,
 }
 
 struct RequestGuard {
-    socket: WebSocket,
     shared: Rc<RefCell<Shared>>,
     armed: bool,
 }
@@ -69,7 +91,6 @@ impl Drop for RequestGuard {
     fn drop(&mut self) {
         if self.armed {
             self.shared.borrow_mut().fail("要求が中断されました");
-            let _ = self.socket.close();
         }
     }
 }
@@ -77,8 +98,8 @@ impl Drop for RequestGuard {
 impl BrowserConnection {
     /// 保持中の購読を解除し、接続を明示的に終了する。
     pub fn disconnect(&self) {
-        self.shared.borrow_mut().fail("WebSocketが終了しました");
-        let _ = self.socket.close();
+        self.shared.borrow_mut().fail("WebTransportが終了しました");
+        self.session.close(0, "client disconnected");
     }
 
     /// 認証応答で Host が割り当てた Session。認証前は `None`。
@@ -86,22 +107,28 @@ impl BrowserConnection {
         self.shared.borrow().session_id.clone()
     }
 
-    /// ペアリングまたは保存済みcredentialで認証する。要求は認証後だけ受け付ける。
-    pub async fn connect(url: &str, auth: ClientMessage) -> Result<(Self, ServerMessage), String> {
-        Self::connect_inner(url, None, auth).await
+    /// 保存済み credential または pairing token で認証する。
+    ///
+    /// `endpoint` は `https://<host>:<port>/lapis` と、Host の証明書 DER の SHA-256。
+    /// ブラウザーはこのハッシュと一致する自己署名証明書だけを受け付ける。
+    pub async fn connect(
+        endpoint: &crate::browser_endpoint::WebTransportEndpoint,
+        auth: ClientMessage,
+    ) -> Result<(Self, ServerMessage), String> {
+        Self::connect_inner(endpoint, None, auth).await
     }
 
-    /// Helloで認証方式を問い合わせてから認証する。
+    /// Hello で認証方式を問い合わせてから認証する。
     pub async fn connect_with_hello(
-        url: &str,
+        endpoint: &crate::browser_endpoint::WebTransportEndpoint,
         hello: HelloRequest,
         auth: ClientMessage,
     ) -> Result<(Self, ServerMessage), String> {
-        Self::connect_inner(url, Some(hello), auth).await
+        Self::connect_inner(endpoint, Some(hello), auth).await
     }
 
     async fn connect_inner(
-        url: &str,
+        endpoint: &crate::browser_endpoint::WebTransportEndpoint,
         hello: Option<HelloRequest>,
         auth: ClientMessage,
     ) -> Result<(Self, ServerMessage), String> {
@@ -110,8 +137,26 @@ impl BrowserConnection {
             ClientMessage::Authenticate(_) | ClientMessage::Oidc(_) => false,
             _ => return Err("認証要求が必要です".into()),
         };
-        let socket = WebSocket::new_with_str(url, wire::REMOTE_WEBSOCKET_PROTOCOL)
-            .map_err(|_| "WebSocketを開始できません")?;
+        let url = endpoint
+            .url
+            .parse::<url::Url>()
+            .map_err(|_| "WebTransportのURLが不正です")?;
+        // 証明書は配布された DER のハッシュだけを信頼する。ルート CA は使わない。
+        let client = web_transport_wasm::ClientBuilder::new()
+            .with_pooling(false)
+            .with_server_certificate_hashes(vec![endpoint.certificate_sha256.clone()]);
+        // `Client::connect` の future は Unpin ではないため固定してから待つ。
+        let connect = pin!(client.connect(url));
+        let session = match select(connect, TimeoutFuture::new(20_000)).await {
+            Either::Left((Ok(session), _)) => session,
+            Either::Left((Err(_), _)) => return Err("WebTransportに接続できません".into()),
+            Either::Right(_) => return Err("WebTransportの接続がtimeoutしました".into()),
+        };
+        let (send, recv) = session
+            .open_bi()
+            .await
+            .map_err(|_| "WebTransportのstreamを開始できません")?;
+
         let (opened, wait_open) = oneshot::channel();
         let (auth_required, wait_auth_required) = oneshot::channel();
         let (authentication, wait_auth) = oneshot::channel();
@@ -126,58 +171,30 @@ impl BrowserConnection {
             pairing,
             session_id: None,
         }));
+        if let Some(reply) = shared.borrow_mut().opened.take() {
+            let _ = reply.send(Ok(()));
+        }
 
-        let weak = Rc::downgrade(&shared);
-        let onopen = Closure::wrap(Box::new(move |_: Event| {
-            if let Some(shared) = weak.upgrade()
-                && let Some(reply) = shared.borrow_mut().opened.take()
-            {
-                let _ = reply.send(Ok(()));
-            }
-        }) as Box<dyn FnMut(Event)>);
-        socket.set_onopen(Some(onopen.as_ref().unchecked_ref()));
+        // 受信は接続の寿命と同じ task で回し、切断を購読の失敗として通知する。
+        {
+            let shared = Rc::downgrade(&shared);
+            wasm_bindgen_futures::spawn_local(async move {
+                receive_loop(recv, shared).await;
+            });
+        }
 
-        let weak = Rc::downgrade(&shared);
-        let message_socket = socket.clone();
-        let onmessage = Closure::wrap(Box::new(move |event: MessageEvent| {
-            let Some(shared) = weak.upgrade() else { return };
-            let result = event
-                .data()
-                .as_string()
-                .ok_or_else(|| "WebSocketの受信形式が不正です".to_owned())
-                .and_then(|text| {
-                    serde_json::from_str::<ServerMessage>(&text)
-                        .map_err(|_| "Host応答の形式が不正です".to_owned())
-                })
-                .and_then(|message| handle_message(&mut shared.borrow_mut(), message));
-            if let Err(error) = result {
-                shared.borrow_mut().fail(&error);
-                let _ = message_socket.close();
-            }
-        }) as Box<dyn FnMut(MessageEvent)>);
-        socket.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
-
-        let onclose = failure_handler(Rc::downgrade(&shared), "WebSocketが切断されました");
-        socket.set_onclose(Some(onclose.as_ref().unchecked_ref()));
-        let onerror = failure_handler(Rc::downgrade(&shared), "WebSocketの通信に失敗しました");
-        socket.set_onerror(Some(onerror.as_ref().unchecked_ref()));
         let connection = Self {
-            socket,
+            session,
+            writer: Rc::new(RefCell::new(send)),
             shared,
             events: Some(events),
-            _onopen: onopen,
-            _onmessage: onmessage,
-            _onclose: onclose,
-            _onerror: onerror,
         };
-        wait(wait_open, 10_000, "WebSocketの開始がtimeoutしました").await?;
+        wait(wait_open, 20_000, "WebTransportの開始がtimeoutしました").await?;
         if let Some(hello) = hello {
-            let encoded = serde_json::to_string(&ClientMessage::Hello(hello))
-                .map_err(|_| "Helloを生成できません")?;
             connection
-                .socket
-                .send_with_str(&encoded)
-                .map_err(|_| "Helloを送信できません")?;
+                .send_message(ClientMessage::Hello(hello))
+                .await
+                .map_err(|error| error.to_string())?;
             wait(
                 wait_auth_required,
                 10_000,
@@ -185,16 +202,28 @@ impl BrowserConnection {
             )
             .await?;
         }
-        let mut encoded = serde_json::to_string(&auth).map_err(|_| "認証要求を生成できません")?;
-        let result = connection
-            .socket
-            .send_with_str(&encoded)
-            .map_err(|_| "認証要求を送信できません");
-        use zeroize::Zeroize;
+        // 認証要求は secret を含むため、送信後にバッファを消す。
+        let mut encoded = serde_json::to_vec(&auth).map_err(|_| "認証要求を生成できません")?;
+        let result = connection.send_bytes(&encoded).await;
+        use zeroize::Zeroize as _;
         encoded.zeroize();
-        result?;
+        result.map_err(|_| "認証要求を送信できません")?;
         let response = wait(wait_auth, 30_000, "認証がtimeoutしました").await?;
         Ok((connection, response))
+    }
+
+    async fn send_message(&self, message: ClientMessage) -> Result<(), String> {
+        let bytes = serde_json::to_vec(&message).map_err(|_| "要求を生成できません")?;
+        self.send_bytes(&bytes).await
+    }
+
+    async fn send_bytes(&self, bytes: &[u8]) -> Result<(), String> {
+        let frame = encode_frame(bytes);
+        let mut writer = self.writer.borrow_mut();
+        writer
+            .write(&frame)
+            .await
+            .map_err(|_| "要求を送信できません".to_owned())
     }
 
     pub async fn request(&self, body: RequestBody) -> Result<ResponseBody, String> {
@@ -204,22 +233,13 @@ impl BrowserConnection {
             .core
             .begin(body)
             .map_err(|error| error.to_string())?;
-        let encoded = match serde_json::to_string(&message) {
-            Ok(encoded) => encoded,
-            Err(_) => {
-                self.shared.borrow_mut().fail("要求を生成できません");
-                let _ = self.socket.close();
-                return Err("要求を生成できません".into());
-            }
-        };
-        if self.socket.send_with_str(&encoded).is_err() {
-            self.shared.borrow_mut().fail("要求を送信できません");
-            let _ = self.socket.close();
-            return Err("要求を送信できません".into());
+        if let Err(error) = self.send_message(message).await {
+            self.shared.borrow_mut().fail(&error);
+            self.session.close(0, "send failed");
+            return Err(error);
         }
         // 送信済み要求のfutureが破棄されたら結果不明の接続を再利用しない。
         let mut guard = RequestGuard {
-            socket: self.socket.clone(),
             shared: self.shared.clone(),
             armed: true,
         };
@@ -229,7 +249,7 @@ impl BrowserConnection {
                 self.shared
                     .borrow_mut()
                     .fail("要求が失敗またはtimeoutしました");
-                let _ = self.socket.close();
+                self.session.close(0, "request failed");
                 return Err("要求が失敗またはtimeoutしました".into());
             }
         };
@@ -243,6 +263,38 @@ impl BrowserConnection {
     }
 }
 
+/// 受信ループ。フレーム単位で `ServerMessage` を取り出し、共通 Client へ渡す。
+async fn receive_loop(mut recv: RecvStream, shared: Weak<RefCell<Shared>>) {
+    let mut buffer = Vec::new();
+    loop {
+        let chunk = match recv.read(64 * 1024).await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(_) => break,
+        };
+        buffer.extend_from_slice(&chunk);
+        while let Some(frame) = take_frame(&mut buffer) {
+            let Some(shared) = shared.upgrade() else {
+                return;
+            };
+            let message = match serde_json::from_slice::<ServerMessage>(&frame) {
+                Ok(message) => message,
+                Err(_) => {
+                    shared.borrow_mut().fail("Host応答の形式が不正です");
+                    return;
+                }
+            };
+            if let Err(error) = handle_message(&mut shared.borrow_mut(), message) {
+                shared.borrow_mut().fail(&error);
+                return;
+            }
+        }
+    }
+    if let Some(shared) = shared.upgrade() {
+        shared.borrow_mut().fail("WebTransportが切断されました");
+    }
+}
+
 async fn wait<T>(
     reply: oneshot::Receiver<Result<T, String>>,
     timeout_ms: u32,
@@ -252,17 +304,6 @@ async fn wait<T>(
         Either::Left((Ok(result), _)) => result,
         _ => Err(error.to_owned()),
     }
-}
-
-fn failure_handler(
-    shared: Weak<RefCell<Shared>>,
-    message: &'static str,
-) -> Closure<dyn FnMut(Event)> {
-    Closure::wrap(Box::new(move |_: Event| {
-        if let Some(shared) = shared.upgrade() {
-            shared.borrow_mut().fail(message);
-        }
-    }) as Box<dyn FnMut(Event)>)
 }
 
 /// ページが保存する credential。secret そのものを含む。
@@ -285,9 +326,10 @@ pub struct WebConnection {
     pub capabilities: CapabilitySet,
 }
 
-/// WebSocket経由のClient接続設定。
+/// WebTransport 経由の Client 接続設定。
 pub struct WebClientConnectOptions<'a> {
-    pub url: &'a str,
+    /// WebTransport の接続先と、信頼する証明書ハッシュ。
+    pub endpoint: &'a crate::browser_endpoint::WebTransportEndpoint,
     pub workspace: Option<WorkspaceId>,
     pub client_id: &'a str,
     pub client_name: &'a str,
@@ -298,7 +340,7 @@ pub struct WebClientConnectOptions<'a> {
     pub capabilities: &'a [&'a str],
 }
 
-/// WebSocket経由でHostへ接続し、OIDC / credential / pairing のいずれかで認証を完了する。
+/// WebTransport 経由で Host へ接続し、OIDC / credential / pairing のいずれかで認証を完了する。
 ///
 /// OIDC Token が指定された場合は他の方式へ暗黙にフォールバックしない。
 /// `credential` が失敗し `token` もある場合はpairingへフォールバックする。
@@ -307,7 +349,7 @@ pub async fn connect_web_client(
     options: WebClientConnectOptions<'_>,
 ) -> Result<WebConnection, String> {
     let WebClientConnectOptions {
-        url,
+        endpoint,
         workspace,
         client_id,
         client_name,
@@ -356,7 +398,7 @@ pub async fn connect_web_client(
         }
     };
     let (connection, response) =
-        match BrowserConnection::connect_with_hello(url, hello.clone(), auth).await {
+        match BrowserConnection::connect_with_hello(endpoint, hello.clone(), auth).await {
             Ok(result) => result,
             Err(_) if can_retry_pair => {
                 let token = token.ok_or_else(|| "pairing tokenが必要です".to_owned())?;
@@ -365,7 +407,7 @@ pub async fn connect_web_client(
                 let request = PairRequest::new(hello, &secret);
                 secret.zeroize();
                 BrowserConnection::connect_with_hello(
-                    url,
+                    endpoint,
                     retry_hello,
                     ClientMessage::Pair(request),
                 )
@@ -548,12 +590,8 @@ fn handle_message(shared: &mut Shared, message: ServerMessage) -> Result<(), Str
 
 impl Drop for BrowserConnection {
     fn drop(&mut self) {
-        self.socket.set_onopen(None);
-        self.socket.set_onmessage(None);
-        self.socket.set_onclose(None);
-        self.socket.set_onerror(None);
-        self.shared.borrow_mut().fail("WebSocketが終了しました");
-        let _ = self.socket.close();
+        self.shared.borrow_mut().fail("WebTransportが終了しました");
+        self.session.close(0, "client disconnected");
     }
 }
 

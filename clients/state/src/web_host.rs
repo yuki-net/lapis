@@ -23,6 +23,7 @@ use client_api::{
     WorkspaceViewUnsubscribeRequest,
 };
 use client_core::browser::{BrowserConnection, WebClientConnectOptions, connect_web_client};
+pub use client_core::browser_endpoint::WebTransportEndpoint;
 use document::{
     Document, DocumentCache, DocumentConnection, DocumentError, Encoding, ExternalChange, Revision,
 };
@@ -124,7 +125,10 @@ pub struct WorkspaceChoice {
 
 /// Host接続の設定。ページのクエリかlocalStorageから渡される。
 pub struct HostConfig {
+    /// 表示と保存に使う接続先の識別子。表示名の解決にだけ使う。
     pub url: String,
+    /// WebTransport の接続先と、信頼する証明書ハッシュ。
+    pub endpoint: WebTransportEndpoint,
     pub workspace: String,
     pub client_id: String,
     pub token: Option<String>,
@@ -144,7 +148,7 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
         )
     };
     let connected = connect_web_client(WebClientConnectOptions {
-        url: &config.url,
+        endpoint: &config.endpoint,
         workspace: requested_workspace.clone(),
         client_id: &config.client_id,
         client_name: "lapis-web",
