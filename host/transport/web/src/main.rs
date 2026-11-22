@@ -31,11 +31,10 @@ use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 const DEFAULT_LISTEN: &str = "127.0.0.1:4747";
 const DEFAULT_DIST: &str = "apps/web/dist";
 /// Wasm UI の依存が収まるディレクトリ。ここにある `.rs` を監視する。
-const WATCHED_DIRECTORIES: [&str; 7] = [
+const WATCHED_DIRECTORIES: [&str; 6] = [
     "clients/ui",
     "clients/state",
-    "clients/transport",
-    "contracts",
+    "protocol",
     "extensions",
     "apps/web/src",
     "apps/web/wasm/src",

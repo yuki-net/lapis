@@ -112,9 +112,9 @@ def layer(manifest, root):
             return roles[parts[2]]
     for prefix, value in [
         ("extensions/", "models"),
-        ("contracts/extension-api/", "models"),
-        ("contracts/domain/", "models"), ("contracts/transport/", "models"),
-        ("contracts/protocol/", "protocol"), ("clients/transport/", "client_core"),
+        ("protocol/extension-api/", "models"),
+        ("protocol/types/", "models"), ("protocol/wire/dto/", "models"),
+        ("protocol/wire/client-api/", "protocol"), ("protocol/wire-client/", "client_core"),
         ("host/application/", "application"), ("host/runtime/", "runtime"),
         ("host/workbench/", "runtime"),
         ("host/documents/", "runtime"),
@@ -166,7 +166,7 @@ def crate_name_of(path, root):
 
 def check_duplicate_type_names(root=ROOT):
     """crate をまたいだ同名の公開型を検出する。"""
-    source = root / "apps", root / "clients", root / "host", root / "contracts", root / "extensions"
+    source = root / "apps", root / "clients", root / "host", root / "protocol", root / "extensions"
     found = {}
     for base in source:
         if not base.exists():

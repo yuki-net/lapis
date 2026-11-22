@@ -6,8 +6,8 @@ description.workspace = true
 license.workspace = true
 
 [dependencies]
-document = { path = "../../../contracts/domain/document" }
-editor-core = { path = "../../../contracts/domain/editor-core" }
+document = { path = "../../../protocol/types/document" }
+editor-core = { path = "../../../protocol/types/editor-core" }
 git = { package = "git-contract", path = "../../../extensions/git/contract" }
 local-credentials = { path = "../credentials" }
 local-git = { path = "../../extensions/git" }
@@ -17,10 +17,10 @@ local-search = { path = "../search" }
 local-workbench = { path = "../workbench" }
 local-workspace = { path = "../workspace" }
 local-workspace-store = { path = "../workspace-store" }
-lsp = { path = "../../../contracts/domain/lsp" }
+lsp = { path = "../../../protocol/types/lsp" }
 task-runner = { path = "../agent" }
-workspace = { path = "../../../contracts/domain/workspace" }
-workbench = { path = "../../../contracts/domain/workbench" }
+workspace = { path = "../../../protocol/types/workspace" }
+workbench = { path = "../../../protocol/types/workbench" }
 
 [dev-dependencies]
 tempfile.workspace = true

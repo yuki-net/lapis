@@ -88,11 +88,11 @@ class PackageTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[2]
         self.assertEqual(
             (root / "examples/external-extension/wit/deps/lifecycle/extension.wit").read_bytes(),
-            (root / "contracts/extension-api/wit/v1/extension.wit").read_bytes(),
+            (root / "protocol/extension-api/wit/v1/extension.wit").read_bytes(),
         )
         self.assertEqual(
             (root / "examples/external-extension/wit/deps/dispatch/dispatch.wit").read_bytes(),
-            (root / "contracts/extension-api/wit/dispatch-v1/dispatch.wit").read_bytes(),
+            (root / "protocol/extension-api/wit/dispatch-v1/dispatch.wit").read_bytes(),
         )
         for name, contract in [("lifecycle", "v1/extension.wit"),
                                ("dispatch", "dispatch-v1/dispatch.wit"),
@@ -101,15 +101,15 @@ class PackageTests(unittest.TestCase):
             filename = "extension.wit" if name == "lifecycle" else f"{name}.wit"
             self.assertEqual(
                 (root / "extensions/terminal/component/wit/deps" / name / filename).read_bytes(),
-                (root / "contracts/extension-api/wit" / contract).read_bytes(),
+                (root / "protocol/extension-api/wit" / contract).read_bytes(),
             )
         self.assertEqual(
             (root / "examples/pty-extension/wit/deps/pty/pty.wit").read_bytes(),
-            (root / "contracts/extension-api/wit/pty-v1/pty.wit").read_bytes(),
+            (root / "protocol/extension-api/wit/pty-v1/pty.wit").read_bytes(),
         )
         self.assertEqual(
             (root / "examples/pty-extension/wit/deps/dispatch/dispatch.wit").read_bytes(),
-            (root / "contracts/extension-api/wit/dispatch-v1/dispatch.wit").read_bytes(),
+            (root / "protocol/extension-api/wit/dispatch-v1/dispatch.wit").read_bytes(),
         )
 
     def test_japanese_package_matches_current_bundled_messages(self):
@@ -119,7 +119,7 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(package["translations"][0]["messages"], messages)
         self.assertEqual(
             (root / "examples/pty-extension/wit/deps/pty/pty.wit").read_bytes(),
-            (root / "contracts/extension-api/wit/pty-v1/pty.wit").read_bytes(),
+            (root / "protocol/extension-api/wit/pty-v1/pty.wit").read_bytes(),
         )
 
     def setUp(self):

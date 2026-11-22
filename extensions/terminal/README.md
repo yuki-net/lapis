@@ -22,7 +22,7 @@ workspace 設定なしでビルドできることを検証する。
 
 役割ディレクトリで分けます。機能ごとの `src/` を平坦に並べると、契約と OS 依存実装と Host 状態のどれが正本か読み取れなくなるためです。
 
-- `contract/` は `contracts/` と同じ「models」層として依存検査します。現在は Client 側の描画・入力モデルと旧 adapter が参照します。
+- `contract/` は `protocol/types/` と同じ「models」層として依存検査します。現在は Client 側の描画・入力モデルと旧 adapter が参照します。
 - `logic/` もセッション状態と操作判断を持つため「runtime」層として扱います。Host の能力は port 経由で利用します。
 - `native/` は ABI とロジックを接続する「infrastructure」層として扱います。
 - `adapter/` は `host/adapters/*` と同じ「infrastructure」層として扱います。OS API と外部プロセスに触れるためです。

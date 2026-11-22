@@ -10,24 +10,24 @@ name = "lapis-host"
 path = "src/main.rs"
 
 [dependencies]
-workspace = { path = "../../contracts/domain/workspace" }
-workbench = { path = "../../contracts/domain/workbench" }
-document = { path = "../../contracts/domain/document" }
+workspace = { path = "../../protocol/types/workspace" }
+workbench = { path = "../../protocol/types/workbench" }
+document = { path = "../../protocol/types/document" }
 git = { package = "git-contract", path = "../../extensions/git/contract" }
 futures-channel = "0.3"
-task = { path = "../../contracts/domain/task" }
-process = { path = "../../contracts/domain/process" }
-editor-core = { path = "../../contracts/domain/editor-core" }
+task = { path = "../../protocol/types/task" }
+process = { path = "../../protocol/types/process" }
+editor-core = { path = "../../protocol/types/editor-core" }
 backend-state = { path = "../runtime" }
 extensions-entry = { path = "../extensions-entry" }
-extension-ui-contract = { path = "../../contracts/domain/extension-ui" }
+extension-ui-contract = { path = "../../protocol/types/extension-ui" }
 extension-runtime = { path = "../adapters/extension-runtime", default-features = false }
 semver = "1"
-client-api = { path = "../../contracts/protocol" }
+client-api = { path = "../../protocol/wire/client-api" }
 platform = { path = "../adapters/local" }
 local-process = { path = "../adapters/process" }
 remote = { path = "../transport/remote" }
-wire = { path = "../../contracts/transport/wire" }
+wire = { path = "../../protocol/wire/dto" }
 tokio = { workspace = true, features = ["signal"] }
 rustls.workspace = true
 rcgen.workspace = true

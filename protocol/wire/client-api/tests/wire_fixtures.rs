@@ -28,7 +28,7 @@ const VIEW_SUBSCRIBE: &str = r#"{"request_id":"request-2","type":"workspace.view
 const VIEW_UPDATE: &str = r#"{"request_id":"request-3","type":"workspace.view.update","payload":{"workspace_id":"workspace-1","view":{"open_documents":[],"active_path":null,"active_document_id":null}}}"#;
 const VIEW_CHANGED: &str = r#"{"event_sequence":8,"type":"workspace.view_changed","payload":{"workspace_id":"workspace-1","revision":3,"view":{"open_documents":[{"document_id":"document-1","path":"src/main.rs","cursor_char":4,"selection_start":0,"selection_end":0,"scroll_x":0.0,"scroll_y":12.5}],"active_path":"src/main.rs","active_document_id":"document-1"}}}"#;
 
-const MOBILE_TEST_PATH: &str = "../../clients/mobile/sharedUi/src/commonTest/kotlin/dev/lapis/mobile/protocol/ProtocolSerializationTest.kt";
+const MOBILE_TEST_PATH: &str = "../../../clients/mobile/sharedUi/src/commonTest/kotlin/dev/lapis/mobile/protocol/ProtocolSerializationTest.kt";
 
 fn hello() -> HelloRequest {
     HelloRequest {

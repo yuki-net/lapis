@@ -6,7 +6,7 @@ description.workspace = true
 license.workspace = true
 
 [dependencies]
-workspace = { path = "../../../contracts/domain/workspace" }
+workspace = { path = "../../../protocol/types/workspace" }
 
 [dev-dependencies]
 tempfile.workspace = true

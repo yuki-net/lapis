@@ -7,15 +7,15 @@ license.workspace = true
 
 [dependencies]
 futures-channel = "0.3"
-client-api = { path = "../../contracts/protocol" }
-workbench = { path = "../../contracts/domain/workbench" }
+client-api = { path = "../../protocol/wire/client-api" }
+workbench = { path = "../../protocol/types/workbench" }
 serde_json.workspace = true
 sha2.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 futures-util = "0.3"
 gloo-timers = { version = "0.3", features = ["futures"] }
-wire = { path = "../../contracts/transport/wire" }
+wire = { path = "../../protocol/wire/dto" }
 serde.workspace = true
 wasm-bindgen = "=0.2.129"
 web-sys = { version = "=0.3.106", features = ["WebSocket", "MessageEvent", "Event", "ErrorEvent"] }
