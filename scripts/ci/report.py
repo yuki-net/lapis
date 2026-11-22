@@ -24,17 +24,10 @@ def endgroup() -> None:
         print("::endgroup::", flush=True)
 
 
-def error(message: str, file: str | None = None, line: int | None = None, column: int | None = None) -> None:
+def error(message: str) -> None:
     """失敗を GitHub の注釈とローカルの stderr の両方に出す。"""
     if on_github():
-        location = ""
-        if file:
-            location = f" file={file}"
-            if line is not None:
-                location += f",line={line}"
-                if column is not None:
-                    location += f",col={column}"
-        print(f"::error{location}::{message}", flush=True)
+        print(f"::error::{message}", flush=True)
     else:
         print(f"error: {message}", file=sys.stderr, flush=True)
 
@@ -83,7 +76,7 @@ class LocalLog:
         safe = "".join(c if c.isalnum() or c in "-_." else "-" for c in step)[:80]
         return self.base / route / f"{safe}.log"
 
-    def begin(self, route: str, step: str) -> None:
+    def begin(self) -> None:
         self._buffer = []
 
     def write(self, text: str) -> None:

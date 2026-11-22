@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # job 定義は scripts/ci/jobs.py が唯一の正本。ここは実行の器だけ。
+  # job 定義は scripts/ci/routes/ が正本。ここは実行の器だけ。
   PYTHON_VERSION: "3.12"
 
 jobs:
@@ -48,7 +48,7 @@ jobs:
           echo "### Selected routes" >> "$GITHUB_STEP_SUMMARY"
           echo '`'"$(python -m scripts.ci.plan --selected --base "${BASE_SHA:-invalid}")"'`' >> "$GITHUB_STEP_SUMMARY"
 
-  # 実際の検証。step 列は scripts/ci/jobs.py を持ち、ここは matrix を
+  # 実際の検証。step 列は scripts/ci/routes/ が持ち、ここは matrix を
   # 展開して run.py に委譲するだけ。
   ci:
     name: ${{ matrix.route.name }}
@@ -59,7 +59,7 @@ jobs:
       fail-fast: false
       matrix:
         route: ${{ fromJSON(needs.plan.outputs.matrix) }}
-    runs-on: ${{ matrix.route.runs_on }}
+    runs-on: ${{ matrix.route.runner }}
     timeout-minutes: ${{ matrix.route.timeout }}
     steps:
       - uses: actions/checkout@v4
@@ -107,7 +107,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-            target/
+            ${{ matrix.route.cache_paths }}
           key: ${{ matrix.route.cache }}-${{ runner.os }}-rust-${{ matrix.route.toolchain }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ matrix.route.cache }}-${{ runner.os }}-rust-${{ matrix.route.toolchain }}-

@@ -18,7 +18,8 @@ from pathlib import Path
 
 from scripts.ci import report, state
 from scripts.ci.console import configure
-from scripts.ci.jobs import ROOT, ORDER, local_os, requirements, route_for
+from scripts.ci.model import ROOT, local_os, requirements
+from scripts.ci.routes import ORDER, route_for
 from scripts.ci.model import RUNNERS
 
 
@@ -134,7 +135,7 @@ def run_step(route, step, log: report.LocalLog | None, writer=None, os_name: str
     environment.update({key: substitute(value, os_name, temp) for key, value in step.env.items()})
     limit = (step.timeout_minutes or max(1, route.timeout_minutes - POST_JOB_RESERVE_MINUTES)) * 60
     if log is not None:
-        log.begin(route.key, step.name)
+        log.begin()
 
     attempts = step.retries + 1
     started = time.perf_counter()

@@ -10,7 +10,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
 
 from scripts.ci import run
-from scripts.ci.jobs import ORDER
+from scripts.ci.routes import ORDER
 
 
 def invoke(argv) -> int:

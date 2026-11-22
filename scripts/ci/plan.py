@@ -8,13 +8,11 @@ matrix は route × `runs_on` の OS ごとに 1 エントリを出す。
 import argparse
 import json
 import sys
-from pathlib import Path
 
 from scripts.ci.console import configure
-from scripts.ci.model import RUNNERS
-from scripts.ci.routes import ORDER, job_name
-from scripts.ci.jobs import RUST_TOOLCHAIN, ROUTES, requirements, route_for
+from scripts.ci.model import RUNNERS, RUST_TOOLCHAIN, local_os, requirements
 from scripts.ci.paths import ALL_JOBS, changed_paths, jobs_for_paths, worktree_paths
+from scripts.ci.routes import ORDER, job_name, route_for
 
 DEFAULT_BASE = "origin/develop"
 
@@ -24,11 +22,38 @@ def route_keys(paths: list[str] | None) -> list[str]:
 
     paths が None（base が見つからない）場合は全 route を返す。
     """
-    if paths is None:
-        selected = ALL_JOBS | {"repository"}
-    else:
-        selected = jobs_for_paths(paths)
+    selected = ALL_JOBS if paths is None else jobs_for_paths(paths)
     return [key for key in ORDER if key in selected]
+
+
+def entry_for(route, os_name: str) -> dict:
+    """1 job 分の matrix エントリ。CI とローカルで同じ形を使う。"""
+    return {
+        "job": route.key,
+        "name": job_name(route, os_name),
+        "os": os_name,
+        # matrix の値は runner 名。Route.runs_on（OS の集合）とは別物。
+        "runner": RUNNERS[os_name],
+        "timeout": route.timeout_minutes,
+        # watch.py が待機中の job の総 step 数を出すのに使う。
+        "steps": len(route.steps) + len(route.platform_steps.get(os_name, ())),
+        # 以降は ci.yml のセットアップ step の条件に使う。
+        "checkout_depth": route.checkout_depth,
+        "toolchain": RUST_TOOLCHAIN,
+        "python": route.python,
+        "node": route.node,
+        "node_cache": route.node_cache,
+        "node_cache_path": route.node_cache_path,
+        "rust": route.rust,
+        "rust_components": route.rust_components,
+        "rust_targets": route.rust_targets,
+        "wasm_bindgen": route.wasm_bindgen,
+        "java": route.java,
+        "gradle": route.gradle,
+        "cache": route.cache,
+        # actions/cache の path。runner ごとに分けた target-dir も含める。
+        "cache_paths": "\n".join(route.cache_paths),
+    }
 
 
 def matrix(keys: list[str], only_os: str | None = None) -> list[dict]:
@@ -43,32 +68,19 @@ def matrix(keys: list[str], only_os: str | None = None) -> list[dict]:
         for os_name in route.runs_on:
             if only_os is not None and os_name != only_os:
                 continue
-            entries.append(
-                {
-                    "job": route.key,
-                    "name": job_name(route, os_name),
-                    "os": os_name,
-                    "runs_on": RUNNERS[os_name],
-                    "timeout": route.timeout_minutes,
-                    # watch.py が待機中の job の総 step 数を出すのに使う。
-                    "steps": len(route.steps) + len(route.platform_steps.get(os_name, ())),
-                    # 以降は ci.yml のセットアップ step の条件に使う。
-                    "checkout_depth": route.checkout_depth,
-                    "toolchain": RUST_TOOLCHAIN,
-                    "python": route.python,
-                    "node": route.node,
-                    "node_cache": route.node_cache,
-                    "node_cache_path": route.node_cache_path,
-                    "rust": route.rust,
-                    "rust_components": route.rust_components,
-                    "rust_targets": route.rust_targets,
-                    "wasm_bindgen": route.wasm_bindgen,
-                    "java": route.java,
-                    "gradle": route.gradle,
-                    "cache": route.cache,
-                }
-            )
+            entries.append(entry_for(route, os_name))
     return entries
+
+
+def local_entries(keys: list[str]) -> list[dict]:
+    """手元の OS で走らせる job の一覧。
+
+    CI の matrix は route が走る OS ごとに job を作るが、手元は 1 台しか
+    ない。他 OS のふりはせず、この機械の OS の step を実行して、その OS 名
+    で出す（`runs_on` に無くても実行し、run.py が警告する）。
+    """
+    os_name = local_os()
+    return [entry_for(route_for(key), os_name) for key in keys]
 
 
 def select_paths(args) -> tuple[str, list[str] | None]:

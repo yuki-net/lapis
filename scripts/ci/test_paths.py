@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from scripts.ci.jobs import ORDER, ROUTES
+from scripts.ci.routes import ORDER, ROUTES
 from scripts.ci.paths import ALL_JOBS, PATH_RULES, jobs_for_paths, worktree_paths
 from scripts.ci.gate import errors
 from scripts.ci.paths import changed_paths

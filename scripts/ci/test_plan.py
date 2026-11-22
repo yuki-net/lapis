@@ -11,7 +11,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts.ci import plan
-from scripts.ci.jobs import ORDER, ROOT, ROUTES, RUST_TOOLCHAIN, route_for
+from scripts.ci.model import ROOT, RUST_TOOLCHAIN
+from scripts.ci.routes import ORDER, ROUTES, route_for
 from scripts.ci.model import RUNNERS
 from scripts.ci.paths import PATH_RULES
 from scripts.ci.routes import job_name
@@ -40,7 +41,9 @@ class PlanTests(unittest.TestCase):
             expected = job_name(route, entry["os"])
             self.assertEqual(entry["name"], expected)
             self.assertEqual(entry["timeout"], route.timeout_minutes)
-            self.assertEqual(entry["runs_on"], RUNNERS[entry["os"]])
+            self.assertEqual(entry["runner"], RUNNERS[entry["os"]])
+            self.assertEqual(entry["cache_paths"], "\n".join(route.cache_paths))
+            self.assertNotIn("runs_on", entry)
             self.assertNotIn("workdir", entry)
             self.assertNotIn("requires", entry)
             json.dumps(entry)  # matrix は JSON へ直列化できること
@@ -122,6 +125,13 @@ class PlanTests(unittest.TestCase):
         """CI は matrix の OS を `--os` で run.py に渡す。"""
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("--os ${{ matrix.route.os }}", workflow)
+
+    def test_workflow_uses_the_matrix_runner_and_cache_paths(self):
+        """YAML は runner 名とキャッシュ対象を matrix から受け取る。"""
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("runs-on: ${{ matrix.route.runner }}", workflow)
+        self.assertIn("${{ matrix.route.cache_paths }}", workflow)
+        self.assertNotIn("matrix.route.runs_on", workflow)
 
     def test_workflow_matrix_comes_from_plan(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")

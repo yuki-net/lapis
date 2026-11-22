@@ -10,8 +10,13 @@ OS ごとに step が違う場合の差分は `scripts/ci/routes/platforms/` に
 """
 
 import importlib.util
+import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
+# リポジトリルート。git の作業ディレクトリやログの置き場に使う。
+ROOT = Path(__file__).resolve().parents[2]
 
 # CI の固定値。ローカルの検証でも同じ値を使う。
 RUST_TOOLCHAIN = "1.96.0"
@@ -44,8 +49,6 @@ class Step:
     retry_delay_seconds: int = 0
     # 前提を満たさない環境では実行せず unsupported として扱う。
     requires: tuple[str, ...] = ()
-    # GitHub では `::error` 注釈を出さず成功扱いにする表示専用の step。
-    informational: bool = False
     env: dict[str, str] = field(default_factory=dict)
 
 
@@ -129,3 +132,25 @@ def _load_module(path: Path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def requirements(route: Route) -> tuple[str, ...]:
+    """route が必要とする前提。run.py がローカルで充足を判定する。"""
+    required = []
+    if route.python:
+        required.append("python")
+    if route.rust:
+        required.append("cargo")
+    if route.node:
+        required.append("node")
+    if route.wasm_bindgen:
+        required.append("wasm-bindgen")
+    if route.java:
+        required.append("java")
+    if route.gradle:
+        required.append("gradle")
+    return tuple(required)
+
+
+def local_os() -> str:
+    return "windows" if os.name == "nt" else "linux" if sys.platform.startswith("linux") else "macos"

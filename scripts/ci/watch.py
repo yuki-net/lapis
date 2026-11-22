@@ -26,8 +26,8 @@ from pathlib import Path
 
 from scripts.ci import console, plan, state
 from scripts.ci.console import configure
-from scripts.ci.jobs import ROOT, local_os
-from scripts.ci.routes import ORDER, job_name, route_for
+from scripts.ci.model import ROOT
+from scripts.ci.routes import ORDER
 
 GREEN = "\x1b[32m"
 RED = "\x1b[31m"
@@ -198,31 +198,97 @@ def exit_code(entries: list[dict], states: dict[str, dict]) -> int:
     return 0 if all(states.get(e["job"], {}).get("status") in done for e in entries) else 1
 
 
+ANSI_PATTERN = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def visible_length(text: str) -> int:
+    return len(ANSI_PATTERN.sub("", text))
+
+
+def truncate_ansi(text: str, width: int) -> str:
+    """表示幅で切る。色のエスケープは幅に数えず、途中で切らない。"""
+    if visible_length(text) <= width:
+        return text
+    out: list[str] = []
+    visible = 0
+    index = 0
+    while index < len(text):
+        match = ANSI_PATTERN.match(text, index)
+        if match:
+            out.append(match.group(0))
+            index = match.end()
+            continue
+        if visible >= width:
+            break
+        out.append(text[index])
+        visible += 1
+        index += 1
+    return "".join(out) + RESET
+
+
+# 代替画面バッファ。全画面を毎フレーム描き直すので、行数を数えてカーソルを
+# 戻す必要がない（折り返しやスクロールで数え間違えると古い行が残る）。
+# vim / less / htop と同じ仕組みで、Windows 10 以降・macOS・Linux の
+# 主要な端末が対応している。
+ENTER_ALT_SCREEN = "\x1b[?1049h"
+LEAVE_ALT_SCREEN = "\x1b[?1049l"
+HIDE_CURSOR = "\x1b[?25l"
+SHOW_CURSOR = "\x1b[?25h"
+
+
+def fit_lines(lines: list[str], width: int, height: int) -> list[str]:
+    """画面に収める。
+
+    - 幅で切る: 1 行が折り返すと画面の行数と合わなくなるため必ず切る
+    - 高さで切る: はみ出すと代替画面内でスクロールし、上端が欠けるため
+    """
+    fitted = [truncate_ansi(line, width) for line in lines]
+    if height <= 0 or len(fitted) <= height:
+        return fitted
+    omitted = len(fitted) - height + 1
+    return fitted[: height - 1] + [f"... {omitted} more line(s)"]
+
+
 class Screen:
-    """ターミナルなら同じ行数を上書きし、そうでなければ最後だけ出す。"""
+    """端末なら全画面を描き直し、パイプなら確定行だけを追記する。"""
 
-    def __init__(self, stream, cursor: bool):
+    def __init__(self, stream, ansi: bool):
         self.stream = stream
-        self.cursor = cursor and stream.isatty()
-        self.drawn = 0
+        self.ansi = ansi
+        self.active = False
 
-    def draw(self, lines: list[str], final: bool = False) -> None:
-        if not self.cursor:
-            if final:
-                for line in lines:
-                    print(line, flush=True)
+    def frame(self, lines: list[str]) -> None:
+        """1 フレーム描く。ANSI が無ければ何もしない。"""
+        if not self.ansi:
             return
-        if self.drawn:
-            self.stream.write(f"\x1b[{self.drawn}A")
-        for line in lines:
+        if not self.active:
+            self.stream.write(ENTER_ALT_SCREEN + HIDE_CURSOR)
+            self.active = True
+        size = shutil.get_terminal_size((80, 24))
+        fitted = fit_lines(lines, size.columns - 1, size.lines - 1)
+        self.stream.write("\x1b[H")
+        for line in fitted:
             self.stream.write("\x1b[2K" + line + "\n")
+        # 前のフレームで余った行を消す。
+        self.stream.write("\x1b[J")
         self.stream.flush()
-        self.drawn = len(lines)
 
-    def close(self) -> None:
-        if self.cursor and self.drawn:
-            self.stream.write("\n")
+    def commit(self, line: str) -> None:
+        """ANSI が使えないときの確定行。使えるときは frame に含める。"""
+        if self.active:
+            return
+        self.stream.write(line + "\n")
+        self.stream.flush()
+
+    def close(self, final_lines: list[str]) -> None:
+        """代替画面を抜け、最終結果を通常の画面に残す。"""
+        if self.active:
+            self.stream.write(SHOW_CURSOR + LEAVE_ALT_SCREEN)
             self.stream.flush()
+            self.active = False
+        for line in final_lines:
+            self.stream.write(line + "\n")
+        self.stream.flush()
 
 
 def terminate(process: subprocess.Popen) -> None:
@@ -258,37 +324,63 @@ def spawn(job: str, state_dir: Path) -> subprocess.Popen:
     )
 
 
+def commit_line(entry: dict, found: dict, index: int, total: int, palette: Palette) -> str:
+    """終わった job の 1 行。後からスクロールして読み返せる形にする。"""
+    status = found.get("status", state.PENDING)
+    mark, color = MARKS.get(status, ("?", ""))
+    steps = found.get("steps_total") or entry.get("steps", 0)
+    if found.get("started_at") and found.get("finished_at"):
+        elapsed = duration(found["finished_at"] - found["started_at"])
+    else:
+        elapsed = "-"
+    detail = ""
+    if status == state.FAILED and found.get("failed_step"):
+        detail = f"  {found['failed_step']}"
+    elif status == state.SKIPPED and found.get("reason"):
+        detail = f"  {found['reason']}"
+    head = palette.paint(mark, color)
+    name = palette.paint(entry["name"], color if status in (state.FAILED, state.PASSED) else "")
+    return f"[{index}/{total}] {head} {name}  {found.get('steps_done', 0)}/{steps}  {elapsed}{detail}"
+
+
 def run(entries: list[dict], jobs: int, colors: bool, scope: str = "") -> int:
     state_dir = ROOT / ".ci" / "state"
     shutil.rmtree(state_dir, ignore_errors=True)
     state_dir.mkdir(parents=True, exist_ok=True)
 
     palette = Palette(colors)
-    screen = Screen(sys.stdout, cursor=colors)
+    screen = Screen(sys.stdout, ansi=colors)
+    if scope and not colors:
+        # ANSI が無い端末では全画面を描けないので、見出しだけ 1 行残す。
+        screen.commit(palette.paint(f"CI  {scope}", DIM))
     queue = list(entries)
     running: dict[str, subprocess.Popen] = {}
     codes: dict[str, int] = {}
+    committed: set[str] = set()
     started = time.time()
 
-    def render(final: bool = False) -> None:
-        now = time.time()
+    def final_lines() -> list[str]:
         raw = state.read_all(state_dir)
-        states = merged_states(entries, raw, codes) if final else raw
-        lines = [f"CI  {scope}" if scope else "CI", ""]
+        states = merged_states(entries, raw, codes)
+        lines = summary_lines(entries, states, palette)
+        lines.extend(failure_lines(entries, states, palette))
+        return lines
+
+    def frame_lines(raw: dict[str, dict]) -> list[str]:
+        """全 job を 1 画面に収めたフレーム。"""
+        now = time.time()
+        lines = [palette.paint(f"CI  {scope}", DIM) if scope else "CI", ""]
         for entry in entries:
             lines.append(line_for(entry, status_of(entry, raw, codes), now, palette))
         lines.append("")
-        if final:
-            lines.extend(summary_lines(entries, states, palette))
-            lines.extend(failure_lines(entries, states, palette))
-        else:
-            lines.append(
-                palette.paint(
-                    f"{len(codes)}/{len(entries)} finished / {duration(now - started)} / Ctrl+C to stop",
-                    DIM,
-                )
+        lines.append(
+            palette.paint(
+                f"[{len(codes)}/{len(entries)} done] {duration(now - started)}"
+                "  Ctrl+C to stop",
+                DIM,
             )
-        screen.draw(lines, final=final)
+        )
+        return lines
 
     try:
         while queue or running:
@@ -300,7 +392,25 @@ def run(entries: list[dict], jobs: int, colors: bool, scope: str = "") -> int:
                 if code is not None:
                     codes[job] = code
                     del running[job]
-            render()
+
+            raw = state.read_all(state_dir)
+            if colors:
+                screen.frame(frame_lines(raw))
+            else:
+                # 全画面が使えない端末では、終わった job だけ確定行で出す。
+                for entry in entries:
+                    job = entry["job"]
+                    if job in codes and job not in committed:
+                        committed.add(job)
+                        screen.commit(
+                            commit_line(
+                                entry,
+                                status_of(entry, raw, codes),
+                                len(committed),
+                                len(entries),
+                                palette,
+                            )
+                        )
             time.sleep(0.3)
     except KeyboardInterrupt:
         for process in running.values():
@@ -310,40 +420,17 @@ def run(entries: list[dict], jobs: int, colors: bool, scope: str = "") -> int:
                 process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 process.kill()
-        render()
-        screen.close()
-        print(palette.paint("cancelled", YELLOW), flush=True)
+        screen.close(final_lines() + [palette.paint("cancelled", YELLOW)])
         return 130
     except BaseException:
         # watch 自身が落ちても job を孤児にしない。
+        screen.close([])
         for process in running.values():
             terminate(process)
         raise
 
-    render(final=True)
-    screen.close()
+    screen.close(final_lines())
     return exit_code(entries, state.read_all(state_dir))
-
-
-def local_entries(keys: list[str]) -> list[dict]:
-    """手元の OS で走らせる job の一覧。
-
-    CI の matrix は「どの OS で走るか」を決めるが、手元は 1 台しかない。
-    他 OS のふりはせず、この機械の OS の step を実行して、その OS 名で出す。
-    """
-    os_name = local_os()
-    entries = []
-    for key in keys:
-        route = route_for(key)
-        entries.append(
-            {
-                "job": route.key,
-                "name": job_name(route, os_name),
-                "os": os_name,
-                "steps": len(route.steps) + len(route.platform_steps.get(os_name, ())),
-            }
-        )
-    return entries
 
 
 def main() -> int:
@@ -379,7 +466,7 @@ def main() -> int:
         scope, paths = plan.select_paths(args)
         keys = plan.route_keys(paths)
 
-    entries = local_entries(keys)
+    entries = plan.local_entries(keys)
     if not entries:
         print(f"no job selected ({scope})", file=sys.stderr)
         return 0

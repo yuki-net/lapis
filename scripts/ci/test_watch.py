@@ -1,11 +1,13 @@
 """`scripts/ci/watch.py` の表示と成否判定を、プロセスを起動せずに確認する。"""
 
+import io
 import os
 import subprocess
 import sys
 import unittest
+from unittest.mock import patch
 
-from scripts.ci import plan, state, watch
+from scripts.ci import model, plan, state, watch
 
 
 NO_COLOR = watch.Palette(False)
@@ -76,7 +78,7 @@ class LineTests(unittest.TestCase):
 
     def test_left_name_is_the_github_job_name(self):
         """左は GitHub に出る job 名（Mobile / Android / Windows など）。"""
-        target = watch.local_entries(["mobile"])[0]
+        target = plan.local_entries(["mobile"])[0]
         line = watch.line_for(target, running_state("mobile", status=state.PASSED), now=200.0, palette=NO_COLOR)
         self.assertIn(target["name"], line)
         self.assertTrue(target["name"].startswith("Mobile / Android"))
@@ -95,6 +97,54 @@ class LineTests(unittest.TestCase):
         line = watch.line_for(entry("host"), found, now=200.0, palette=NO_COLOR)
         self.assertNotIn("Test Host", line)
         self.assertIn("NG", line)
+
+
+class ScreenTests(unittest.TestCase):
+    def test_truncate_counts_visible_width_not_escape_sequences(self):
+        coloured = f"{watch.GREEN}OK{watch.RESET} Host / Windows"
+        self.assertEqual(watch.visible_length(coloured), len("OK Host / Windows"))
+        cut = watch.truncate_ansi(coloured, 5)
+        self.assertIn(watch.GREEN, cut)
+        self.assertEqual(watch.visible_length(cut), 5)
+
+    def test_truncate_leaves_short_lines_alone(self):
+        self.assertEqual(watch.truncate_ansi("OK Host", 20), "OK Host")
+
+
+    def test_commit_writes_a_permanent_line_without_ansi(self):
+        buffer = io.StringIO()
+        watch.Screen(buffer, ansi=False).commit("OK Host")
+        self.assertEqual(buffer.getvalue(), "OK Host\n")
+
+    def test_frame_is_a_no_op_without_ansi(self):
+        buffer = io.StringIO()
+        watch.Screen(buffer, ansi=False).frame(["a", "b"])
+        self.assertEqual(buffer.getvalue(), "")
+
+    def test_frame_switches_to_the_alternate_screen_once(self):
+        buffer = io.StringIO()
+        screen = watch.Screen(buffer, ansi=True)
+        with patch.object(watch.shutil, "get_terminal_size", return_value=os.terminal_size((80, 24))):
+            screen.frame(["a"])
+            screen.frame(["b"])
+        output = buffer.getvalue()
+        self.assertEqual(output.count(watch.ENTER_ALT_SCREEN), 1)
+        self.assertIn(watch.HIDE_CURSOR, output)
+
+    def test_fit_lines_truncates_width_and_height(self):
+        fitted = watch.fit_lines(["x" * 20, "y", "z"], width=5, height=2)
+        self.assertEqual(watch.visible_length(fitted[0]), 5)
+        self.assertIn("more line", fitted[-1])
+
+    def test_close_leaves_the_final_lines_on_the_normal_screen(self):
+        buffer = io.StringIO()
+        screen = watch.Screen(buffer, ansi=True)
+        with patch.object(watch.shutil, "get_terminal_size", return_value=os.terminal_size((80, 24))):
+            screen.frame(["a"])
+        screen.close(["1 passed"])
+        output = buffer.getvalue()
+        self.assertIn(watch.LEAVE_ALT_SCREEN, output)
+        self.assertTrue(output.endswith("1 passed\n"))
 
 
 class SummaryTests(unittest.TestCase):
@@ -186,10 +236,10 @@ class TerminateTests(unittest.TestCase):
 class SelectionTests(unittest.TestCase):
     def test_entries_come_from_the_local_os(self):
         """手元は 1 台なので、route ごとに 1 つの job（この機械の OS）になる。"""
-        entries = watch.local_entries(["web"])
+        entries = plan.local_entries(["web"])
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0]["job"], "web")
-        self.assertEqual(entries[0]["os"], watch.local_os())
+        self.assertEqual(entries[0]["os"], model.local_os())
 
     def test_os_filter_keeps_only_that_os(self):
         entries = plan.matrix(list(plan.ORDER), only_os="windows")

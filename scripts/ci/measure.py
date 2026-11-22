@@ -18,7 +18,8 @@ from pathlib import Path
 
 from scripts.ci import run
 from scripts.ci.console import configure
-from scripts.ci.jobs import ROOT, route_for
+from scripts.ci.model import ROOT
+from scripts.ci.routes import route_for
 
 
 def table(route_name: str, steps: list[dict], total: float) -> str:

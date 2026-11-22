@@ -10,7 +10,7 @@ import os
 import sys
 
 from scripts.ci.console import configure
-from scripts.ci.jobs import ORDER
+from scripts.ci.routes import ORDER
 
 
 def errors(selected, needs, count):

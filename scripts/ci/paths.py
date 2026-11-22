@@ -10,12 +10,10 @@
 倒して全 route を実行する。
 """
 
-from pathlib import Path
 import subprocess
 
+from scripts.ci.model import ROOT
 from scripts.ci.routes import ORDER, ROUTES
-
-ROOT = Path(__file__).resolve().parents[2]
 
 # どの規則にも当たらない変更で走らせる route の集合。
 ALL_JOBS = frozenset(ROUTES)
@@ -127,13 +125,6 @@ def jobs_for_paths(paths: list[str]) -> set[str]:
             # 未知の path は安全側に倒して全 route を実行。
             return set(ALL_JOBS)
     return jobs
-
-
-def should_run(job: str, paths: list[str], force_all: bool = False) -> bool:
-    """job を実行するかどうかを判定する。"""
-    if force_all:
-        return True
-    return job in jobs_for_paths(paths)
 
 
 def _git(*args: str) -> str | None:

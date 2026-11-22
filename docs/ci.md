@@ -7,10 +7,10 @@ CI で走る検証は、ローカルでも同じものが同じコマンドで�
 | 場所 | 所有するもの |
 | --- | --- |
 | `scripts/ci/routes/<route>.py` | **route の検証内容の正本**。route 名・走らせる OS（`runs_on`）・タイムアウト・必要な toolchain・step 列（1 route 1 ファイル） |
-| `scripts/ci/model.py` | `Step` / `Route` の型、runner 名と OS 表示名、toolchain などの固定値 || `scripts/ci/routes/__init__.py` | route の集合と実行順（`ROUTES` / `ORDER`）、job 名の組み立て |
+| `scripts/ci/model.py` | `Step` / `Route` の型、runner 名と OS 表示名、toolchain などの固定値、共通の判定（`requirements` / `local_os`） |
+| `scripts/ci/routes/__init__.py` | route の集合と実行順（`ROUTES` / `ORDER`）、job 名の組み立て |
 | `scripts/ci/routes/platforms/` | OS ごとの差分 step（`<route>_<os>.py` を置くだけ。無い OS のファイルは作らない） |
 | `scripts/ci/paths.py` | **変更 path → route の対応の正本**。1 つの path が複数 route を要求する関係を持つ |
-| `scripts/ci/jobs.py` | 上記の再エクスポート（従来の import 先を保つ） |
 | `scripts/ci/plan.py` | 上 2 つを繋ぎ、実行すべき route を route × OS の matrix にする |
 | `scripts/ci/run.py` | 1 route をローカル / GitHub 共通で実行 |
 | `scripts/ci/report.py` | ログ装飾・失敗注釈・実行サマリ |
@@ -88,7 +88,7 @@ python -m scripts.ci.measure host                # step 別の所要時間を並
 - `{npm}` と `{gradlew}` は対象 OS のコマンド名に展開する（`npm` / `npm.cmd`、`./gradlew` / `gradlew.bat`）
 - Windows では `.cmd` / `.bat` を `cmd /c` 経由で起動する（`CreateProcess` が直接実行できないため）
 - `{runner_temp}` はローカルでは job ごとに空のディレクトリを作り直す（CI の `RUNNER_TEMP` と同じ前提。前回の残骸で stage が落ちないように）
-- 端末が ANSI に対応していない場合は上書き描画をやめ、最後にまとめて出す
+- 端末が ANSI に対応していない場合は最下行の更新をやめ、確定行だけを出す
 - step の上限は `Step.timeout_minutes`、無指定なら `Route.timeout_minutes` から 10 分（後処理のキャッシュ保存分）を引いた値
 
 ## まとめて回す（GitHub と同じ並列）
@@ -101,17 +101,23 @@ python -m scripts.ci.watch host desktop     # route を指定
 python -m scripts.ci.watch --jobs 2         # 同時実行数を絞る
 ```
 
-route ごとに 1 job（**この機械の OS**）を並列で起動し、1 画面に進捗を出す。名前は GitHub に出る job 名（`Host / Windows`, `Mobile / Android / Windows`）に合わせるが、**手元の OS で実行している以上、その OS 名で出す**（Linux のふりはしない）。
+route ごとに 1 job（**この機械の OS**）を並列で起動し、全 job を 1 画面に出す。名前は GitHub に出る job 名（`Host / Windows`, `Mobile / Android / Windows`）に合わせるが、**手元の OS で実行している以上、その OS 名で出す**（Linux のふりはしない）。
 
 ```
-CI
+CI  worktree
 
 OK Host / Windows             [########--] 14/18   12m03s
 >> Desktop / Windows          [#####-----]  9/18    7m41s  clients/ui/src/shell/layout.rs
 .. Web / Windows              [----------]  0/3      -      (waiting)
+
+[2/3 done] 12m34s  Ctrl+C to stop
 ```
 
+- 代替画面バッファ（vim / less / htop と同じ）に切り替え、**毎フレーム全画面を描き直す**。終了時は元の画面に戻り、最終結果だけを残す
+- **行数を数えてカーソルを戻すことはしない**。折り返しやスクロールで数え間違えると古い行が残るため
+- 各フレームは端末幅で切り、端末の高さに収める（はみ出すと代替画面内でスクロールして上端が欠ける）
 - 右側は**いま処理しているファイル**。出力が変わると表示も変わるので、止まっていないことの目安になる
+- ANSI が使えない端末（パイプ・リダイレクト・VT 無効）では全画面をやめ、**終わった job の確定行だけ**を追記する
 - `Ctrl+C` で起動した job を子孫ごと止める（終了コード 130）
 - `OK` は緑、`NG` は赤、`>>` は黄、`..` は待機。記号は ASCII なので cp932 の端末でも崩れない（色は TTY のときだけ付く）
 - 全部通れば 0、1 つでも失敗すれば 1。前提不足で実行しなかった job は skip 扱いで失敗にしない

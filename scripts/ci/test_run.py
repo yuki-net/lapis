@@ -15,7 +15,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts.ci import model, report, run
-from scripts.ci.jobs import Route, Step
+from scripts.ci.model import Route, Step
 
 
 def route_with(*steps, **kwargs) -> Route:
