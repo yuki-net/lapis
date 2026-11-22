@@ -309,6 +309,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --locked -p lapis-terminal-native
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # test プロファイルのビルドを 20 分の Test Desktop から分離する。
+          cargo test --locked -p lapis --all-targets -p desktop-ui -p lapis-launcher --no-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Test Desktop
         shell: pwsh
