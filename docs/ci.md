@@ -52,6 +52,7 @@ python -m scripts.ci.plan --selected --reason
 
 - base が解決できない（浅い clone、CI 外）場合は全 route に倒す。**取りこぼすより回しすぎる方を選ぶ**
 - CI では作業ツリーが clean なので、既定は実質 PR の差分だけになる
+- **CI 定義（`scripts/ci/`、`scripts/check.py`、`.github/workflows/`）の変更は全 route**。どの route が壊れたか分からないため
 
 ## GitHub での起動と範囲
 
@@ -61,16 +62,21 @@ on:
   push:
     branches: [develop, main]   # マージ後の確認と、キャッシュの暖機
   workflow_dispatch:
+    inputs:
+      full:                     # 手動で全 route・全 OS を回す
+        type: boolean
 ```
 
 PR の **base ブランチで範囲を変える**。
 
-| base | 範囲 | OS |
+| 起動 | 範囲 | OS |
 | --- | --- | --- |
-| `main` | 全 route（`--full`） | `runs_on` の全部（現在 11 job） |
-| それ以外（develop など） | 変更 path から選択 | **Linux 優先**（Linux 実装が無い route だけ Windows。現在 7 job） |
+| `main` への push / PR | 全 route（`--full`） | `runs_on` の全部 |
+| それ以外の push / PR | 変更 path から選択 | **Linux 優先**（Linux 実装が無い route だけ Windows） |
+| 手動実行 + `full` | 全 route（`--full`） | 全部 |
+| 手動実行（`full` なし） | base が無いので全 route | Linux 優先 |
 
-Linux 優先は `--prefer-os linux`。route が Linux に対応していれば Linux だけ、対応していなければ元の OS のままにするので、Windows 専用の検証が消えない。
+Linux 優先は `--prefer-os linux`。route が Linux に対応していれば Linux だけ、対応していなければ元の OS のままにするので、Windows 専用の検証が消えない。`always_all_os` の route（lint）はこの対象外で、常に全 OS で走る。
 
 ## キャッシュ
 

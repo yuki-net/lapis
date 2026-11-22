@@ -218,6 +218,11 @@ class TestPathRouting(unittest.TestCase):
         """移設前の path は削除差分で現れるため、全 job を起こさない。"""
         self.assertEqual(jobs_for_paths(["clients/web/package.json"]), {"web"})
 
+    def test_ci_definitions_run_every_route(self):
+        """CI 定義を変えたときは、どの route が壊れたか分からないので全部回す。"""
+        for path in ("scripts/ci/run.py", "scripts/ci/routes/host.py", ".github/workflows/ci.yml"):
+            self.assertEqual(jobs_for_paths([path]), ALL_JOBS, path)
+
     def test_docs_site_paths_run_only_the_docs_site(self):
         """サイトは触ったときだけ、そのサイトの route を回す。"""
         for path in (
