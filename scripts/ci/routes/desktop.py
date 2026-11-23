@@ -25,7 +25,6 @@ ROUTE = Route(
     cache=True,
     steps=(
         Step("Check architecture", py("scripts/check.py", "desktop", "architecture")),
-        Step("Check formatting", py("scripts/check.py", "desktop", "format")),
         # テストの前提になるビルド。3 step で合計 35 分を上限の目安にする。
         Step(
             "Build extension host",
@@ -52,7 +51,6 @@ ROUTE = Route(
             "Test desktop terminal pty",
             ["cargo", "test", "--locked", "-p", "lapis", "desktop_terminal_runs_real_extension_pty", "--", "--ignored"],
         ),
-        Step("Lint Desktop", py("scripts/check.py", "desktop", "lint")),
         Step("Build Desktop", py("scripts/check.py", "desktop", "build")),
         Step("Verify GPUI patches", py("-m", "scripts.ci.patches")),
     ),

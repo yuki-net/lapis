@@ -38,16 +38,15 @@ class TestPathRouting(unittest.TestCase):
         """path ルール側の job 名が jobs.py の route key と一致する。"""
         self.assertEqual(ALL_JOBS, set(ROUTES))
 
-    def test_format_steps_install_rustfmt(self):
-        """`check.py <route> format` を実行する route は rustfmt を導入する。"""
+    def test_format_is_centralized_in_one_route(self):
+        """整形チェックは 1 route に集約し、rustfmt を導入する。"""
         format_routes = [
             route
             for route in ROUTES.values()
-            if any(any("format" in part for part in step.command) for step in route.steps)
+            if any(any("fmt" in part for part in step.command) for step in route.steps)
         ]
-        self.assertEqual(len(format_routes), 3)
-        for route in format_routes:
-            self.assertRegex(route.rust_components, r"\brustfmt\b", route.key)
+        self.assertEqual([route.key for route in format_routes], ["format"])
+        self.assertRegex(ROUTES["format"].rust_components, r"\brustfmt\b")
 
     def test_rust_core_installs_analyzer_for_platform_tests(self):
         rust_core = ROUTES["rust_core"]
@@ -224,6 +223,11 @@ class TestPathRouting(unittest.TestCase):
         """移設前の path は削除差分で現れるため、全 job を起こさない。"""
         self.assertEqual(jobs_for_paths(["clients/web/package.json"]), {"web"})
 
+    def test_ci_definitions_run_every_route(self):
+        """CI 定義を変えたときは、どの route が壊れたか分からないので全部回す。"""
+        for path in ("scripts/ci/run.py", "scripts/ci/routes/host.py", ".github/workflows/ci.yml"):
+            self.assertEqual(jobs_for_paths([path]), ALL_JOBS, path)
+
     def test_docs_site_paths_run_only_the_docs_site(self):
         """サイトは触ったときだけ、そのサイトの route を回す。"""
         for path in (
@@ -301,7 +305,11 @@ class TestPathRouting(unittest.TestCase):
     def test_gate_checks_mapped_jobs_and_expected_skips(self):
         for route, path in (("desktop", "apps/desktop/app/src/main.rs"), ("host", "host/app/src/main.rs")):
             selected = sorted(jobs_for_paths([path]))
-            needs = {"plan": {"result": "success"}, "ci": {"result": "success"}}
+            needs = {
+                "plan": {"result": "success"},
+                "ci": {"result": "success"},
+                "policy": {"result": "success"},
+            }
             self.assertEqual(errors(selected, needs, len(selected)), [])
             if not selected:
                 self.assertTrue(errors(selected, needs, 1))

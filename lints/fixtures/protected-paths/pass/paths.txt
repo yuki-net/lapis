@@ -1,0 +1,3 @@
+apps/desktop/app/src/main.rs
+docs/ci.md
+clients/state/src/lib.rs

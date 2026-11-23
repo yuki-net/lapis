@@ -379,6 +379,10 @@ def execute(
         for step in steps:
             if step.requires and missing_prerequisites_for_step(step):
                 report.notice(f"skip {step.name} (requires {', '.join(step.requires)})")
+                # skip も「処理済み」として数える。数えないと 1/2 のまま OK と
+                # 表示され、進捗が止まって見える。
+                writer.begin(step.name)
+                writer.end(step.name, True)
                 results.append({"name": step.name, "ok": True, "skipped": True, "seconds": 0.0, "output": ""})
                 continue
             report.notice(f"run {step.name}: {' '.join(step.command)}")
@@ -422,8 +426,10 @@ def execute(
 
     if not report.on_github():
         print()
-        print(report.summary_table(route.name, results))
-    report.write_summary(report.summary_table(route.name, results))
+    table = report.summary_table(route.name, results)
+    # CI のログからも step 別の所要時間を拾えるようにする（サマリは HTML のみで grep できない）。
+    print(table, flush=True)
+    report.write_summary(table)
     return payload
 
 
@@ -432,6 +438,9 @@ def missing_prerequisites_for_step(step) -> list[str]:
     for name in step.requires:
         if name == "posix":
             if os.name == "nt":
+                missing.append(name)
+        elif name == "windows":
+            if os.name != "nt":
                 missing.append(name)
         else:
             command = PREREQUISITES.get(name)

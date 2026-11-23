@@ -7,6 +7,11 @@ on:
       - develop
       - main
   workflow_dispatch:
+    inputs:
+      full:
+        description: "全 route を全 OS で回す（差分を見ない）"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -44,9 +49,9 @@ jobs:
           BASE_REF: ${{ github.event.pull_request.base.ref || github.ref_name }}
         run: |
           set -euo pipefail
-          # main は全 route・全 OS。それ以外（develop など）は変更 path から選び、
-          # Linux 実装がある route は Linux に寄せる（Windows 専用 route は残る）。
-          if [ "${BASE_REF}" = "main" ]; then
+          # main と、手動の full 指定は全 route・全 OS。それ以外（develop など）は
+          # 変更 path から選び、Linux 実装がある route は Linux に寄せる。
+          if [ "${BASE_REF}" = "main" ] || [ "${{ inputs.full }}" = "true" ]; then
             scope=(--full)
           else
             scope=(--prefer-os linux)
@@ -134,11 +139,31 @@ jobs:
           RUNNER_TEMP: ${{ runner.temp }}
         run: python -m scripts.ci.run ${{ matrix.route.job }} --no-prerequisite-check --os ${{ matrix.route.os }}
 
+  # 保護パス（lints/・CI 定義）の変更を検出する。path routing ではなく PR 全体の
+  # 性質なので route にせず、PR のときだけ独立した job として走らせる。
+  # 変更があれば無条件で失敗し、人間が admin でマージする（ラベル免除は無い）。
+  policy:
+    name: Policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Check protected paths
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python -m scripts.ci.policy --base "$BASE_SHA"
+
   gate:
     name: Gate
     runs-on: ubuntu-latest
     if: always()
-    needs: [plan, ci]
+    needs: [plan, ci, policy]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -149,4 +174,6 @@ jobs:
           SELECTED_ROUTES: ${{ needs.plan.outputs.selected }}
           SELECTED_COUNT: ${{ needs.plan.outputs.count }}
           NEEDS_JSON: ${{ toJSON(needs) }}
+          # policy は PR のときだけ走る。push / 手動実行では skipped が正しい。
+          EVENT_NAME: ${{ github.event_name }}
         run: python -m scripts.ci.gate

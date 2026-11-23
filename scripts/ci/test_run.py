@@ -14,7 +14,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.ci import model, report, run
+from scripts.ci import model, report, run, state
 from scripts.ci.model import Route, Step
 
 
@@ -149,6 +149,21 @@ class RunTests(unittest.TestCase):
         with redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit):
                 invoke(["test", "--os", "solaris"])
+
+    def test_skipped_steps_count_as_processed(self):
+        """前提不足で skip した step も進捗に数える（1/2 のまま止まって見えない）。"""
+        with tempfile.TemporaryDirectory() as directory:
+            route = route_with(Step("needs-gradle", ["gradle", "build"], requires=("gradle",)))
+            # gradle は GitHub のランナーに最初から入っているため、実環境の有無に
+            # 頼ると skip されない。前提判定は別テストが担うのでここでは固定する。
+            with patch.object(report, "on_github", return_value=False), \
+                 patch.object(run, "missing_prerequisites_for_step", return_value=["gradle"]), \
+                 patch.dict(os.environ, {state.ENV: directory}):
+                payload = run.execute(route, None, quiet=True)
+                payload_state = state.read(state.path_for(Path(directory), "test"))
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["steps"][0]["skipped"])
+        self.assertEqual(payload_state["steps_done"], 1)
 
     def test_platform_steps_are_loaded_by_file_name(self):
         """`<route>_<os>.py` を置くだけで OS 別 step が載る。"""

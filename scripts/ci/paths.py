@@ -22,8 +22,10 @@ ALL_JOBS = frozenset(ROUTES)
 PATH_RULES = [
     (["scripts/stop_dev_host.ps1", "scripts/test_dev_commands.py", "scripts/test_dev_session.py",
       "scripts/dev-session/", ".run/"], {"repository", "dev_commands"}),
-    (["scripts/check.py", "scripts/test_check.py", ".github/workflows/"],
-     {"repository", "rust_core", "host", "desktop", "mobile", "web", "dev_commands"}),
+    # CI の定義そのものと、CI を動かすスクリプト。どの route が壊れたか
+    # 分からないので全 route を回す。
+    (["scripts/check.py", "scripts/test_check.py", "scripts/ci/", ".github/workflows/"],
+     set(ALL_JOBS)),
     # Desktop 関連。
     # clients/state と clients/ui は Web の wasm ビルド（apps/web/wasm）でも
     # コンパイルされる。
@@ -110,6 +112,9 @@ PATH_RULES = [
     (["Cargo.toml"], {"repository", "rust_core", "host", "desktop", "web"}),
     (["Cargo.lock"], {"repository", "rust_core", "host", "desktop", "web"}),
     ([".cargo/"], {"repository", "rust_core", "host", "desktop", "dev_commands"}),
+
+    # lint 基盤。カタログ・fixture・baseline の検査は repository が持つ。
+    (["lints/"], {"repository"}),
 
     # サイト。サイトごとに route を分け、触っていないサイトは走らせない。
     (["sites/docs/"], {"sites_docs"}),

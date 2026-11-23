@@ -1,0 +1,4 @@
+lints/README.md
+scripts/ci/plan.py
+.github/workflows/ci.yml
+AGENTS.md

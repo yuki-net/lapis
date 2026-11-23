@@ -19,7 +19,6 @@ ROUTE = Route(
     rust_components="rustfmt",
     steps=(
         Step("Test dev commands", py("-m", "unittest", "discover", "-s", "scripts", "-p", "test_dev_commands.py")),
-        Step("Check dev-session formatting", ["cargo", "fmt", "--manifest-path", "scripts/dev-session/Cargo.toml", "--", "--check"]),
         Step("Test dev session", py("-m", "unittest", "discover", "-s", "scripts", "-p", "test_dev_session.py")),
     ),
 )
