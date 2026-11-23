@@ -131,7 +131,7 @@ python -m scripts.ci.policy --base origin/develop
 | --- | --- | --- |
 | `repository` | linux, windows | `scripts/check.py repository architecture`（CI・拡張・開発コマンドの Python テスト、アーキテクチャ検査） |
 | `format` | linux | 整形チェック（workspace / dev-session / terminal component）。OS 非依存なので 1 回だけ |
-| `lint` | linux, windows | clippy。Linux は backend、Windows は workspace 全体（`cfg(windows)` を検査するため全 OS） |
+| `lint` | linux, windows | clippy。Linux は backend、Windows は workspace 全体（`cfg(windows)` を検査するため全 OS）。診断は JSON で集め、注釈とサマリにする |
 | `dev_commands` | windows | 開発起動コマンド・`dev-session` のテスト |
 | `rust_core` | linux, windows | backend 全体の architecture / test と外部拡張 component |
 | `host` | windows | Host の architecture / test / build と承認済み拡張 PTY・Web 公開 |
@@ -141,6 +141,25 @@ python -m scripts.ci.policy --base origin/develop
 | `sites_docs` | linux | 利用者向けドキュメントサイト（`sites/docs`）のビルド。job 名は `Site Docs` |
 
 `format` と `lint` は path 規則ではなく、**Rust を含む route が選ばれたら自動で足す**（`plan.py`）。整形・静的検査は全体に掛けるものなので、領域ごとに重複させない。
+
+## lint の診断表示
+
+`lint` は `-D warnings` で早期に止めず、**collect-then-fail** で診断を集める。
+
+- `cargo clippy --message-format=json --keep-going` で最後までビルドする
+- `scripts/ci/diagnostics.py` が `compiler-message` を読み、人間向けの `rendered` をログに流す
+- 診断ごとに `::warning` / `::error file=...,line=...,col=...` の注釈を出す（GitHub ではファイル別に並び、クリックで飛べる）
+- job サマリに **ルール別・ファイル別の件数**を出す（`$GITHUB_STEP_SUMMARY`）
+- 診断が 1 件でもあれば step を失敗にする（cargo の終了コードだけに頼らない）
+
+警告では cargo が止まらないので、依存関係のないクレートの診断も 1 回で出る。型エラーなどで
+コンパイル自体が失敗した場合は、そのクレートに依存するクレートはビルドされない（これは避けられない）。
+
+`--message-format=json` は cargo のビルド開始イベントを出さないため、ログには完了した
+クレートを `Compiling <name>` として出す。進捗の細かさより、全診断が 1 回で揃うことを優先する。
+
+GitHub の注釈には表示件数の上限があるため、大量に出た場合は job サマリ（全件の集計）と
+ログ（全文）で確認する。
 
 ## サイト（sites/）
 
@@ -232,6 +251,7 @@ Host / Windows  Test Host
 | step の折りたたみ | `report.group()` が `::group::` / `::endgroup::` を出力 |
 | 失敗の注釈 | `report.error()` が `::error::` を出力 |
 | 実行時間の表 | `report.write_summary()` が `$GITHUB_STEP_SUMMARY` に Markdown 表を書く |
+| lint の診断 | `diagnostics.py` が `::warning` / `::error file=...,line=...` を出し、サマリにルール別・ファイル別の件数を書く |
 | route の再実行 | matrix の `route.job` 単位で再実行できる |
 | 実行 OS | matrix の `route.os` を `run.py --os` に渡す |
 

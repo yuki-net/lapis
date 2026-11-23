@@ -5,6 +5,7 @@ step の失敗・再試行・前提不足・OS 非対応の扱いを、小さな
 """
 
 import io
+import json
 import os
 import sys
 import tempfile
@@ -249,6 +250,77 @@ class RunTests(unittest.TestCase):
             with redirect_stdout(io.StringIO()) as buffer:
                 run.execute(route, None, quiet=True)
         self.assertIn("| step | result | time |", buffer.getvalue())
+
+
+def cargo_message(level="warning", file="src/lib.rs", line=1, column=1):
+    return json.dumps({
+        "reason": "compiler-message",
+        "message": {
+            "level": level,
+            "message": "unused variable",
+            "code": {"code": "unused_variables"},
+            "rendered": f"{level}: unused variable\n",
+            "spans": [
+                {
+                    "file_name": file,
+                    "line_start": line,
+                    "column_start": column,
+                    "line_end": line,
+                    "column_end": column + 1,
+                    "is_primary": True,
+                }
+            ],
+        },
+    })
+
+
+def print_line(line: str) -> str:
+    """1 行を標準出力へ書くだけの Python コマンド。"""
+    return "import sys; sys.stdout.write(" + repr(line) + ")"
+
+
+class JsonDiagnosticsTests(unittest.TestCase):
+    def test_warning_fails_the_step_even_when_the_command_succeeds(self):
+        route = route_with(Step(
+            "lint",
+            [sys.executable, "-c", print_line(cargo_message())],
+            json_diagnostics=True,
+        ))
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(report, "on_github", return_value=False), \
+                 patch.dict(os.environ, {state.ENV: directory}):
+                payload = run.execute(route, None, quiet=True)
+        self.assertFalse(payload["ok"])
+
+    def test_clean_json_output_passes(self):
+        artifact = json.dumps({"reason": "compiler-artifact", "target": {"name": "demo"}})
+        route = route_with(Step(
+            "lint",
+            [sys.executable, "-c", print_line(artifact)],
+            json_diagnostics=True,
+        ))
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(report, "on_github", return_value=False), \
+                 patch.dict(os.environ, {state.ENV: directory}):
+                payload = run.execute(route, None, quiet=True)
+        self.assertTrue(payload["ok"])
+
+    def test_diagnostics_are_annotated_on_github(self):
+        route = route_with(Step(
+            "lint",
+            [sys.executable, "-c", print_line(cargo_message(file="clients/ui/src/root.rs", line=7, column=3))],
+            json_diagnostics=True,
+        ))
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(report, "on_github", return_value=True), \
+                 patch.dict(os.environ, {state.ENV: directory}):
+                with redirect_stdout(io.StringIO()) as output:
+                    payload = run.execute(route, None, quiet=True)
+        self.assertIn(
+            "::warning file=clients/ui/src/root.rs,line=7,col=3",
+            output.getvalue(),
+        )
+        self.assertFalse(payload["ok"])
 
 
 def route_for_os(name: str, **kwargs) -> Route:
