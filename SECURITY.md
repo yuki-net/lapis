@@ -23,4 +23,4 @@ GitHub の Private vulnerability reporting を使ってください。
 ## 対象外
 
 - `docs/specs/` に記載済みの設計上の制約
-- 依存 crate の既知の脆弱性（Dependabot / `cargo deny` で追跡します）
+- 依存 crate の既知の脆弱性（Dependabot のアラート / セキュリティ更新で追跡します）
