@@ -1,7 +1,8 @@
 """隔離した Host と Bridge で Web の拡張 Terminal を検証する。"""
 
-import json
 import base64
+from collections import deque
+import json
 import os
 from pathlib import Path
 import queue
@@ -20,13 +21,40 @@ FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 SUFFIX = ".exe" if os.name == "nt" else ""
 
 
-def read_line(stream):
-    lines = queue.Queue()
-    threading.Thread(target=lambda: lines.put(stream.readline()), daemon=True).start()
-    try:
-        return lines.get(timeout=30)
-    except queue.Empty as error:
-        raise RuntimeError("process did not respond") from error
+class LineReader:
+    """stream を読み続けて、必要な行だけ取り出す。
+
+    pipe を読まないと、子プロセスがログで詰まって止まる（デッドロック）。
+    Rust のログが増えたときに 80 秒で止まるのを避けるため、常時 drain する。
+    """
+
+    def __init__(self, stream, limit=400):
+        self._lines = queue.Queue()
+        self._seen = deque(maxlen=limit)
+        self._thread = threading.Thread(target=self._pump, args=(stream,), daemon=True)
+        self._thread.start()
+
+    def _pump(self, stream):
+        try:
+            for line in stream:
+                self._seen.append(line)
+                self._lines.put(line)
+        except (OSError, ValueError):
+            pass
+        finally:
+            self._lines.put(None)
+
+    def read_line(self, timeout=30):
+        try:
+            line = self._lines.get(timeout=timeout)
+        except queue.Empty as error:
+            raise RuntimeError("process did not respond") from error
+        if line is None:
+            raise RuntimeError("process exited")
+        return line
+
+    def text(self):
+        return "".join(self._seen)
 
 
 def proxy(downstream, bridge_port):
@@ -70,12 +98,14 @@ def start_host(root, state, certificate):
         args.append("--replace-certificate")
     process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                text=True, encoding="utf-8", errors="replace", creationflags=FLAGS)
+    process.stdout_reader = LineReader(process.stdout)
+    process.stderr_reader = LineReader(process.stderr)
     try:
         for _ in range(10):
-            line = read_line(process.stdout).strip()
+            line = process.stdout_reader.read_line().strip()
             match = re.fullmatch(r"address=(\S+) server_name=(\S+) workspace=(\S+)", line)
             if match:
-                read_line(process.stdout)  # command help
+                process.stdout_reader.read_line()  # command help
                 return process, match.groups()
         raise RuntimeError("Host did not start")
     except Exception:
@@ -122,13 +152,13 @@ def main():
             host, _ = start_host(workspace, state, certificate)
             host.stdin.write(f'ext-install "{package}"\n')
             host.stdin.flush()
-            if "installed=lapis.terminal" not in read_line(host.stdout):
+            if "installed=lapis.terminal" not in host.stdout_reader.read_line():
                 raise RuntimeError("Terminal package installation failed")
             stop_host(host)
             host, (address, server_name, workspace_id) = start_host(workspace, state, certificate)
             host.stdin.write("pair\n")
             host.stdin.flush()
-            match = re.fullmatch(r"Pairing token \(1 hour, one use\): ([0-9a-f]{64})", read_line(host.stdout).strip())
+            match = re.fullmatch(r"Pairing token \(1 hour, one use\): ([0-9a-f]{64})", host.stdout_reader.read_line().strip())
             if not match:
                 raise RuntimeError("pairing failed")
             port = socket.socket()
@@ -140,7 +170,8 @@ def main():
                 "--host", address, "--server-name", server_name, "--certificate", str(certificate),
                 "--origin", "http://localhost:5173",
             ], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", creationflags=FLAGS)
-            if "listening on" not in read_line(bridge.stderr):
+            bridge.stderr_reader = LineReader(bridge.stderr)
+            if "listening on" not in bridge.stderr_reader.read_line():
                 raise RuntimeError("Bridge did not start")
             listener = socket.socket()
             listener.bind(("127.0.0.1", 0))
@@ -159,9 +190,26 @@ def main():
                       ".then(x=>{if(x!=='ok')throw Error('bad result');console.log('Web extension terminal: OK');process.exit(0)})"
                       ".catch(e=>{console.error(String(e));process.exit(1)})")
             data = json.dumps({"url": f"ws://127.0.0.1:{proxy_port}/remote", "token": match.group(1), "workspace": workspace_id})
-            result = subprocess.run(["node", "-e", script, str(bindings / "web_terminal_smoke.js")], input=data,
-                                    text=True, encoding="utf-8", errors="replace", capture_output=True,
-                                    timeout=80, creationflags=FLAGS)
+            try:
+                result = subprocess.run(
+                    ["node", "-e", script, str(bindings / "web_terminal_smoke.js")],
+                    input=data,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    capture_output=True,
+                    timeout=80,
+                    creationflags=FLAGS,
+                )
+            except subprocess.TimeoutExpired as error:
+                raise RuntimeError(
+                    "Web client timed out\n"
+                    f"- node stdout: {(error.stdout or '')[-2000:]}\n"
+                    f"- node stderr: {(error.stderr or '')[-2000:]}\n"
+                    f"- host stdout: {host.stdout_reader.text()}\n"
+                    f"- host stderr: {host.stderr_reader.text()}\n"
+                    f"- bridge stderr: {bridge.stderr_reader.text()}"
+                ) from error
             if result.returncode:
                 raise RuntimeError(f"Web client failed: {result.stderr}")
             print(result.stdout.strip())
