@@ -1,9 +1,10 @@
-"""保護パス（lint 基盤・CI 定義）の変更を検出する。
+"""保護パス（lint 基盤・CI 定義）の変更を検出して通知する。
 
 保護パスは「どの変更 path でどの検証を走らせるか」ではなく、PR 全体の性質な
 ので route にはしない。GitHub では pull_request のときだけ job として走らせ、
-変更があれば無条件に失敗させる。ラベルやコメントによる免除は用意しない
-（AI と人間が同じアカウントで動くため、AI が自分で免除できてしまう）。
+変更があれば notice と job summary で知らせる。**マージのゲートは CODEOWNERS
+（@yuki-net/reviews）**で、このチェックは失敗させない（CI の赤を本物の失敗だけ
+にするため）。
 
 判定を変えるにはこのファイルを変える必要があり、それ自体が保護パスなので
 必ず人間が差分を確認してマージする。
@@ -14,6 +15,7 @@ import fnmatch
 import os
 import sys
 
+from scripts.ci import report
 from scripts.ci.console import configure
 from scripts.ci.paths import pr_paths
 
@@ -31,7 +33,7 @@ PROTECTED = (
     "rustfmt.toml",
 )
 
-GUIDE = "保護パスの変更は人間が差分を確認してマージする（lints/catalog/protected-paths.md）"
+GUIDE = "保護パスの変更は CODEOWNERS の承認（@yuki-net/reviews）が必要（lints/catalog/protected-paths.md）"
 
 
 def pattern_for(path: str) -> str | None:
@@ -87,14 +89,23 @@ def main() -> int:
         print(f"protected paths: 変更なし（{len(paths)} path、base: {base}）")
         return 0
 
-    print(f"protected paths: {len(hits)} 件の変更（base: {base}）", file=sys.stderr)
+    print(f"protected paths: {len(hits)} 件の変更（base: {base}）")
+    table = ["## Protected paths changed", "", "| path | rule |", "| --- | --- |"]
     for path, pattern in hits:
-        print(
-            f"::error file={path}::保護パス {path} が変更された（規則: {pattern}）",
-            file=sys.stderr,
-        )
-    print(GUIDE, file=sys.stderr)
-    return 1
+        if report.on_github():
+            print(f"::notice file={path},title=Protected path changed::{path} ({pattern})")
+        else:
+            print(f"protected path: {path} ({pattern})")
+        table.append(f"| `{path}` | `{pattern}` |")
+    table += [
+        "",
+        f"- base: `{base}`",
+        "- merge gate: CODEOWNERS (`@yuki-net/reviews`)",
+        f"- {GUIDE}",
+    ]
+    report.write_summary("\n".join(table))
+    print(GUIDE)
+    return 0
 
 
 if __name__ == "__main__":

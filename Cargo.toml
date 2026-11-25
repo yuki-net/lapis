@@ -63,6 +63,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rustls = "0.23"
 quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-aws-lc-rs"] }
+# wasmtime と wasmtime-wasi は同じ major で同時に更新する必要がある。
+# lock はルートにしかないため、バージョン宣言もここに置く（Dependabot の security update が
+# lockfile のないサブディレクトリを対象にして失敗するのを避ける）。
+wasmtime = { version = "40.0.0", default-features = false, features = ["component-model", "cranelift", "runtime", "std"] }
+wasmtime-wasi = { version = "40.0.0", default-features = false, features = ["p2"] }
 tokio-util = { version = "0.7", features = ["codec"] }
 futures-util = { version = "0.3", features = ["sink"] }
 futures = "0.3"

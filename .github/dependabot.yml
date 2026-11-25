@@ -1,0 +1,18 @@
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # 現状は security update のみを運用する。version update も有効にする場合はこの行を外す
+    # （security update はこの上限の対象外で、別枠の固定上限で動く）。
+    open-pull-requests-limit: 0
+    groups:
+      # wasmtime と wasmtime-wasi は同じ major で揃えないと型が合わずビルドできない
+      # （wasmtime-wasi は同一 major の wasmtime に依存し、WasiView / Linker を共有する）。
+      # 単独 bump の PR を作らせず、1つの PR にまとめる。
+      wasmtime:
+        patterns:
+          - "wasmtime"
+          - "wasmtime-wasi"
+        applies-to: security-updates
