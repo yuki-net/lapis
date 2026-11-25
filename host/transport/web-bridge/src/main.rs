@@ -513,9 +513,12 @@ async fn forward(socket: WebSocket, bridge: Bridge) -> Result<(), Error> {
         tokio::select! {
             incoming = ws_recv.next() => match incoming {
                 Some(Ok(Message::Text(text))) => tokio::time::timeout(IO_TIMEOUT, writer.send(text.as_bytes().to_vec().into())).await??,
+                // wasm の WebSocket は通常 Text だが、環境によって Binary で届く。
+                // web-bridge は #365 で削除予定なので、それまで両方を受ける。
+                Some(Ok(Message::Binary(bytes))) => tokio::time::timeout(IO_TIMEOUT, writer.send(bytes)).await??,
                 Some(Ok(Message::Ping(_) | Message::Pong(_))) => {},
                 Some(Ok(Message::Close(_))) | None => break,
-                _ => return Err("unsupported WebSocket message".into()),
+                Some(Err(error)) => return Err(error.into()),
             },
             incoming = reader.next() => match incoming {
                 Some(Ok(bytes)) => {
