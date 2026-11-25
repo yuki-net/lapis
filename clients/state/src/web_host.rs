@@ -23,7 +23,7 @@ use client_api::{
     WorkspaceViewUnsubscribeRequest,
 };
 use client_core::browser::{BrowserConnection, WebClientConnectOptions, connect_web_client};
-pub use client_core::browser_endpoint::WebTransportEndpoint;
+pub use client_core::browser_endpoint::{WebTransportEndpoint, fetch as fetch_endpoint};
 use document::{
     Document, DocumentCache, DocumentConnection, DocumentError, Encoding, ExternalChange, Revision,
 };

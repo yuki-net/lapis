@@ -38,7 +38,7 @@ impl WebSession {
     ) -> Result<WebSession, JsValue> {
         let workspace = WorkspaceId::try_new(workspace)
             .map_err(|_| JsValue::from_str("Workspace IDが不正です"))?;
-        let endpoint = client_core::browser_endpoint::WebTransportEndpoint::fetch()
+        let endpoint = client_core::browser_endpoint::fetch()
             .await
             .map_err(|error| JsValue::from_str(&error))?;
         let _ = url;
