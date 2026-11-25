@@ -22,7 +22,13 @@ members = [
     "protocol/types/*",
     "protocol/wire/*",
     "protocol/extension-api/native",
-    "extensions/*/*",
+    # Dependabot は `members` の glob を末尾1階層しか展開できない。`extensions/*/*` の
+    # ように階層の途中に `*` を置くとメンバーが解決されず、Dependabot が生成する
+    # Cargo.lock から workspace メンバーが脱落する（`--locked` が失敗する）。
+    # 拡張グループごとに列挙し、新しいグループを追加したときはここに足す。
+    "extensions/acp/*",
+    "extensions/git/*",
+    "extensions/terminal/*",
 ]
 exclude = ["vendor/gpui", "vendor/portable-pty", "extensions/terminal/component"]
 resolver = "3"
