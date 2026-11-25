@@ -1,0 +1,32 @@
+# 保護パス。ここに載っている path を変更する PR は、
+# @yuki-net/maintainers（人間）のレビューが必要。
+#
+# AI（GitHub App）はこの team に入れないこと。
+# App のレビューは Code Owner 承認として扱われないため、
+# AI だけでは保護パスをマージできない。
+
+# lint 基盤・規約
+/lints/                                @yuki-net/maintainers
+/AGENTS.md                             @yuki-net/maintainers
+
+# CI・検査
+/.github/                              @yuki-net/maintainers
+/scripts/ci/                           @yuki-net/maintainers
+/scripts/check*.py                     @yuki-net/maintainers
+/scripts/architecture-exceptions.json  @yuki-net/maintainers
+
+# 依存・toolchain
+/Cargo.toml                            @yuki-net/maintainers
+/Cargo.lock                            @yuki-net/maintainers
+/clippy.toml                           @yuki-net/maintainers
+/rust-toolchain.toml                   @yuki-net/maintainers
+/rustfmt.toml                          @yuki-net/maintainers
+
+# 公開契約・リリース
+/protocol/                             @yuki-net/maintainers
+/release/                              @yuki-net/maintainers
+
+# OSS ポリシー
+/LICENSE                               @yuki-net/maintainers
+/SECURITY.md                           @yuki-net/maintainers
+/CONTRIBUTING.md                       @yuki-net/maintainers
