@@ -332,9 +332,6 @@ impl ExtensionRuntime {
         activate
             .call(&mut store, ())
             .map_err(|error| error.to_string())?;
-        activate
-            .post_return(&mut store)
-            .map_err(|error| error.to_string())?;
         self.loaded.insert(
             id.to_owned(),
             LoadedExtension::Component(Loaded { store, instance }),
@@ -360,8 +357,6 @@ impl ExtensionRuntime {
             .get_typed_func::<(), ()>(&mut loaded.store, "deactivate")
             .map_err(|error| error.to_string())?;
         func.call(&mut loaded.store, ())
-            .map_err(|error| error.to_string())?;
-        func.post_return(&mut loaded.store)
             .map_err(|error| error.to_string())?;
         Ok(())
     }
@@ -404,9 +399,6 @@ impl ExtensionRuntime {
                 &mut loaded.store,
                 (operation, payload, &context.session, &context.workspace),
             )
-            .map_err(|error| error.to_string())?;
-        function
-            .post_return(&mut loaded.store)
             .map_err(|error| error.to_string())?;
         if result
             .as_ref()
