@@ -93,15 +93,18 @@ Rust のビルドは `Swatinem/rust-cache` に任せる。
 ## 保護パス（policy）
 
 `lints/`・`AGENTS.md`・`.github/`・`scripts/check*.py`・`scripts/ci/`・`clippy.toml` などの
-**保護パス**を PR が変更したら、`Policy` チェックを無条件で失敗させる。
+**保護パス**を PR が変更したら、`Policy` チェックが **notice と job summary で通知**する。
+このチェックは失敗しない。**マージのゲートは CODEOWNERS**（`@yuki-net/reviews`）で、
+保護パスを変更する PR は `reviews` の承認が必要。
 
 - path routing ではなく **PR 全体の性質**なので route にしない。`ci.yml` の独立 job
-- `pull_request` のときだけ走る。`develop` / `main` への push では走らせない（マージ済みの正当な変更で恒久的に赤くしない）
+- `pull_request` のときだけ走る。`develop` / `main` への push では走らせない（マージ済みの正当な変更で通知し続けない）
 - ラベル・コメントによる免除は無い（AI と人間が同じアカウントのため、AI が自分で免除できてしまう）
-- 失敗したら人間が差分を確認し、管理者権限でマージする。判定を変える `scripts/ci/policy.py` 自体も保護パス
-- この仕組みを入れる PR（bootstrap）も赤くなる
+- 判定を変える `scripts/ci/policy.py` 自体も保護パス
+- `Gate` は policy に依存しない。**CI の赤を本物の失敗だけにする**ため、マージのゲートは CODEOWNERS に任せる
+- bootstrap も同じ扱い（`reviews` の承認、または管理者の bypass）
 
-ローカルでは次で確認できる。
+ローカルでは次で確認できる（保護パスがあれば notice を出し、終了コードは 0）。
 
 ```powershell
 python -m scripts.ci.policy --base origin/develop

@@ -135,10 +135,10 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(jobs, ["plan", "ci", "policy", "gate"])
 
     def test_policy_runs_only_on_pull_requests(self):
-        """保護パスは PR のときだけ見る。マージ後の push を恒久的に赤くしない。"""
+        """保護パスは PR のときだけ通知する。マージのゲートは CODEOWNERS。"""
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("if: github.event_name == 'pull_request'", workflow)
-        self.assertIn("needs: [plan, ci, policy]", workflow)
+        self.assertIn("needs: [plan, ci]", workflow)
         self.assertIn("python -m scripts.ci.policy", workflow)
 
     def test_workflow_delegates_every_route_to_run_py(self):

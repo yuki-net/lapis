@@ -11,9 +11,11 @@ added: 2026-11-23
 
 ## 何を検知するか
 
-PR の変更 path が次のいずれかに一致したら、`Policy` チェックを**無条件で失敗**
-させる。ラベル・コメントによる免除はない（AI と人間が同じアカウントで動くため、
-AI が自分で免除できてしまう）。
+PR の変更 path が次のいずれかに一致したら、`Policy` チェックが **notice と job
+summary で通知**する。このチェックは失敗しない。マージのゲートは **CODEOWNERS**
+（`@yuki-net/reviews`）で、保護パスを変更する PR は `reviews` の承認が必要。ラベル・
+コメントによる免除はない（AI と人間が同じアカウントで動くため、AI が自分で免除
+できてしまう）。
 
 | 規則 | 対象 |
 | --- | --- |
@@ -29,27 +31,25 @@ AI が自分で免除できてしまう）。
 
 `scripts/ci/policy.py`。CI では `.github/workflows/ci.yml` の `policy` job が
 `pull_request` のときだけ走る（`develop` / `main` への push では走らせない。
-マージ済みの正当な変更で恒久的に赤くしないため）。
+マージ済みの正当な変更で通知し続けないため）。`Gate` は policy に依存しない。
 
-## エラーメッセージ
+## 出力
 
 ```
-::error file=lints/README.md::保護パス lints/README.md が変更された（規則: lints/*）
+::notice file=lints/README.md,title=Protected path changed::lints/README.md (lints/*)
 ```
 
 ## 直し方
 
 1. 差分を人間が確認する（何のためにルール・CI を変えるのか、抜け道を作っていないか）
-2. 問題なければ、管理者権限で必須チェックを迂回してマージする
-3. 将来マージ専用エージェントを入れる場合も、このチェックを迂回できる権限は与えない
+2. 問題なければ `@yuki-net/reviews` の承認を得てマージする
+3. AI にはこの承認を与えない（`reviews` team に入れない）
+4. bootstrap は管理者の bypass でマージしてよい
 
 ## 例外
 
-なし。ただし次の 2 つは運用上の例外として扱う。
-
-- **bootstrap**: この仕組みを導入する PR 自体が保護パスを触るため赤くなる。
-  導入 PR は管理者がマージし、赤を消すための特別扱いは追加しない
-- **ルールの追加**: カタログ・fixture・実装を同じ PR で足す。赤くなるのは意図どおり
+なし。bootstrap も `reviews` の承認、または管理者の bypass でマージする。
+ルールの追加はカタログ・fixture・実装を同じ PR で足す。
 
 ## 導入背景
 
