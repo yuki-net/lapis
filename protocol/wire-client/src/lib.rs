@@ -14,6 +14,8 @@ pub mod workbench;
 
 #[cfg(target_arch = "wasm32")]
 pub mod browser;
+#[cfg(target_arch = "wasm32")]
+pub mod browser_endpoint;
 
 const MAX_PENDING: usize = 64;
 

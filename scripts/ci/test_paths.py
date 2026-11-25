@@ -127,16 +127,14 @@ class TestPathRouting(unittest.TestCase):
         """clients/state は wasm ビルドの依存に入るため Web ジョブも実行する。"""
         self.assertEqual(jobs_for_paths(["clients/state/src/lib.rs"]), {"desktop", "rust_core", "web"})
 
-    def test_web_terminal_extension_runs_windows_integration(self):
+    def test_web_host_paths_run_web(self):
         for path in (
             "clients/state/src/web_host/extension_terminal.rs",
             "clients/state/src/terminal_extension/web_projection.rs",
             "apps/web/wasm/src/entry.rs",
             "apps/web/wasm/src/startup.rs",
-            "tools/wasm-smoke/src/lib.rs",
-            "apps/web/wasm/tests/extension_terminal_smoke.py",
         ):
-            self.assertIn("host", jobs_for_paths([path]), path)
+            self.assertIn("web", jobs_for_paths([path]), path)
 
     def test_wasm_build_dependency_paths_run_web(self):
         """desktop-ui の wasm 依存 crate の変更で Web ジョブが選ばれる。"""

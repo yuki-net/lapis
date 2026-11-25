@@ -27,6 +27,38 @@ pub struct HostConnection {
     pub certificate: Vec<u8>,
 }
 
+/// ブラウザーが WebTransport の接続先を組み立てるための非機密情報。
+///
+/// `lapis-web` が配信し、ページが同じ Origin から取得する。証明書は DER ではなく
+/// SHA-256 ハッシュだけを渡す（`serverCertificateHashes` が要求する形式）。
+/// token や Workspace ID は含めない。認証は pairing / credential が担う。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WebTransportEndpoint {
+    /// WebTransport の URL。`https://<host>:<port>/lapis` の形。
+    pub url: String,
+    /// 証明書 DER の SHA-256。
+    pub certificate_sha256: Vec<u8>,
+}
+
+impl WebTransportEndpoint {
+    /// 接続情報と、その証明書 DER から組み立てる。
+    pub fn from_connection(connection: &HostConnection) -> Self {
+        Self {
+            url: format!("https://{}/lapis", connection.address),
+            certificate_sha256: sha256(&connection.certificate),
+        }
+    }
+}
+
+/// 証明書ハッシュの計算。wire が使うのは SHA-256 だけ。
+pub fn sha256(bytes: &[u8]) -> Vec<u8> {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hasher.finalize().to_vec()
+}
+
 /// 一時ファイルへ書いてから置き換える。既存ファイルは上書きする。
 #[cfg(not(target_arch = "wasm32"))]
 pub fn write_connection(

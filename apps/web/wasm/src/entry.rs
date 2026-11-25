@@ -85,8 +85,13 @@ pub async fn start(
     }
     // 設定の接続ページは、このページ自身と接続した Host URL を表示する。
     CONNECTED_HOST_URL.with(|current| *current.borrow_mut() = Some(url.clone()));
+    // WebTransport の接続先と証明書ハッシュは同じ Origin の lapis-web から取得する。
+    let endpoint = desktop_client::web_host::fetch_endpoint()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
     let credential = desktop_client::web_host::connect(desktop_client::web_host::HostConfig {
         url,
+        endpoint,
         workspace: workspace.unwrap_or_default(),
         client_id,
         token,

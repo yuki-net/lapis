@@ -8,9 +8,6 @@ publish = false
 [lib]
 crate-type = ["cdylib", "rlib"]
 
-[features]
-bridge-smoke = []
-
 [dependencies]
 desktop-client = { path = "../../../clients/state" }
 document = { path = "../../../protocol/types/document" }

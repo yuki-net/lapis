@@ -19,6 +19,3 @@ mod startup;
 pub use entry::{connection_info, is_ready, start};
 #[cfg(target_arch = "wasm32")]
 pub use session::WebSession;
-
-#[cfg(all(target_arch = "wasm32", feature = "bridge-smoke"))]
-mod bridge_smoke;

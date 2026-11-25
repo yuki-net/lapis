@@ -29,6 +29,8 @@ use tokio::{
 use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 
 const DEFAULT_LISTEN: &str = "127.0.0.1:4747";
+/// ブラウザーが WebTransport の接続先を取得するパス。
+const WEBTRANSPORT_ENDPOINT_PATH: &str = "/__webtransport";
 const DEFAULT_DIST: &str = "apps/web/dist";
 /// Wasm UI の依存が収まるディレクトリ。ここにある `.rs` を監視する。
 const WATCHED_DIRECTORIES: [&str; 6] = [
@@ -52,6 +54,8 @@ struct AppState {
     dist: PathBuf,
     dev: bool,
     reload: broadcast::Sender<()>,
+    /// Host が書き出した接続情報。ブラウザーへは証明書ハッシュだけを返す。
+    connection_info: Option<PathBuf>,
 }
 
 struct Options {
@@ -59,6 +63,7 @@ struct Options {
     dist: PathBuf,
     root: PathBuf,
     dev: bool,
+    connection_info: Option<PathBuf>,
 }
 
 impl Options {
@@ -70,6 +75,7 @@ impl Options {
             dist: PathBuf::from(DEFAULT_DIST),
             root: PathBuf::from("."),
             dev: false,
+            connection_info: None,
         };
         let mut values = arguments.iter();
         while let Some(argument) = values.next() {
@@ -91,6 +97,11 @@ impl Options {
                 "--root" => {
                     options.root = PathBuf::from(values.next().ok_or("--root に値がありません")?);
                 }
+                "--connection-info" => {
+                    options.connection_info = Some(PathBuf::from(
+                        values.next().ok_or("--connection-info に値がありません")?,
+                    ));
+                }
                 "--help" => return Err(usage()),
                 other => return Err(format!("unknown option: {other}")),
             }
@@ -100,7 +111,7 @@ impl Options {
 }
 
 fn usage() -> String {
-    "usage: lapis-web [--dev] [--host] [--listen <addr>] [--dist <directory>] [--root <directory>]"
+    "usage: lapis-web [--dev] [--host] [--listen <addr>] [--dist <directory>] [--root <directory>] [--connection-info <file>]"
         .to_owned()
 }
 
@@ -129,6 +140,7 @@ async fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
         dist: dist.clone(),
         dev: options.dev,
         reload: reload.clone(),
+        connection_info: options.connection_info.clone(),
     };
 
     // 監視は配信の間ずっと生きている必要がある。
@@ -146,6 +158,7 @@ async fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
         // `/host/workspace` は SPA の状態を表すため、リロードでも index.html を返す。
         .route("/{host}/{workspace}", get(index))
         .route("/{host}/{workspace}/", get(index))
+        .route(WEBTRANSPORT_ENDPOINT_PATH, get(webtransport_endpoint))
         .route("/__reload", get(reload_events))
         .route("/__reload.js", get(reload_script))
         .with_state(state)
@@ -219,6 +232,31 @@ fn interface_addresses() -> Vec<(&'static str, IpAddr)> {
 fn is_tailscale(interface: &str, ip: Ipv4Addr) -> bool {
     interface.to_ascii_lowercase().contains("tailscale")
         || (ip.octets()[0] == 100 && (64..128).contains(&ip.octets()[1]))
+}
+
+/// ブラウザーが WebTransport の接続先を得る。Host の接続情報を都度読み直すため、
+/// 証明書が更新されてもページの再読み込みだけで追従する。
+async fn webtransport_endpoint(State(state): State<AppState>) -> Response {
+    let Some(path) = state.connection_info.as_ref() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let connection = match wire::read_connection(path) {
+        Ok(connection) => connection,
+        Err(error) => {
+            eprintln!("接続情報を読めません: {error}");
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+    };
+    let endpoint = wire::WebTransportEndpoint::from_connection(&connection);
+    let body = serde_json::to_vec(&endpoint).unwrap_or_default();
+    (
+        [
+            (header::CONTENT_TYPE, "application/json"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        body,
+    )
+        .into_response()
 }
 
 async fn index(State(state): State<AppState>) -> Response {
@@ -374,6 +412,17 @@ fn absolute(path: &Path) -> Result<PathBuf, std::io::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connection_info_option_is_parsed() {
+        let options =
+            Options::parse(&["--connection-info".to_owned(), "connection.json".to_owned()])
+                .unwrap();
+        assert_eq!(
+            options.connection_info,
+            Some(PathBuf::from("connection.json"))
+        );
+    }
 
     #[test]
     fn defaults_match_the_documented_port_and_dist() {

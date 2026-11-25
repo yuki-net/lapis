@@ -5,7 +5,6 @@ members = [
     "clients/state",
     "clients/ui",
     "workbench/*",
-    "tools/wasm-smoke",
     "protocol/wire-client",
     "apps/web/wasm",
     "host/runtime",
@@ -87,3 +86,8 @@ winresource = "0.1"
 tower-http = { version = "0.7", features = ["fs", "set-header"] }
 notify = "8.2"
 sysinfo = "0.31.4"
+
+# `web_sys_unstable_apis` を有効にすると web-sys の `getImageData` が IDL に忠実な
+# `i32` 版へ切り替わる。gpui-pre-web は `f64` 版前提のため、差分をこのローカル版で吸収する。
+[patch.crates-io]
+gpui-pre-web = { path = "vendor/gpui-pre-web" }
