@@ -163,10 +163,6 @@ impl OidcBroker {
         }
     }
 
-    pub fn from_env() -> Result<Option<Self>, WebOidcError> {
-        Ok(WebOidcConfig::from_env()?.map(Self::new))
-    }
-
     /// PKCE の verifier / state を作り、Authorization Endpoint の URL を返す。
     pub fn start(&self) -> Result<String, WebOidcError> {
         let mut verifier_entropy = [0u8; 32];
