@@ -1,32 +1,32 @@
 # 保護パス。ここに載っている path を変更する PR は、
-# @yuki-net/core（人間）のレビューが必要。
+# @yuki-net/reviews（人間）のレビューが必要。
 #
 # AI（GitHub App）はこの team に入れないこと。
 # App のレビューは Code Owner 承認として扱われないため、
 # AI だけでは保護パスをマージできない。
 
 # lint 基盤・規約
-/lints/                                @yuki-net/core
-/AGENTS.md                             @yuki-net/core
+/lints/                                @yuki-net/reviews
+/AGENTS.md                             @yuki-net/reviews
 
 # CI・検査
-/.github/                              @yuki-net/core
-/scripts/ci/                           @yuki-net/core
-/scripts/check*.py                     @yuki-net/core
-/scripts/architecture-exceptions.json  @yuki-net/core
+/.github/                              @yuki-net/reviews
+/scripts/ci/                           @yuki-net/reviews
+/scripts/check*.py                     @yuki-net/reviews
+/scripts/architecture-exceptions.json  @yuki-net/reviews
 
 # 依存・toolchain
-/Cargo.toml                            @yuki-net/core
-/Cargo.lock                            @yuki-net/core
-/clippy.toml                           @yuki-net/core
-/rust-toolchain.toml                   @yuki-net/core
-/rustfmt.toml                          @yuki-net/core
+/Cargo.toml                            @yuki-net/reviews
+/Cargo.lock                            @yuki-net/reviews
+/clippy.toml                           @yuki-net/reviews
+/rust-toolchain.toml                   @yuki-net/reviews
+/rustfmt.toml                          @yuki-net/reviews
 
 # 公開契約・リリース
-/protocol/                             @yuki-net/core
-/release/                              @yuki-net/core
+/protocol/                             @yuki-net/reviews
+/release/                              @yuki-net/reviews
 
 # OSS ポリシー
-/LICENSE                               @yuki-net/core
-/SECURITY.md                           @yuki-net/core
-/CONTRIBUTING.md                       @yuki-net/core
+/LICENSE                               @yuki-net/reviews
+/SECURITY.md                           @yuki-net/reviews
+/CONTRIBUTING.md                       @yuki-net/reviews
