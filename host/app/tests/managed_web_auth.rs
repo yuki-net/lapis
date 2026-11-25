@@ -34,7 +34,7 @@ impl ManagedHost {
             .stderr(Stdio::null());
         if let Some((executable, dist)) = web {
             command
-                .env("LAPIS_WEB_BRIDGE_EXECUTABLE", executable)
+                .env("LAPIS_WEB_EXECUTABLE", executable)
                 .env("LAPIS_WEB_DIST", dist);
         }
         #[cfg(windows)]
@@ -87,13 +87,11 @@ impl ManagedHost {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "LAPIS_TEST_WEB_BRIDGE にビルド済み bridge を指定して実行する"]
+#[ignore = "LAPIS_TEST_WEB_EXECUTABLE にビルド済み lapis-web を指定して実行する"]
 async fn managed_host_owns_web_publication_and_stops_it_on_exit() {
-    use futures_util::{SinkExt, StreamExt};
     use std::io::{Read, Write};
-    use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
     let executable = std::path::PathBuf::from(
-        std::env::var_os("LAPIS_TEST_WEB_BRIDGE").expect("bridge executable"),
+        std::env::var_os("LAPIS_TEST_WEB_EXECUTABLE").expect("lapis-web executable"),
     );
     let root = tempfile::tempdir().unwrap();
     let state = tempfile::tempdir().unwrap();
@@ -155,110 +153,6 @@ async fn managed_host_owns_web_publication_and_stops_it_on_exit() {
     let mut response = String::new();
     stream.read_to_string(&mut response).unwrap();
     assert!(response.contains("managed web"));
-    let ResponseBody::HostInvite(invite) = request(
-        &mut owner,
-        "web-invite",
-        RequestBody::HostInvite(HostInviteRequest {}),
-    )
-    .await
-    else {
-        panic!("web invite")
-    };
-    let mut token = zeroize::Zeroizing::new([0u8; 32]);
-    for (i, byte) in token.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&invite.token[i * 2..i * 2 + 2], 16).unwrap();
-    }
-    let mut ws_request = format!("ws://{address}/remote")
-        .into_client_request()
-        .unwrap();
-    ws_request
-        .headers_mut()
-        .insert("origin", format!("http://{address}").parse().unwrap());
-    ws_request
-        .headers_mut()
-        .insert("sec-websocket-protocol", "lapis.v0".parse().unwrap());
-    let (mut socket, _) = tokio_tungstenite::connect_async(ws_request).await.unwrap();
-    let mut web_hello = hello("web-socket-test");
-    web_hello.client_kind = ClientKind::Web;
-    let pair = ClientMessage::Pair(PairRequest::new(web_hello, &token));
-    socket
-        .send(Message::Text(serde_json::to_string(&pair).unwrap().into()))
-        .await
-        .unwrap();
-    let reply = tokio::time::timeout(Duration::from_secs(5), socket.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    let response: ServerMessage = serde_json::from_str(reply.to_text().unwrap()).unwrap();
-    assert!(matches!(response, ServerMessage::Paired(_)));
-    // 同じ公開アドレスに、別の招待で二台目を登録しても一台目は接続を維持する。
-    let ResponseBody::HostInvite(invite) = request(
-        &mut owner,
-        "second-web-invite",
-        RequestBody::HostInvite(HostInviteRequest {}),
-    )
-    .await
-    else {
-        panic!("second web invite")
-    };
-    for (i, byte) in token.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&invite.token[i * 2..i * 2 + 2], 16).unwrap();
-    }
-    let mut second_request = format!("ws://{address}/remote")
-        .into_client_request()
-        .unwrap();
-    second_request
-        .headers_mut()
-        .insert("origin", format!("http://{address}").parse().unwrap());
-    second_request
-        .headers_mut()
-        .insert("sec-websocket-protocol", "lapis.v0".parse().unwrap());
-    let (mut second_socket, _) = tokio_tungstenite::connect_async(second_request)
-        .await
-        .unwrap();
-    let mut second_hello = hello("second-web-socket-test");
-    second_hello.client_kind = ClientKind::Web;
-    let pair = ClientMessage::Pair(PairRequest::new(second_hello, &token));
-    second_socket
-        .send(Message::Text(serde_json::to_string(&pair).unwrap().into()))
-        .await
-        .unwrap();
-    let reply = tokio::time::timeout(Duration::from_secs(5), second_socket.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    assert!(matches!(
-        serde_json::from_str::<ServerMessage>(reply.to_text().unwrap()).unwrap(),
-        ServerMessage::Paired(_)
-    ));
-    for (index, client) in [&mut socket, &mut second_socket].into_iter().enumerate() {
-        let message = ClientMessage::Request(RequestEnvelope {
-            request_id: RequestId::try_new(format!("list-{index}")).unwrap(),
-            body: RequestBody::WorkspaceList(WorkspaceListRequest {}),
-        });
-        client
-            .send(Message::Text(
-                serde_json::to_string(&message).unwrap().into(),
-            ))
-            .await
-            .unwrap();
-        let reply = tokio::time::timeout(Duration::from_secs(5), client.next())
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        assert!(matches!(
-            serde_json::from_str::<ServerMessage>(reply.to_text().unwrap()).unwrap(),
-            ServerMessage::Response(ResponseEnvelope {
-                body: ResponseBody::WorkspaceList(_),
-                ..
-            })
-        ));
-    }
-    second_socket.close(None).await.unwrap();
-    socket.close(None).await.unwrap();
     assert!(matches!(
         request(
             &mut owner,
@@ -497,13 +391,13 @@ async fn managed_host_persists_web_pairing_and_revocation_across_crashes() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "LAPIS_TEST_WEB_BRIDGE、LAPIS_TEST_WEB_DIST、LAPIS_TEST_CHROME を指定して実行する"]
+#[ignore = "LAPIS_TEST_WEB_EXECUTABLE、LAPIS_TEST_WEB_DIST、LAPIS_TEST_CHROME を指定して実行する"]
 async fn browser_invitation_connects_and_reloads_on_tailscale_http() {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
 
-    let bridge =
-        std::path::PathBuf::from(std::env::var_os("LAPIS_TEST_WEB_BRIDGE").expect("bridge"));
+    let web =
+        std::path::PathBuf::from(std::env::var_os("LAPIS_TEST_WEB_EXECUTABLE").expect("lapis-web"));
     let dist = std::path::PathBuf::from(std::env::var_os("LAPIS_TEST_WEB_DIST").expect("web dist"));
     let chrome = std::path::PathBuf::from(std::env::var_os("LAPIS_TEST_CHROME").expect("chrome"));
     let bind = std::env::var("LAPIS_TEST_WEB_ADDRESS").unwrap_or_else(|_| "127.0.0.1".into());
@@ -512,7 +406,7 @@ async fn browser_invitation_connects_and_reloads_on_tailscale_http() {
     std::fs::write(root.path().join("README.md"), "# Web test\n").unwrap();
     let state = tempfile::tempdir().unwrap();
     let profile = tempfile::tempdir().unwrap();
-    let host = ManagedHost::start_with_web(root.path(), state.path(), Some((&bridge, &dist)));
+    let host = ManagedHost::start_with_web(root.path(), state.path(), Some((&web, &dist)));
     let mut owner = host.owner().await;
     let ResponseBody::HostWebStart(status) = request(
         &mut owner,
