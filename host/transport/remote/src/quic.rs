@@ -161,22 +161,19 @@ async fn accept_connection(incoming: quinn::Incoming, state: EndpointState, peer
         }
         return;
     }
-    match connection.accept_bi().await {
-        Ok((send, recv)) => {
-            let reader = codec(state.limits).new_read(recv);
-            let writer = codec(state.limits).new_write(send);
-            handle_socket(
-                RemoteSocket::Quic {
-                    connection,
-                    reader,
-                    writer,
-                },
-                state,
-                peer,
-            )
-            .await;
-        }
-        Err(_) => {}
+    if let Ok((send, recv)) = connection.accept_bi().await {
+        let reader = codec(state.limits).new_read(recv);
+        let writer = codec(state.limits).new_write(send);
+        handle_socket(
+            RemoteSocket::Quic {
+                connection,
+                reader,
+                writer,
+            },
+            state,
+            peer,
+        )
+        .await;
     }
 }
 
@@ -190,8 +187,8 @@ async fn serve_webtransport(
     peer: SocketAddr,
 ) -> Result<(), SessionError> {
     let (reader, writer) = webtransport::accept(connection).await?;
-    let reader = codec(state.limits).new_read(reader);
-    let writer = codec(state.limits).new_write(writer);
+    let reader = Box::new(codec(state.limits).new_read(reader));
+    let writer = Box::new(codec(state.limits).new_write(writer));
     handle_socket(
         RemoteSocket::WebTransport { reader, writer },
         state.clone(),

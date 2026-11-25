@@ -24,8 +24,8 @@ pub(crate) enum RemoteSocket {
     /// WebTransport のセッション。終了は CONNECT ストリームの FIN だけで、
     /// 同じ QUIC 接続の他のセッションを閉じない。
     WebTransport {
-        reader: FramedRead<SessionReader, Frames>,
-        writer: FramedWrite<SessionWriter, Frames>,
+        reader: Box<FramedRead<SessionReader, Frames>>,
+        writer: Box<FramedWrite<SessionWriter, Frames>>,
     },
 }
 
