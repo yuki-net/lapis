@@ -29,11 +29,6 @@ PATH_RULES = [
     # Desktop 関連。
     # clients/state と clients/ui は Web の wasm ビルド（apps/web/wasm）でも
     # コンパイルされる。
-    (["clients/state/src/web_host.rs", "clients/state/src/web_host/extension_terminal.rs",
-      "clients/state/src/terminal_extension/", "clients/state/src/terminal_extension.rs",
-      "apps/web/wasm/src/entry.rs", "apps/web/wasm/src/startup.rs",
-      "tools/wasm-smoke/", "apps/web/wasm/tests/extension_terminal_smoke.py"],
-     {"host", "desktop", "rust_core", "web"}),
     (["clients/state/"], {"desktop", "rust_core", "web"}),
     (["apps/desktop/persistence/"], {"desktop", "rust_core"}),
     (["apps/launcher/"], {"desktop", "rust_core"}),

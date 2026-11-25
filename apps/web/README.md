@@ -79,19 +79,6 @@ WebGPU が使えない環境では `?backend=webgl` を付けてください。
 
 Desktop の設定で Tailscale のアドレスを選んで公開し、コピーした招待リンクを別端末で開きます。Tailscale ACL で到達できる端末を制限してください。
 
-## 結合検証（Host / Bridge）
+## 結合検証
 
-```powershell
-cargo build -p host -p web-bridge
-cargo build -p web --target wasm32-unknown-unknown --profile web --features bridge-smoke
-python apps/web/wasm/tests/bridge_smoke.py
-```
-
-Windows では拡張 Terminal の起動・再接続も、分離した Host / Bridge を使って検証できます。
-
-```powershell
-cargo build -p host -p web-bridge -p extension-runtime --bins
-cargo build -p lapis-terminal-native
-cargo build -p web-terminal-smoke --target wasm32-unknown-unknown --profile web
-python apps/web/wasm/tests/extension_terminal_smoke.py
-```
+ブラウザーは WebTransport で Host へ直接接続します。Host 側の受け入れとセッション処理は `host/transport/remote` のテストで検証します。ブラウザーからの手動確認手順は [開発時の起動](../../docs/dev.md) を参照してください。

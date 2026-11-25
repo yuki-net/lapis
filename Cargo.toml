@@ -5,7 +5,6 @@ members = [
     "clients/state",
     "clients/ui",
     "workbench/*",
-    "tools/wasm-smoke",
     "protocol/wire-client",
     "apps/web/wasm",
     "host/runtime",
