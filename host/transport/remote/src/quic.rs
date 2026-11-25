@@ -19,6 +19,7 @@ use crate::{
     rate_limit::AuthenticationAttemptLimiter,
     server::{EndpointState, handle_socket},
     socket::RemoteSocket,
+    webtransport::{self, SessionError},
 };
 
 pub const QUIC_PROTOCOL: &[u8] = wire::REMOTE_QUIC_PROTOCOL;
@@ -46,13 +47,20 @@ impl QuicServer {
             return Err("remote access is disabled".into());
         }
         let mut tls = (*tls.into_inner()).clone();
-        tls.alpn_protocols = vec![QUIC_PROTOCOL.to_vec()];
-        tls.max_early_data_size = 0;
+        tls.alpn_protocols = vec![
+            QUIC_PROTOCOL.to_vec(),
+            webtransport::ALPN.as_bytes().to_vec(),
+        ];
+        // WebTransport は 0-RTT の再開を前提にしないが、ブラウザーは TLS 1.3 の
+        // セッション再開情報を期待するため、early data は許可する。
+        tls.max_early_data_size = u32::MAX;
         let mut config =
             quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(tls)?));
         let mut transport = quinn::TransportConfig::default();
-        transport.max_concurrent_bidi_streams(1u32.into());
-        transport.max_concurrent_uni_streams(0u32.into());
+        // Desktop は 1 本の bidi stream を使い、ブラウザーの WebTransport は
+        // 制御・QPACK・CONNECT の uni/bidi stream を開くため、両方を許可する。
+        transport.max_concurrent_bidi_streams(8u32.into());
+        transport.max_concurrent_uni_streams(8u32.into());
         transport.max_idle_timeout(Some(limits.idle_timeout().duration().try_into()?));
         config.transport_config(Arc::new(transport));
         let endpoint = quinn::Endpoint::server(config, address)?;
@@ -77,20 +85,7 @@ impl QuicServer {
                             continue;
                         }
                         let state = state.clone();
-                        connections.spawn(async move {
-                            let handshake = async {
-                                let connection = incoming.await?;
-                                let (send, recv) = connection.accept_bi().await?;
-                                Ok::<_, Error>((connection, send, recv))
-                            };
-                            let Ok(Ok((connection, send, recv))) = timeout(state.limits.authentication_timeout().duration(), handshake).await else {
-                                state.authentication_attempts.record_failure(peer.ip(), Instant::now());
-                                return;
-                            };
-                            let reader = codec(state.limits).new_read(recv);
-                            let writer = codec(state.limits).new_write(send);
-                            handle_socket(RemoteSocket::Quic { connection, reader, writer }, state, peer).await;
-                        });
+                        connections.spawn(accept_connection(incoming, state, peer));
                     }
                     _ = connections.join_next(), if !connections.is_empty() => {}
                 }
@@ -130,6 +125,77 @@ fn codec(limits: RemoteLimits) -> tokio_util::codec::length_delimited::Builder {
     let mut builder = LengthDelimitedCodec::builder();
     builder.max_frame_length(limits.max_message_size().bytes());
     builder
+}
+
+/// 1 接続の最初の stream で経路を決める。
+///
+/// Desktop は接続直後に bidi stream を 1 本開く。ブラウザーの WebTransport は
+/// 接続直後に制御用の uni stream を開くため、どちらが先に来たかで経路を選ぶ。
+/// 経路を選んだら、その接続ではもう一方の形式を扱わない。
+/// 1 接続の経路を ALPN で決める。
+///
+/// Desktop は `lapis.v0`、ブラウザーの WebTransport は `h3` を交渉する。
+/// ALPN が違えば同じ QUIC endpoint でも取り違えが起きない。
+/// 決定後は経路ごとに stream を消費するため、ここで Tls13ServerConfig に
+/// 両方の ALPN を提示しておく必要がある。
+async fn accept_connection(incoming: quinn::Incoming, state: EndpointState, peer: SocketAddr) {
+    let setup = webtransport::SETUP_TIMEOUT;
+    let connection = match tokio::time::timeout(setup, incoming).await {
+        Ok(Ok(connection)) => connection,
+        _ => {
+            state
+                .authentication_attempts
+                .record_failure(peer.ip(), Instant::now());
+            return;
+        }
+    };
+    let negotiated = connection
+        .handshake_data()
+        .and_then(|data| data.downcast::<quinn::crypto::rustls::HandshakeData>().ok())
+        .and_then(|data| data.protocol);
+    if negotiated.as_deref() == Some(webtransport::ALPN.as_bytes()) {
+        if serve_webtransport(connection, &state, peer).await.is_err() {
+            state
+                .authentication_attempts
+                .record_failure(peer.ip(), Instant::now());
+        }
+        return;
+    }
+    if let Ok((send, recv)) = connection.accept_bi().await {
+        let reader = codec(state.limits).new_read(recv);
+        let writer = codec(state.limits).new_write(send);
+        handle_socket(
+            RemoteSocket::Quic {
+                connection,
+                reader,
+                writer,
+            },
+            state,
+            peer,
+        )
+        .await;
+    }
+}
+
+/// ブラウザーの WebTransport 接続を、1 セッション = 1 Session として処理する。
+///
+/// セッションの寿命は Desktop と同じ規則で管理し、切断時は attachment だけを
+/// 解除する。再接続は新しい接続で行う。
+async fn serve_webtransport(
+    connection: quinn::Connection,
+    state: &EndpointState,
+    peer: SocketAddr,
+) -> Result<(), SessionError> {
+    let (reader, writer) = webtransport::accept(connection).await?;
+    let reader = Box::new(codec(state.limits).new_read(reader));
+    let writer = Box::new(codec(state.limits).new_write(writer));
+    handle_socket(
+        RemoteSocket::WebTransport { reader, writer },
+        state.clone(),
+        peer,
+    )
+    .await;
+    Ok(())
 }
 
 /// 証明書検証を省略しないQUIC接続。LocalもRemoteも同じ接続経路を使う。
@@ -312,6 +378,70 @@ mod tests {
                         .unwrap()
                         .is_err()
                 );
+                server.shutdown().await;
+            });
+    }
+
+    /// WebTransport の ALPN を受ける endpoint でも、Desktop の QUIC 経路が壊れないことを検証する。
+    ///
+    /// ブラウザー経路は Chrome 157 で実際に接続し、`auth.required` の応答まで確認済み。
+    /// ここでは同じ endpoint が両方の ALPN を提示したまま、既存の QUIC 経路を保つことを見る。
+    #[test]
+    fn webtransport_capable_endpoint_keeps_the_desktop_quic_path() {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let auth = Arc::new(std::sync::Mutex::new(RemoteAuth::system(
+                    AuthConfig::new(
+                        PairingLifetime::new(10).unwrap(),
+                        CredentialLifetime::new(20).unwrap(),
+                    ),
+                    AuthPolicy::new(Default::default()),
+                )));
+                auth.lock().unwrap().enable();
+                let certified =
+                    rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
+                let cert = certified.cert.der().clone();
+                let tls = crate::tls13_server_config(
+                    vec![cert.clone()],
+                    rustls::pki_types::PrivateKeyDer::Pkcs8(
+                        certified.signing_key.serialize_der().into(),
+                    ),
+                )
+                .unwrap();
+                let server = QuicServer::bind(
+                    "127.0.0.1:0".parse().unwrap(),
+                    tls,
+                    auth,
+                    Arc::new(NoRequests),
+                    RemoteLimits::default(),
+                )
+                .await
+                .unwrap();
+                let address = server.listening_address().unwrap();
+
+                let mut client =
+                    QuicClient::connect(address, "localhost", cert, RemoteLimits::default())
+                        .await
+                        .unwrap();
+                let message = ClientMessage::Request(client_api::RequestEnvelope {
+                    request_id: client_api::RequestId::try_new("unauthenticated").unwrap(),
+                    body: client_api::RequestBody::WorkspaceList(Default::default()),
+                });
+                client.send(&message).await.unwrap();
+                let reply = timeout(Duration::from_secs(10), client.recv())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                match reply {
+                    ServerMessage::Error(ref error) => {
+                        assert_eq!(error.code.as_str(), client_api::UNAUTHORIZED);
+                    }
+                    _ => panic!("unauthenticated request must be rejected"),
+                }
                 server.shutdown().await;
             });
     }

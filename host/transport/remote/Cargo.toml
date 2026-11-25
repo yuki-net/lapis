@@ -9,10 +9,12 @@ license.workspace = true
 axum.workspace = true
 axum-server.workspace = true
 backend-state = { path = "../../runtime" }
+bytes = "1"
 client-api = { path = "../../../protocol/wire/client-api" }
 client-core = { path = "../../../protocol/wire-client" }
 wire = { path = "../../../protocol/wire/dto" }
 getrandom.workspace = true
+http = "1"
 jsonwebtoken = { version = "11", features = ["aws_lc_rs"] }
 rcgen.workspace = true
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
@@ -24,10 +26,14 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 subtle.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["macros"] }
+url = "2"
+web-transport-proto = "0.6"
+web-transport-quinn = "0.13"
 zeroize.workspace = true
 
 [dev-dependencies]
+time = { version = "0.3", default-features = false, features = ["std"] }
 git = { package = "git-contract", path = "../../../extensions/git/contract" }
 document = { path = "../../../protocol/types/document" }
 editor-core = { path = "../../../protocol/types/editor-core" }
