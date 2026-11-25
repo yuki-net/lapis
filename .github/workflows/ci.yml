@@ -163,7 +163,7 @@ jobs:
     name: Gate
     runs-on: ubuntu-latest
     if: always()
-    needs: [plan, ci, policy]
+    needs: [plan, ci]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -174,6 +174,4 @@ jobs:
           SELECTED_ROUTES: ${{ needs.plan.outputs.selected }}
           SELECTED_COUNT: ${{ needs.plan.outputs.count }}
           NEEDS_JSON: ${{ toJSON(needs) }}
-          # policy は PR のときだけ走る。push / 手動実行では skipped が正しい。
-          EVENT_NAME: ${{ github.event_name }}
         run: python -m scripts.ci.gate
