@@ -69,13 +69,17 @@ class BaseResolutionTests(unittest.TestCase):
 
 
 class MainTests(unittest.TestCase):
-    def test_protected_change_fails_with_annotations(self):
+    def test_protected_change_is_noticed_without_failing(self):
         with patch.object(policy, "pr_paths", return_value=["lints/README.md", "apps/web/src/x.ts"]):
-            with redirect_stdout(io.StringIO()) as output, redirect_stderr(io.StringIO()) as errors:
-                self.assertEqual(invoke([]), 1)
-        self.assertIn("::error file=lints/README.md::", errors.getvalue())
-        self.assertNotIn("apps/web", errors.getvalue())
-        self.assertEqual(output.getvalue(), "")
+            with patch.object(policy.report, "on_github", return_value=True), \
+                 patch.object(policy.report, "write_summary") as summary, \
+                 redirect_stdout(io.StringIO()) as output, \
+                 redirect_stderr(io.StringIO()) as errors:
+                self.assertEqual(invoke([]), 0)
+        self.assertIn("::notice file=lints/README.md", output.getvalue())
+        self.assertNotIn("apps/web", output.getvalue())
+        self.assertEqual(errors.getvalue(), "")
+        summary.assert_called_once()
 
     def test_unprotected_change_passes(self):
         with patch.object(policy, "pr_paths", return_value=["apps/web/src/x.ts"]):

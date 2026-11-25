@@ -308,7 +308,6 @@ class TestPathRouting(unittest.TestCase):
             needs = {
                 "plan": {"result": "success"},
                 "ci": {"result": "success"},
-                "policy": {"result": "success"},
             }
             self.assertEqual(errors(selected, needs, len(selected)), [])
             if not selected:
