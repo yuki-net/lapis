@@ -54,7 +54,6 @@ PATH_RULES = [
     (["host/runtime/"], {"rust_core", "host", "desktop"}),
     (["host/adapters/"], {"rust_core", "host", "desktop"}),
     (["host/transport/web/"], {"rust_core", "host", "desktop", "web"}),
-    (["host/transport/web-bridge/"], {"host", "desktop", "web"}),
     (["host/transport/"], {"rust_core", "host", "desktop"}),
     (["host/application/"], {"rust_core", "host", "desktop"}),
     # 上記より狭い規則に当たらない Host 配下（削除された crate の path を

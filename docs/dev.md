@@ -8,13 +8,13 @@ Windows で Desktop と Web を起動して確認する手順の正本です。�
 | --- | --- |
 | `Run Host` | Host だけ。Desktop と Web の両方がここへ繋がる |
 | `Run Desktop` | Desktop だけ。Host の招待を待って接続する |
-| `Run Web` | 別起動 Host の bridge と Web ページ（TCP `4747`）。事前に Web のビルドが必要 |
+| `Run Web` | 別起動 Host の Web ページ（TCP `4747`）。ログの Web のビルドが必要 |
 
 通常の Web 接続は `cargo dev` の Local Host と Desktop の設定から利用します。別起動 Host の招待発行は Desktop 設定では扱いません。
 
 `Run Desktop (Hot Reload)` は `Run Desktop` の起動方法だけを変えたもので、Host の招待待ちと `target/dev-desktop/state` は共通です。
 
-`.run` のその他は、`Run Web (Bridge)`、デモ用の `Run Web (Page)`、`Build Web`、`Run Android`、`Build Android`、ドキュメントサイト用の `Run Docs Site` と `Build Docs Site` です。`Run Web (Page)` だけを起動して `http://127.0.0.1:4747/?demo=1` を開くと、Host と bridge なしで UI を確認できます。
+`.run` のその他は、`Run Web`、デモ用の `Run Web (Page)`、`Build Web`、`Run Android`、`Build Android`、ドキュメントサイト用の `Run Docs Site` と `Build Docs Site` です。`Run Web (Page)` を単独起動して `http://127.0.0.1:4747/?demo=1` を開くと、Host なしで UI だけを確認できます。
 
 ## ドキュメントサイト
 
@@ -28,7 +28,7 @@ Windows で Desktop と Web を起動して確認する手順の正本です。�
 
 | ファイル | 中身 | 読む側 |
 | --- | --- | --- |
-| `target/dev-web/connection.json` | 待受アドレス・サーバー名・Workspace ID・公開証明書 | bridge |
+| `target/dev-web/connection.json` | 待受アドレス・サーバー名・Workspace ID・公開証明書 | `lapis-web` が接続先として配信 |
 | `target/dev-desktop/desktop.json` | 上記に加えて1時間・1回限りの token | Desktop |
 
 どちらも token の扱いが違うだけで、指す Host は同じです。Host を正常終了すると自分が書いたファイルを削除します。
@@ -88,32 +88,34 @@ Tailscale の候補は、Tailscale と確認できるインターフェースま
 
 Tailscale アドレスの `http://` はブラウザー上では secure context ではなく、Clipboard API や WebGPU などが利用できない場合があります。WebGPU が使えない場合は `?backend=webgl` を指定してください（例: `http://<host>/?backend=webgl#/invite?token=<token>`）。`#` より後ろに足すと token が壊れるため、必ず `#` の前のクエリ部分へ追加します。通信は Tailscale の経路で保護されますが、Web サーバー自体は TLS を提供しません。localhost はブラウザー上の扱いが異なります。
 
-1. `Run Host` を押し、コンソールで `pair-user` を打って token を控えます（1時間・1回限り）。
-2. `Run Web` を押すと、bridge のログに `open http://127.0.0.1:4747/` が出ます。その URL を開きます。接続先と token は URL に含まれません。
-3. ブラウザーの入力欄は招待リンクだけです。`http://127.0.0.1:4747/#/invite?token=<token>` の形で、手順1の token から招待リンクを作って貼り付けます。Host URL・Workspace ID・pairing token を個別に入力する欄はありません。接続先の WebSocket は開いたページと同じ入口から解決し、Workspace は Host が決めます。
+1. `Run Host` を起動し、コンソールで `pair-user` を実行して token を控えます（1時間・1回限り）。
+2. `Run Web` を起動すると、`open http://127.0.0.1:4747/` が標準エラーへ出ます。その URL を開きます。接続先と token は URL に含まれません。
+3. ブラウザーの入力欄は招待リンクだけです。`http://127.0.0.1:4747/#/invite?token=<token>` の形で、手順1の token から招待リンクを作って貼り付けます。Host URL・Workspace ID・pairing token を個別に入力する欄はありません。接続先は同じ公開入口の `/__webtransport` から取得し、Workspace は Host が決めます。
 4. token は読み取り後に URL から消えます。接続すると `/<host>/<workspace>` のパスで Workspace が開き、credential がブラウザーの `localStorage` に保存されます。次回は一覧から選ぶか、同じ URL を開くだけで接続できます。
 
 `?demo=1` を付けると Host なしのサンプル Workspace で UI だけを確認できます。
 
-Desktop からは設定 → 接続 → Web 接続で、いま使える候補（この端末 / LAN / Tailscale）を選び、ページ URL と Host URL をコピーできます。公開を開始すると「招待リンクをコピー」で `#/invite?token=<token>` 形式の URL を取得でき、これをブラウザーで開くか入力欄へ貼り付けます。Host URL と Workspace ID は表示と確認用で、ログインの入力には使いません。アドレスは保存されず表示のたびに集め直すため、Tailscale の IP が変わっても開き直せば現在の値になります。
+Desktop からは設定 → 接続 → Web 接続で、いま使える候補（この端末 / LAN / Tailscale）を選び、ページ URL をコピーできます。公開を開始すると「招待リンクをコピー」で `#/invite?token=<token>` 形式の URL を取得でき、これをブラウザーで開くか入力欄へ貼り付けます。接続先の解決はブラウザーが行うため、Host URL の入力は不要です。アドレスは保存されず表示のたびに集め直すため、Tailscale の IP が変わっても開き直せば現在の値になります。
+
+### 通信の経路
+
+ブラウザーは Host の QUIC エンドポイントへ WebTransport (HTTP/3) で直接接続します。中継プロセスはありません。
+
+- ページ配信は `lapis-web`（TCP `4747`）が行い、接続先と証明書ハッシュを `/__webtransport` で返します。
+- 接続は同じ Host の UDP ポートへ直接張ります。証明書は ECDSA・13 日で、`serverCertificateHashes` により配信されたハッシュだけを信頼します。
+- 遠隔接続は Tailscale の telnet 内に限定します。`http://100.x` は secure context ではないため、WebTransport を使う遠隔接続は `https` 配信が必要です。
 
 ### ポートの決め方
 
 | 用途 | 値 | 理由 |
 | --- | --- | --- |
-| ページと WebSocket | `4747` 固定 | `Run Web (Bridge)` は `--listen 127.0.0.1:4747 --dist apps/web/dist` で同じ入口から両方を配信する。ブラウザーはこの URL だけを開く |
-| bridge 単体の既定 | `4757` | `--listen` を省いたときの待受。ページと別ポートに分ける場合は、ページ入口の `/remote` を bridge へ転送する別の設定が必要。`lapis-web` はこの転送を行わない |
-| Host | `4787` 固定 | Desktop の保存済み profile と Workspace ID が変わらないようにする |
+| ページ配信 | `4747` 固定 | `Run Web` は `--listen 127.0.0.1:4747 --dist apps/web/dist` で配信する。ブラウザーはこの URL だけを開く |
+| Host（QUIC） | `4787` 固定 | Desktop の保存済み profile と Workspace ID が変わらないようにする |
 
-bridge は CLI 引数、環境変数、既定値の順に設定を解決します。`--listen` / `--origin` を省くと `LAPIS_WEB_BRIDGE_LISTEN`（既定 `127.0.0.1:4757`）と `LAPIS_WEB_BRIDGE_ORIGIN`（既定 `http://127.0.0.1:4747`）を使います。`Run Web (Bridge)` は `--dist` を渡してページと WebSocket を `4747` の同一入口にまとめるため、この既定ポートは使いません。
-
-外部公開は `--host`（ページ）と `--allow-remote`（bridge）で行います。
+外部公開は `--host`（ページ）で行います。
 
 - `lapis-web --host` は `0.0.0.0:4747` で待ち受けます。
-- `web-bridge --allow-remote` は `0.0.0.0:4757` で待ち受けます。`--listen` を併用した場合は明示したアドレスを使います。
-- Host を `0.0.0.0` で起動した場合、bridge は接続情報の `0.0.0.0` をこのマシン自身として `127.0.0.1` に読み替えます。
-- bridge に `--dist` を渡してページも配信する場合、`same_origin_allowed` は Origin のホストとポートがリクエストの Host と一致することを確認します。Host の解析には **Origin のスキーム**を使い、リクエストの実際のスキームとは比較しません。たとえば Host が `127.0.0.1:4747` なら `http` と `https` のどちらの Origin も通ります。この場合 `--origin` は使われません。
-- `--dist` を渡さずページを別プロセスで配る場合、bridge は Origin がリクエストの Host と同じホスト名なら許可するため、IP やホスト名が変わっても同じページから接続できます。`--origin` を指定した場合は、その Origin も追加で許可します。
+- WebTransport の接続先は Host の UDP 待受で、ページと同じ端末から到達できる必要があります。
 
 外部公開時は起動ログに接続候補が出ます。
 
@@ -127,7 +129,8 @@ loopback で待ち受けているときは `open` の 1 行だけです。
 
 `4787` が他の用途で埋まっているときは `Run Host` の `--listen` を変えてください。その場合、Desktop は招待を作り直せば接続できます。
 
-`Run Web` は別起動 Host の bridge 動作を調べる開発用構成で、事前に `npm run build` が必要です。初回は招待リンクを要求します。Desktop が管理する Local Host の招待は別起動 Host では使えないため、`Run Host` のコンソールで `pair-user` を実行し、表示された token から `#/invite?token=<token>` 形式の招待リンクを作って開いてください。製品の招待発行には `cargo dev` の Local Host を使用してください。
+`Run Web` は別起動 Host の Web 動作を調べる開発用構成で、事前に `npm run build` が必要です。製品の招待発行には `cargo dev` の Local Host を使用してください。
+
 ## Web の UI を確認する
 
 デモ用の `Run Web (Page)`（`lapis-web --dev --dist apps/web/dist`）では変更時に Web が再ビルドされ、ブラウザーが再読み込みします。Host に接続する場合は `npm run build` を実行してから Desktop の設定で公開します。
@@ -148,14 +151,13 @@ Task Manager などの表示名には exe に埋め込んだ Windows リソー�
 | `lapis.exe` | `Lapis` |
 | `lapis-host.exe` | `Lapis Host` |
 | `lapis-launcher.exe` | `Lapis Launcher` |
-| `lapis-web-bridge.exe` | `Lapis Web Bridge` |
 
 埋め込む経路は2つある。
 
 | ビルド | 設定場所 |
 | --- | --- |
 | dx（Hot Reload） | `Dioxus.toml` |
-| cargo（`Run Desktop`、Host、bridge） | 各 crate の `build.rs` と `assets/lapis.ico` |
+| cargo（`Run Desktop`、Host、`lapis-web`） | 各 crate の `build.rs` と `assets/lapis.ico` |
 
 dx は自前でリソースをリンクするため、`build.rs` は `DX_RUSTC` があるときは何もしない。表示名とアイコンを変えるときは `Dioxus.toml` と `build.rs` の両方を揃える。Host の表示名は静的で、インスタンスごとの名前は Task Manager では表現できない。
 
@@ -167,7 +169,7 @@ dx は自前でリソースをリンクするため、`build.rs` は `DX_RUSTC` 
 | Host | `python scripts/check.py host` |
 | 全体とアーキテクチャ | `python scripts/check.py repository architecture` |
 | Web のビルド | `cd apps\web; npm run build` |
-| Host と bridge の結合 | `cargo build -p host -p web-bridge` → `python apps/web/wasm/tests/bridge_smoke.py` |
+| Host と Web の結合 | `cargo build -p host -p lapis-web` → `cargo test -p host --test quic` |
 | launcher と Hot Reload | `python -m unittest discover -s scripts -p test_dev_session.py` |
 | 更新 launcher の適用と起動 | `cargo test -p lapis-launcher` |
 | アプリ側の更新（download・検証・staging・同意） | `cargo test -p lapis` |

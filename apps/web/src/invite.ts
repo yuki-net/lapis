@@ -1,11 +1,16 @@
-/** 同じ公開入口にある Host の WebSocket を解決する。 */
-export function hostWebSocketUrl(pageUrl: string): string {
+/**
+ * 同じ公開入口にある Host の識別子を返す。
+ *
+ * 実際の接続先（WebTransport の URL と証明書ハッシュ）はページが同じ Origin の
+ * `/__webtransport` から取得する。ここで返す値は credential の保存キーと表示に使う
+ * だけで、通信先ではない。
+ */
+export function hostIdentity(pageUrl: string): string {
   const url = new URL(pageUrl);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error("Web の URL が不正です");
   }
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  url.pathname = "/remote";
+  url.pathname = "/";
   url.search = "";
   url.hash = "";
   return url.toString();

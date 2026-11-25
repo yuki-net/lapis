@@ -1,5 +1,5 @@
 import init, { connectionInfo, is_ready, start } from "./generated/wasm/lapis_ui.js";
-import { hostWebSocketUrl, parseInviteFragment, selectClientId } from "./invite.js";
+import { hostIdentity, parseInviteFragment, selectClientId } from "./invite.js";
 
 const root = document.querySelector<HTMLElement>("#app");
 if (root === null) {
@@ -669,7 +669,7 @@ async function connect(
   backend: string,
   taskId: string | null,
 ) {
-  if (url !== hostWebSocketUrl(location.href)) {
+  if (url !== hostIdentity(location.href)) {
     throw new Error("以前の接続先は使用できません。新しい招待リンクを開いてください");
   }
   stashTaskFragment(taskId);
@@ -747,7 +747,7 @@ function hasCredential(url: string): boolean {
 }
 
 function defaultLoginUrl(registry: Registry): string {
-  return lastHost(registry)?.url ?? readLocal(STORAGE.url) ?? hostWebSocketUrl(location.href);
+  return lastHost(registry)?.url ?? readLocal(STORAGE.url) ?? hostIdentity(location.href);
 }
 
 function defaultLoginWorkspace(registry: Registry): string {
@@ -824,7 +824,7 @@ function showLogin(
   });
 
   form.querySelector<HTMLButtonElement>("#oidc-login")?.addEventListener("click", () => {
-    const url = hostWebSocketUrl(location.href);
+    const url = hostIdentity(location.href);
     // boot() が保存済みパスから渡した Workspace を再ログインでも維持する。
     const workspace = defaultWorkspace;
     const token = "";
@@ -1040,7 +1040,7 @@ async function handleInviteFragment(backend: string): Promise<void> {
     return;
   }
   clearFragment();
-  const url = hostWebSocketUrl(location.href);
+  const url = hostIdentity(location.href);
   if (!invite.valid) {
     showLogin(url, "", "招待リンクの形式が正しくありません。Desktop から新しい招待を発行してください。", null);
     return;

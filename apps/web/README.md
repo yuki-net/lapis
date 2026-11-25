@@ -81,4 +81,4 @@ Desktop の設定で Tailscale のアドレスを選んで公開し、コピー�
 
 ## 結合検証
 
-ブラウザーは WebTransport で Host へ直接接続します。Host 側の受け入れとセッション処理は `host/transport/remote` のテストで検証します。ブラウザーからの手動確認手順は [開発時の起動](../../docs/dev.md) を参照してください。
+ブラウザーは WebTransport で Host へ直接接続します。Host 側の受け入れとセッション処理は `host/transport/remote` のテスト、managed Host によるページ公開は `host/app/tests/managed_web_auth.rs` の ignored test（`LAPIS_TEST_WEB_EXECUTABLE` にビルド済み `lapis-web` を指定）で検証します。ブラウザーからの手動確認手順は [開発時の起動](../../docs/dev.md) を参照してください。

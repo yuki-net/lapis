@@ -66,7 +66,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         );
         host.status()?
     } else {
-        copy_binary(root, &bin, "lapis-web-bridge")?;
+        copy_binary(root, &bin, "lapis-web")?;
         let desktop = copy_binary(root, &bin, "lapis")?;
         let hosts = argument_value(&arguments, "--local-host-directory")?
             .map(PathBuf::from)
@@ -239,7 +239,7 @@ fn hot_reload(root: &Path, arguments: &[OsString]) -> Result<i32, Box<dyn std::e
                 "--package",
                 "host",
                 "--package",
-                "web-bridge",
+                "lapis-web",
                 "--package",
                 "extension-runtime",
                 "--bins",
@@ -271,13 +271,13 @@ fn hot_reload(root: &Path, arguments: &[OsString]) -> Result<i32, Box<dyn std::e
                 .join(&extension_host_name),
             bin.join(&extension_host_name),
         )?;
-        let bridge_name = format!("lapis-web-bridge{}", env::consts::EXE_SUFFIX);
+        let web_name = format!("lapis-web{}", env::consts::EXE_SUFFIX);
         fs::copy(
             built
                 .parent()
                 .ok_or("Host build directory is unavailable")?
-                .join(&bridge_name),
-            bin.join(&bridge_name),
+                .join(&web_name),
+            bin.join(&web_name),
         )?;
         let hosts = argument_value(arguments, "--local-host-directory")?
             .map(PathBuf::from)

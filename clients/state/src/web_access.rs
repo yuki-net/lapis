@@ -1,10 +1,10 @@
-//! ローカル Web（ページ配信と bridge）へ接続するための表示情報。
+//! ローカル Web（ページ配信）へ接続するための表示情報。
 //!
 //! アドレスは運用で変わる（Tailscale の IP 変更など）ため、保存値ではなく
 //! 表示のたびに「いま使える候補」から組み立てる。整形だけをここに置き、
-//! 候補の収集（NIC の列挙や bridge の待受）は platform 側の責務にする。
+//! 候補の収集（NIC の列挙）は platform 側の責務にする。
 
-/// Web ページ配信と bridge のアドレス種別。表示順もこの並び。
+/// Web ページ配信のアドレス種別。表示順もこの並び。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum WebAddressKind {
     /// この端末自身（loopback）。
@@ -34,7 +34,7 @@ pub struct WebAddress {
     pub page_scheme: PageScheme,
 }
 
-/// ページ URL の scheme。bridge は常に `ws` / `wss` をページの scheme から決める。
+/// ページ URL の scheme。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PageScheme {
     Http,
@@ -46,13 +46,6 @@ impl PageScheme {
         match self {
             Self::Http => "http",
             Self::Https => "https",
-        }
-    }
-
-    fn websocket_scheme(self) -> &'static str {
-        match self {
-            Self::Http => "ws",
-            Self::Https => "wss",
         }
     }
 }
@@ -71,26 +64,10 @@ impl WebAddress {
         format!("{}://{}:{page_port}/", self.page_scheme.as_str(), self.host)
     }
 
-    /// Web の Host URL。ログインフォームへ入れる bridge の WebSocket。
-    ///
-    /// https のページからは混在コンテンツを避けるため `wss` を使う。
-    pub fn bridge_url(&self, bridge_port: u16) -> String {
-        format!(
-            "{}://{}:{bridge_port}{}",
-            self.page_scheme.websocket_scheme(),
-            self.host,
-            wire_path()
-        )
-    }
-
     /// 同じホストの候補か。ポート違いや重複を除くために使う。
     pub fn same_host(&self, other: &Self) -> bool {
         self.host.eq_ignore_ascii_case(&other.host)
     }
-}
-
-fn wire_path() -> &'static str {
-    wire::REMOTE_WEBSOCKET_PATH
 }
 
 /// URL を、ホスト・scheme・ポート・パスの部品に分けて保持する。
@@ -169,30 +146,20 @@ fn split_authority(authority: &str) -> (String, Option<&str>) {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WebAccess {
     pub page_port: u16,
-    pub bridge_port: u16,
     pub addresses: Vec<WebAddress>,
-    /// bridge が接続情報から読んだ Workspace ID。未接続なら空。
+    /// 接続情報から読んだ Workspace ID。未接続なら空。
     pub workspace_id: Option<String>,
     /// Web で実際に開いているページ URL。Desktop は候補から組み立てるため `None`。
     page: Option<WebUrl>,
-    /// Web で実際に接続している Host URL。Desktop は候補から組み立てるため `None`。
-    bridge: Option<WebUrl>,
 }
 
 impl WebAccess {
-    pub fn new(
-        page_port: u16,
-        bridge_port: u16,
-        addresses: Vec<WebAddress>,
-        workspace_id: Option<String>,
-    ) -> Self {
+    pub fn new(page_port: u16, addresses: Vec<WebAddress>, workspace_id: Option<String>) -> Self {
         Self {
             page_port,
-            bridge_port,
             addresses: deduplicate(addresses),
             workspace_id: workspace_id.filter(|id| !id.trim().is_empty()),
             page: None,
-            bridge: None,
         }
     }
 
@@ -212,17 +179,6 @@ impl WebAccess {
         address.map(|address| address.page_url(self.page_port))
     }
 
-    /// ログインフォームへ入れる Host URL。
-    ///
-    /// Web では実際に接続した URL をそのまま返す。Desktop は選んだ候補と既定ポート
-    /// から組み立てる。
-    pub fn bridge_url(&self, address: Option<&WebAddress>) -> Option<String> {
-        if let Some(bridge) = &self.bridge {
-            return Some(bridge.render("wss", "ws"));
-        }
-        address.map(|address| address.bridge_url(self.bridge_port))
-    }
-
     /// 既定で選ぶ候補。ローカルが無ければ先頭。
     pub fn preferred(&self) -> Option<&WebAddress> {
         self.addresses
@@ -232,7 +188,7 @@ impl WebAccess {
     }
 
     /// 候補が空でも、この端末自身の loopback を表示できるようにする。
-    /// ページ配信や bridge が別端末で動いていても入力すべき URL は変わらない。
+    /// ページ配信が別端末で動いていても入力すべき URL は変わらない。
     pub fn with_loopback_fallback(mut self) -> Self {
         if self.addresses.is_empty() {
             self.addresses
@@ -241,26 +197,17 @@ impl WebAccess {
         self
     }
 
-    /// ブラウザーで開いているページと接続中の Host URL から表示情報を作る。
+    /// ブラウザーで開いているページから表示情報を作る。
     ///
     /// Web ではページ自身が接続先なので、候補はページのホスト1つで足りる。
-    /// URL はホスト・scheme・ポート・パスをそのまま保持し、表示時にページ側の
-    /// ホストを Host URL へ流用したり、省略ポートを既定値へ置き換えたりしない。
-    pub fn from_urls(
-        page_url: Option<&str>,
-        host_url: Option<&str>,
-        workspace_id: Option<String>,
-    ) -> Self {
+    /// URL はホスト・scheme・ポート・パスをそのまま保持し、表示時に省略ポートを
+    /// 既定値へ置き換えたりしない。
+    pub fn from_urls(page_url: Option<&str>, workspace_id: Option<String>) -> Self {
         let page = page_url.and_then(WebUrl::parse);
-        let bridge = host_url.and_then(WebUrl::parse);
         let page_port = page
             .as_ref()
             .and_then(|page| page.port)
             .unwrap_or(wire::WEB_PAGE_PORT);
-        let bridge_port = bridge
-            .as_ref()
-            .and_then(|bridge| bridge.port)
-            .unwrap_or(wire::WEB_BRIDGE_PORT);
         let addresses = page
             .as_ref()
             .map(|page| {
@@ -278,9 +225,8 @@ impl WebAccess {
                 vec![address]
             })
             .unwrap_or_default();
-        let mut access = Self::new(page_port, bridge_port, addresses, workspace_id);
+        let mut access = Self::new(page_port, addresses, workspace_id);
         access.page = page;
-        access.bridge = bridge;
         access
     }
 }
@@ -353,17 +299,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn urls_use_the_bridge_websocket_path_and_page_slash() {
+    fn page_url_ends_with_a_slash() {
         let address = WebAddress::new(WebAddressKind::Tailscale, "100.64.1.23");
         assert_eq!(address.page_url(4747), "http://100.64.1.23:4747/");
-        assert_eq!(address.bridge_url(4757), "ws://100.64.1.23:4757/remote");
     }
 
     #[test]
     fn candidates_are_deduplicated_and_ordered_by_kind() {
         let access = WebAccess::new(
             4747,
-            4757,
             vec![
                 WebAddress::new(WebAddressKind::Tailscale, "100.64.1.23"),
                 WebAddress::new(WebAddressKind::Network, "192.168.1.20"),
@@ -390,7 +334,6 @@ mod tests {
     fn empty_workspace_id_is_not_displayed() {
         let access = WebAccess::new(
             4747,
-            4757,
             vec![WebAddress::new(WebAddressKind::Local, "127.0.0.1")],
             Some("  ".to_owned()),
         );
@@ -399,7 +342,7 @@ mod tests {
 
     #[test]
     fn loopback_fallback_keeps_the_expected_url() {
-        let access = WebAccess::new(4747, 4757, Vec::new(), None).with_loopback_fallback();
+        let access = WebAccess::new(4747, Vec::new(), None).with_loopback_fallback();
         assert_eq!(access.addresses().len(), 1);
         assert_eq!(
             access.addresses()[0].page_url(4747),
@@ -443,7 +386,6 @@ mod tests {
     fn addresses_are_added_after_dedup_without_ports() {
         let access = WebAccess::new(
             4747,
-            4757,
             vec![WebAddress::new(WebAddressKind::Local, "127.0.0.1")],
             None,
         );
@@ -455,64 +397,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn urls_supply_the_page_and_bridge_ports() {
-        let access = WebAccess::from_urls(
-            Some("http://100.64.1.23:4747/repo"),
-            Some("ws://100.64.1.23:4757/remote"),
-            Some("workspace-1".to_owned()),
-        );
-        assert_eq!(access.page_port, 4747);
-        assert_eq!(access.bridge_port, 4757);
-        assert_eq!(access.addresses().len(), 1);
-        let address = access.addresses().first();
-        assert_eq!(
-            address.map(|address| address.host.as_str()),
-            Some("100.64.1.23")
-        );
-        assert_eq!(
-            access.page_url(address).as_deref(),
-            Some("http://100.64.1.23:4747/repo")
-        );
-        assert_eq!(
-            access.bridge_url(address).as_deref(),
-            Some("ws://100.64.1.23:4757/remote")
-        );
-        assert_eq!(access.workspace_id.as_deref(), Some("workspace-1"));
-    }
-
-    /// Host URL はページのホストを流用せず、実際に接続した URL を保つ。
-    #[test]
-    fn bridge_url_keeps_its_own_host_and_scheme() {
-        let access = WebAccess::from_urls(
-            Some("https://web.example/repo"),
-            Some("wss://bridge.example/remote"),
-            None,
-        );
-        let address = access.addresses().first();
-        assert_eq!(
-            access.page_url(address).as_deref(),
-            Some("https://web.example/repo")
-        );
-        assert_eq!(
-            access.bridge_url(address).as_deref(),
-            Some("wss://bridge.example/remote")
-        );
-    }
-
     /// 省略された port は既定値へ置き換えず、そのまま保つ。
     #[test]
     fn omitted_ports_are_not_replaced_in_the_displayed_urls() {
-        let access = WebAccess::from_urls(Some("https://web.example/"), None, None);
+        let access = WebAccess::from_urls(Some("https://web.example/"), None);
         let address = access.addresses().first();
         assert_eq!(access.page_port, wire::WEB_PAGE_PORT);
         assert_eq!(
             access.page_url(address).as_deref(),
             Some("https://web.example/")
-        );
-        assert_eq!(
-            access.bridge_url(address).as_deref(),
-            Some("wss://web.example:4757/remote")
         );
     }
 
@@ -521,7 +414,6 @@ mod tests {
     fn desktop_access_builds_urls_from_the_selected_address() {
         let access = WebAccess::new(
             4747,
-            4757,
             vec![WebAddress::new(WebAddressKind::Local, "127.0.0.1")],
             None,
         );
@@ -530,55 +422,23 @@ mod tests {
             access.page_url(address).as_deref(),
             Some("http://127.0.0.1:4747/")
         );
-        assert_eq!(
-            access.bridge_url(address).as_deref(),
-            Some("ws://127.0.0.1:4757/remote")
-        );
         assert_eq!(access.page_url(None), None);
-        assert_eq!(access.bridge_url(None), None);
     }
 
     #[test]
-    fn https_pages_keep_https_and_use_wss_for_the_bridge() {
-        let access = WebAccess::from_urls(
-            Some("https://lapis.example:4747/repo"),
-            Some("wss://lapis.example:4757/remote"),
-            None,
-        );
-        let address = access.addresses().first();
-        assert_eq!(
-            address.map(|address| address.page_scheme),
-            Some(PageScheme::Https)
-        );
-        assert_eq!(
-            access.page_url(address).as_deref(),
-            Some("https://lapis.example:4747/repo")
-        );
-        assert_eq!(
-            access.bridge_url(address).as_deref(),
-            Some("wss://lapis.example:4757/remote")
-        );
-    }
-
-    #[test]
-    fn plain_pages_use_http_and_ws() {
-        let access = WebAccess::from_urls(Some("http://127.0.0.1:4747/"), None, None);
+    fn plain_pages_use_http() {
+        let access = WebAccess::from_urls(Some("http://127.0.0.1:4747/"), None);
         let address = access.addresses().first();
         assert_eq!(
             address.map(|address| address.page_scheme),
             Some(PageScheme::Http)
         );
-        assert_eq!(
-            access.bridge_url(address).as_deref(),
-            Some("ws://127.0.0.1:4757/remote")
-        );
     }
 
     #[test]
     fn loopback_pages_are_labelled_as_this_device() {
-        let access = WebAccess::from_urls(Some("http://localhost:4747/"), None, None);
+        let access = WebAccess::from_urls(Some("http://localhost:4747/"), None);
         assert_eq!(access.addresses()[0].kind, WebAddressKind::Local);
-        assert_eq!(access.bridge_port, wire::WEB_BRIDGE_PORT);
     }
 
     #[test]

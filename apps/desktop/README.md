@@ -62,7 +62,7 @@ WindowsのRustRoverでは `Run Host` と `Run Desktop`、`Run Desktop (Hot Reloa
 
 Web をブラウザーから使う手順は [開発時の起動](../../docs/dev.md) を参照してください。
 
-managed Host の Web 公開では、Host と同じディレクトリの `lapis-web-bridge` と `web/` の配信ファイルを使用します。開発ランチャーは bridge をビルドして Host と同じ session に配置し、`apps/web/dist` を参照します。Web の利用前に `apps/web` で `npm run build` が必要です。
+managed Host の Web 公開では、Host と同じディレクトリの `lapis-web` と `web/` の配信ファイルを使用します。開発ランチャーはページサーバーをビルドして Host と同じ session に配置し、`apps/web/dist` を参照します。Web の利用前に `apps/web` で `npm run build` が必要です。
 
 `cargo dev` は `target/debug/` のbinaryを使い、開発用の設定・会話・復元状態・Host接続情報を `target/dev-state/` に保存します。他のworktreeや通常起動の保存先とは共有しません。アプリとHostの処理は通常版と同じで、起動引数だけが異なります。明示的に同じファイルやRemote Hostを開いた場合、その実体の共有まで防ぐ仕組みではありません。新しい保存先に既存の個人設定を自動コピーしません。
 

@@ -5236,12 +5236,17 @@ name = "lapis-web"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "client-core",
  "futures-util",
+ "getrandom 0.3.4",
  "notify",
+ "reqwest",
+ "serde",
  "serde_json",
  "sysinfo",
  "tokio",
  "tower-http 0.7.1",
+ "url",
  "winresource",
  "wire",
 ]
@@ -10859,30 +10864,6 @@ dependencies = [
  "workbench",
  "workspace",
  "zeroize",
-]
-
-[[package]]
-name = "web-bridge"
-version = "0.1.0"
-dependencies = [
- "axum",
- "client-core",
- "futures-util",
- "getrandom 0.3.4",
- "quinn",
- "rcgen",
- "reqwest",
- "rustls",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tokio-tungstenite",
- "tokio-util",
- "tower-http 0.7.1",
- "url",
- "winresource",
- "wire",
 ]
 
 [[package]]

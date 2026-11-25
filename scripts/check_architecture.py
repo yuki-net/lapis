@@ -150,8 +150,6 @@ def layer(manifest, root):
 
 # 同名の公開型を許す既知の組。新しい重複は設計の重複として拒否する。
 DUPLICATE_TYPE_ALLOWLIST = {
-    "OidcConfig": {"remote", "web-bridge"},
-    "OidcError": {"remote", "web-bridge"},
 }
 
 PUBLIC_TYPE = re.compile(r"^pub (?:struct|enum|trait) ([A-Za-z_][A-Za-z0-9_]*)", re.M)

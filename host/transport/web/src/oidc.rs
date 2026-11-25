@@ -17,7 +17,7 @@ use axum::{
 use client_core::pkce::{Pkce, authorization_url};
 use serde::Deserialize;
 
-use crate::Bridge;
+use crate::AppState;
 
 const DEFAULT_SCOPES: &str = "openid profile";
 const DEFAULT_PENDING_TTL: Duration = Duration::from_secs(300);
@@ -27,7 +27,7 @@ const MAX_TOKEN_RESPONSE: usize = 1024 * 1024;
 
 /// Web bridge が IdP へリダイレクトするための設定。
 #[derive(Clone, PartialEq, Eq)]
-pub struct OidcConfig {
+pub struct WebOidcConfig {
     pub authorization_endpoint: String,
     pub token_endpoint: String,
     pub client_id: String,
@@ -36,10 +36,10 @@ pub struct OidcConfig {
     pub scopes: Vec<String>,
 }
 
-impl fmt::Debug for OidcConfig {
+impl fmt::Debug for WebOidcConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("OidcConfig")
+            .debug_struct("WebOidcConfig")
             .field("authorization_endpoint", &self.authorization_endpoint)
             .field("token_endpoint", &self.token_endpoint)
             .field("client_id", &self.client_id)
@@ -53,23 +53,23 @@ impl fmt::Debug for OidcConfig {
     }
 }
 
-impl OidcConfig {
-    pub fn from_env() -> Result<Option<Self>, OidcError> {
+impl WebOidcConfig {
+    pub fn from_env() -> Result<Option<Self>, WebOidcError> {
         Self::from_lookup(|name| match std::env::var(name) {
             Ok(value) => Ok(Some(value)),
             Err(VarError::NotPresent) => Ok(None),
-            Err(VarError::NotUnicode(_)) => Err(OidcError::InvalidEnv(name.to_owned())),
+            Err(VarError::NotUnicode(_)) => Err(WebOidcError::InvalidEnv(name.to_owned())),
         })
     }
 
     #[cfg(test)]
-    fn from_values(lookup: impl Fn(&str) -> Option<String>) -> Result<Option<Self>, OidcError> {
+    fn from_values(lookup: impl Fn(&str) -> Option<String>) -> Result<Option<Self>, WebOidcError> {
         Self::from_lookup(|name| Ok(lookup(name)))
     }
 
     fn from_lookup(
-        lookup: impl Fn(&str) -> Result<Option<String>, OidcError>,
-    ) -> Result<Option<Self>, OidcError> {
+        lookup: impl Fn(&str) -> Result<Option<String>, WebOidcError>,
+    ) -> Result<Option<Self>, WebOidcError> {
         let authorization_endpoint = lookup("LAPIS_WEB_OIDC_AUTHORIZATION_ENDPOINT")?;
         let token_endpoint = lookup("LAPIS_WEB_OIDC_TOKEN_ENDPOINT")?;
         let client_id = lookup("LAPIS_WEB_OIDC_CLIENT_ID")?;
@@ -84,15 +84,15 @@ impl OidcConfig {
             return Ok(None);
         }
         let authorization_endpoint =
-            authorization_endpoint.ok_or(OidcError::Missing("authorization endpoint"))?;
-        let token_endpoint = token_endpoint.ok_or(OidcError::Missing("token endpoint"))?;
-        let client_id = client_id.ok_or(OidcError::Missing("client id"))?;
-        let redirect_uri = redirect_uri.ok_or(OidcError::Missing("redirect uri"))?;
+            authorization_endpoint.ok_or(WebOidcError::Missing("authorization endpoint"))?;
+        let token_endpoint = token_endpoint.ok_or(WebOidcError::Missing("token endpoint"))?;
+        let client_id = client_id.ok_or(WebOidcError::Missing("client id"))?;
+        let redirect_uri = redirect_uri.ok_or(WebOidcError::Missing("redirect uri"))?;
         if client_id.trim().is_empty() {
-            return Err(OidcError::Missing("client id"));
+            return Err(WebOidcError::Missing("client id"));
         }
         if client_secret.as_deref() == Some("") {
-            return Err(OidcError::Missing("client secret"));
+            return Err(WebOidcError::Missing("client secret"));
         }
         validate_https_url("authorization endpoint", &authorization_endpoint)?;
         validate_https_url("token endpoint", &token_endpoint)?;
@@ -103,7 +103,7 @@ impl OidcConfig {
             .map(str::to_owned)
             .collect::<Vec<_>>();
         if scopes.is_empty() {
-            return Err(OidcError::Missing("scopes"));
+            return Err(WebOidcError::Missing("scopes"));
         }
         Ok(Some(Self {
             authorization_endpoint,
@@ -116,26 +116,26 @@ impl OidcConfig {
     }
 }
 
-fn validate_https_url(name: &'static str, value: &str) -> Result<(), OidcError> {
+fn validate_https_url(name: &'static str, value: &str) -> Result<(), WebOidcError> {
     if value.chars().any(char::is_control) {
-        return Err(OidcError::InvalidUrl(name));
+        return Err(WebOidcError::InvalidUrl(name));
     }
-    let url = url::Url::parse(value).map_err(|_| OidcError::InvalidUrl(name))?;
+    let url = url::Url::parse(value).map_err(|_| WebOidcError::InvalidUrl(name))?;
     if url.scheme() != "https" {
-        return Err(OidcError::InsecureEndpoint);
+        return Err(WebOidcError::InsecureEndpoint);
     }
     if url.host_str().is_none() {
-        return Err(OidcError::InvalidUrl(name));
+        return Err(WebOidcError::InvalidUrl(name));
     }
     if url.fragment().is_some() {
-        return Err(OidcError::FragmentNotAllowed(name));
+        return Err(WebOidcError::FragmentNotAllowed(name));
     }
     Ok(())
 }
 
 /// 進行中の Authorization Code を state で管理する。
 pub struct OidcBroker {
-    config: OidcConfig,
+    config: WebOidcConfig,
     pending_ttl: Duration,
     pending: Mutex<HashMap<String, Pending>>,
 }
@@ -146,8 +146,16 @@ struct Pending {
     expires_at: Instant,
 }
 
+/// 環境変数から `OidcBroker` を作る。未設定なら `None`。
+pub fn from_env() -> Result<Option<OidcBroker>, WebOidcError> {
+    let Some(config) = WebOidcConfig::from_env()? else {
+        return Ok(None);
+    };
+    Ok(Some(OidcBroker::new(config)))
+}
+
 impl OidcBroker {
-    pub fn new(config: OidcConfig) -> Self {
+    pub fn new(config: WebOidcConfig) -> Self {
         Self {
             config,
             pending_ttl: DEFAULT_PENDING_TTL,
@@ -155,23 +163,19 @@ impl OidcBroker {
         }
     }
 
-    pub fn from_env() -> Result<Option<Self>, OidcError> {
-        Ok(OidcConfig::from_env()?.map(Self::new))
-    }
-
     /// PKCE の verifier / state を作り、Authorization Endpoint の URL を返す。
-    pub fn start(&self) -> Result<String, OidcError> {
+    pub fn start(&self) -> Result<String, WebOidcError> {
         let mut verifier_entropy = [0u8; 32];
         let mut state_entropy = [0u8; 16];
-        getrandom::fill(&mut verifier_entropy).map_err(|_| OidcError::Random)?;
-        getrandom::fill(&mut state_entropy).map_err(|_| OidcError::Random)?;
-        let pkce =
-            Pkce::from_entropy(&verifier_entropy, &state_entropy).map_err(|_| OidcError::Pkce)?;
-        let mut pending = self.pending.lock().map_err(|_| OidcError::State)?;
+        getrandom::fill(&mut verifier_entropy).map_err(|_| WebOidcError::Random)?;
+        getrandom::fill(&mut state_entropy).map_err(|_| WebOidcError::Random)?;
+        let pkce = Pkce::from_entropy(&verifier_entropy, &state_entropy)
+            .map_err(|_| WebOidcError::Pkce)?;
+        let mut pending = self.pending.lock().map_err(|_| WebOidcError::State)?;
         let now = Instant::now();
         pending.retain(|_, value| value.expires_at > now);
         if pending.len() >= MAX_PENDING {
-            return Err(OidcError::TooManyPending);
+            return Err(WebOidcError::TooManyPending);
         }
         let url = authorization_url(
             &self.config.authorization_endpoint,
@@ -185,7 +189,7 @@ impl OidcBroker {
                 .collect::<Vec<_>>(),
             &pkce,
         )
-        .map_err(|_| OidcError::Pkce)?;
+        .map_err(|_| WebOidcError::Pkce)?;
         pending.insert(
             pkce.state().to_owned(),
             Pending {
@@ -197,22 +201,22 @@ impl OidcBroker {
     }
 
     /// state を一度だけ消費し、対応する PKCE verifier を返す。
-    fn take_pending(&self, state: &str) -> Result<String, OidcError> {
-        let mut pending = self.pending.lock().map_err(|_| OidcError::State)?;
-        let value = pending.remove(state).ok_or(OidcError::UnknownState)?;
+    fn take_pending(&self, state: &str) -> Result<String, WebOidcError> {
+        let mut pending = self.pending.lock().map_err(|_| WebOidcError::State)?;
+        let value = pending.remove(state).ok_or(WebOidcError::UnknownState)?;
         if value.expires_at <= Instant::now() {
-            return Err(OidcError::ExpiredState);
+            return Err(WebOidcError::ExpiredState);
         }
         Ok(value.verifier)
     }
 
     /// Authorization Code を token endpoint で ID Token と交換する。
-    async fn exchange(&self, code: &str, verifier: &str) -> Result<String, OidcError> {
+    async fn exchange(&self, code: &str, verifier: &str) -> Result<String, WebOidcError> {
         let client = reqwest::Client::builder()
             .timeout(EXCHANGE_TIMEOUT)
             .redirect(reqwest::redirect::Policy::none())
             .build()
-            .map_err(|_| OidcError::HttpClient)?;
+            .map_err(|_| WebOidcError::HttpClient)?;
         let form = [
             ("grant_type", "authorization_code"),
             ("code", code),
@@ -224,20 +228,23 @@ impl OidcBroker {
         if let Some(secret) = self.config.client_secret.as_deref() {
             request = request.basic_auth(&self.config.client_id, Some(secret));
         }
-        let mut response = request.send().await.map_err(|_| OidcError::TokenRequest)?;
+        let mut response = request
+            .send()
+            .await
+            .map_err(|_| WebOidcError::TokenRequest)?;
         if !response.status().is_success() {
-            return Err(OidcError::TokenStatus(response.status().as_u16()));
+            return Err(WebOidcError::TokenStatus(response.status().as_u16()));
         }
         let body = read_limited(&mut response).await?;
         let token: TokenResponse =
-            serde_json::from_slice(&body).map_err(|_| OidcError::TokenResponse)?;
+            serde_json::from_slice(&body).map_err(|_| WebOidcError::TokenResponse)?;
         if token.error.is_some() {
-            return Err(OidcError::TokenRejected);
+            return Err(WebOidcError::TokenRejected);
         }
         token
             .id_token
             .filter(|value| !value.is_empty())
-            .ok_or(OidcError::MissingIdToken)
+            .ok_or(WebOidcError::MissingIdToken)
     }
 }
 
@@ -248,21 +255,21 @@ struct TokenResponse {
 }
 
 /// 応答本文を上限付きで読み切る。
-async fn read_limited(response: &mut reqwest::Response) -> Result<Vec<u8>, OidcError> {
+async fn read_limited(response: &mut reqwest::Response) -> Result<Vec<u8>, WebOidcError> {
     if response
         .content_length()
         .is_some_and(|length| length > MAX_TOKEN_RESPONSE as u64)
     {
-        return Err(OidcError::TokenResponseTooLarge);
+        return Err(WebOidcError::TokenResponseTooLarge);
     }
     let mut body = Vec::new();
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|_| OidcError::TokenRequest)?
+        .map_err(|_| WebOidcError::TokenRequest)?
     {
         if body.len() + chunk.len() > MAX_TOKEN_RESPONSE {
-            return Err(OidcError::TokenResponseTooLarge);
+            return Err(WebOidcError::TokenResponseTooLarge);
         }
         body.extend_from_slice(&chunk);
     }
@@ -270,7 +277,7 @@ async fn read_limited(response: &mut reqwest::Response) -> Result<Vec<u8>, OidcE
 }
 
 #[derive(Debug)]
-pub enum OidcError {
+pub enum WebOidcError {
     Missing(&'static str),
     InsecureEndpoint,
     InvalidEnv(String),
@@ -291,7 +298,7 @@ pub enum OidcError {
     MissingIdToken,
 }
 
-impl fmt::Display for OidcError {
+impl fmt::Display for WebOidcError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Missing(field) => write!(formatter, "OIDC {field} is not configured"),
@@ -322,11 +329,11 @@ impl fmt::Display for OidcError {
     }
 }
 
-impl Error for OidcError {}
+impl Error for WebOidcError {}
 
 /// `/auth/oidc/start`。OIDC が未設定なら 404 を返す。
-pub async fn start(State(bridge): State<Bridge>) -> Response {
-    let Some(broker) = bridge.oidc.as_ref() else {
+pub async fn start(State(state): State<AppState>) -> Response {
+    let Some(broker) = state.oidc.as_ref() else {
         return StatusCode::NOT_FOUND.into_response();
     };
     match broker.start() {
@@ -354,11 +361,8 @@ pub struct CallbackQuery {
 }
 
 /// `/auth/oidc/callback`。code を ID Token と交換し、opener へ postMessage する。
-pub async fn callback(
-    State(bridge): State<Bridge>,
-    Query(query): Query<CallbackQuery>,
-) -> Response {
-    let Some(broker) = bridge.oidc.as_ref() else {
+pub async fn callback(State(app): State<AppState>, Query(query): Query<CallbackQuery>) -> Response {
+    let Some(broker) = app.oidc.as_ref() else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let Some(state) = query.state.filter(|value| !value.is_empty()) else {
@@ -379,7 +383,7 @@ pub async fn callback(
         return StatusCode::BAD_REQUEST.into_response();
     };
     match broker.exchange(&code, &verifier).await {
-        Ok(id_token) => completion_page(&bridge.origin, &id_token),
+        Ok(id_token) => completion_page(&app.oidc_origin, &id_token),
         Err(error) => {
             eprintln!("OIDC token 交換に失敗しました: {error}");
             StatusCode::BAD_GATEWAY.into_response()
@@ -454,8 +458,8 @@ mod tests {
 
     use super::*;
 
-    fn config() -> OidcConfig {
-        OidcConfig {
+    fn config() -> WebOidcConfig {
+        WebOidcConfig {
             authorization_endpoint: "https://idp.example/authorize".to_owned(),
             token_endpoint: "https://idp.example/token".to_owned(),
             client_id: "lapis-web".to_owned(),
@@ -551,19 +555,20 @@ mod tests {
 
     #[test]
     fn unset_oidc_is_disabled() {
-        assert_eq!(OidcConfig::from_values(lookup(&[])).unwrap(), None);
+        assert_eq!(WebOidcConfig::from_values(lookup(&[])).unwrap(), None);
     }
 
     #[test]
     fn partial_config_is_rejected() {
-        let error = OidcConfig::from_values(lookup(&[("LAPIS_WEB_OIDC_CLIENT_ID", "lapis-web")]))
-            .unwrap_err();
-        assert!(matches!(error, OidcError::Missing(_)));
+        let error =
+            WebOidcConfig::from_values(lookup(&[("LAPIS_WEB_OIDC_CLIENT_ID", "lapis-web")]))
+                .unwrap_err();
+        assert!(matches!(error, WebOidcError::Missing(_)));
     }
 
     #[test]
     fn missing_token_endpoint_is_rejected() {
-        let error = OidcConfig::from_values(lookup(&[
+        let error = WebOidcConfig::from_values(lookup(&[
             (
                 "LAPIS_WEB_OIDC_AUTHORIZATION_ENDPOINT",
                 "https://idp.example/authorize",
@@ -575,12 +580,12 @@ mod tests {
             ),
         ]))
         .unwrap_err();
-        assert!(matches!(error, OidcError::Missing("token endpoint")));
+        assert!(matches!(error, WebOidcError::Missing("token endpoint")));
     }
 
     #[test]
     fn http_endpoint_is_rejected() {
-        let error = OidcConfig::from_values(lookup(&[
+        let error = WebOidcConfig::from_values(lookup(&[
             (
                 "LAPIS_WEB_OIDC_AUTHORIZATION_ENDPOINT",
                 "http://idp.example/authorize",
@@ -593,12 +598,12 @@ mod tests {
             ),
         ]))
         .unwrap_err();
-        assert!(matches!(error, OidcError::InsecureEndpoint));
+        assert!(matches!(error, WebOidcError::InsecureEndpoint));
     }
 
     #[test]
     fn http_token_endpoint_is_rejected() {
-        let error = OidcConfig::from_values(lookup(&[
+        let error = WebOidcConfig::from_values(lookup(&[
             (
                 "LAPIS_WEB_OIDC_AUTHORIZATION_ENDPOINT",
                 "https://idp.example/authorize",
@@ -611,7 +616,7 @@ mod tests {
             ),
         ]))
         .unwrap_err();
-        assert!(matches!(error, OidcError::InsecureEndpoint));
+        assert!(matches!(error, WebOidcError::InsecureEndpoint));
     }
 
     #[test]
@@ -631,21 +636,21 @@ mod tests {
                 "https://host.example/callback".to_owned(),
             ),
         ];
-        let error = OidcConfig::from_values(env_lookup(&values)).unwrap_err();
-        assert!(matches!(error, OidcError::Missing("client id")));
+        let error = WebOidcConfig::from_values(env_lookup(&values)).unwrap_err();
+        assert!(matches!(error, WebOidcError::Missing("client id")));
     }
 
     #[test]
     fn empty_client_secret_is_rejected() {
         let mut values = env_values("https://idp.example/token");
         values.push(("LAPIS_WEB_OIDC_CLIENT_SECRET", String::new()));
-        let error = OidcConfig::from_values(env_lookup(&values)).unwrap_err();
-        assert!(matches!(error, OidcError::Missing("client secret")));
+        let error = WebOidcConfig::from_values(env_lookup(&values)).unwrap_err();
+        assert!(matches!(error, WebOidcError::Missing("client secret")));
     }
 
     #[test]
     fn fragment_endpoint_is_rejected() {
-        let error = OidcConfig::from_values(lookup(&[
+        let error = WebOidcConfig::from_values(lookup(&[
             (
                 "LAPIS_WEB_OIDC_AUTHORIZATION_ENDPOINT",
                 "https://idp.example/authorize#fragment",
@@ -658,12 +663,12 @@ mod tests {
             ),
         ]))
         .unwrap_err();
-        assert!(matches!(error, OidcError::FragmentNotAllowed(_)));
+        assert!(matches!(error, WebOidcError::FragmentNotAllowed(_)));
     }
 
     #[test]
     fn newline_endpoint_is_rejected() {
-        let error = OidcConfig::from_values(lookup(&[
+        let error = WebOidcConfig::from_values(lookup(&[
             (
                 "LAPIS_WEB_OIDC_AUTHORIZATION_ENDPOINT",
                 "https://idp.example/authorize\n",
@@ -676,7 +681,7 @@ mod tests {
             ),
         ]))
         .unwrap_err();
-        assert!(matches!(error, OidcError::InvalidUrl(_)));
+        assert!(matches!(error, WebOidcError::InvalidUrl(_)));
     }
 
     #[test]
@@ -694,7 +699,7 @@ mod tests {
                 );
             }
         }
-        assert!(matches!(broker.start(), Err(OidcError::TooManyPending)));
+        assert!(matches!(broker.start(), Err(WebOidcError::TooManyPending)));
     }
 
     #[test]
@@ -724,7 +729,7 @@ mod tests {
         assert_eq!(verifier.len(), 43);
         assert!(matches!(
             broker.take_pending(&state),
-            Err(OidcError::UnknownState)
+            Err(WebOidcError::UnknownState)
         ));
     }
 
@@ -740,7 +745,7 @@ mod tests {
         );
         assert!(matches!(
             broker.take_pending("expired"),
-            Err(OidcError::ExpiredState)
+            Err(WebOidcError::ExpiredState)
         ));
         assert!(broker.pending.lock().unwrap().is_empty());
     }
@@ -804,7 +809,7 @@ mod tests {
         let broker = OidcBroker::new(config);
         assert!(matches!(
             broker.exchange("code-1", "verifier-1").await,
-            Err(OidcError::TokenStatus(400))
+            Err(WebOidcError::TokenStatus(400))
         ));
     }
 
@@ -820,7 +825,7 @@ mod tests {
         let broker = OidcBroker::new(config);
         assert!(matches!(
             broker.exchange("code-1", "verifier-1").await,
-            Err(OidcError::TokenRejected)
+            Err(WebOidcError::TokenRejected)
         ));
     }
 
@@ -836,7 +841,7 @@ mod tests {
         let broker = OidcBroker::new(config);
         assert!(matches!(
             broker.exchange("code-1", "verifier-1").await,
-            Err(OidcError::MissingIdToken)
+            Err(WebOidcError::MissingIdToken)
         ));
     }
 
@@ -852,7 +857,7 @@ mod tests {
         let broker = OidcBroker::new(config);
         assert!(matches!(
             broker.exchange("code-1", "verifier-1").await,
-            Err(OidcError::TokenResponseTooLarge)
+            Err(WebOidcError::TokenResponseTooLarge)
         ));
     }
 

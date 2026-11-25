@@ -63,7 +63,7 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 ### `host/gateway` を作らない
 
 - Web は Host と同一プロセスに同梱せず、Client が Host へ直接接続する現行構成を維持する。`host/gateway` は作らない。
-- 理由: gateway が必要になるのは複数 Host の集約やブラウザーからの認証終端を分離する場合であり、現時点の Web は `web-bridge` と Remote transport で要件を満たしている。
+- 理由: gateway が必要になるのは複数 Host の集約やブラウザーからの認証終端を分離する場合であり、現時点の Web は Host の WebTransport と Remote transport で要件を満たしている。
 - 複数 Host の集約や TLS 終端の分離が必要になった時点で、`host/gateway` の新設を別途判断する。
 
 ## Runtime と接続の契約

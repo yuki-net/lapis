@@ -1,10 +1,12 @@
 //! ビルド済みの Web UI を配信する。`--dev` では `.rs` の変更で Wasm を作り直し、ブラウザーを再読み込みさせる。
+//! ブラウザーへ WebTransport の接続先を返し、OIDC の受け口も持つ。
 
 use std::{
     convert::Infallible,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     process::Stdio,
+    sync::Arc,
     time::Duration,
 };
 
@@ -27,6 +29,8 @@ use tokio::{
     time::timeout,
 };
 use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
+
+mod oidc;
 
 const DEFAULT_LISTEN: &str = "127.0.0.1:4747";
 /// ブラウザーが WebTransport の接続先を取得するパス。
@@ -56,6 +60,10 @@ struct AppState {
     reload: broadcast::Sender<()>,
     /// Host が書き出した接続情報。ブラウザーへは証明書ハッシュだけを返す。
     connection_info: Option<PathBuf>,
+    /// OIDC ログインを使う場合だけ設定される。
+    oidc: Option<Arc<oidc::OidcBroker>>,
+    /// OIDC 完了ページが `postMessage` する Origin。
+    oidc_origin: String,
 }
 
 struct Options {
@@ -64,6 +72,11 @@ struct Options {
     root: PathBuf,
     dev: bool,
     connection_info: Option<PathBuf>,
+    /// OIDC 完了ページが `postMessage` する Origin。既定は 127.0.0.1 の待受。
+    origin: String,
+    /// 親プロセスが Web 公開を所有する場合の管理モード。
+    /// 待受開始後に `ready=` を出力し、標準入力の終了で停止する。
+    managed: bool,
 }
 
 impl Options {
@@ -76,11 +89,14 @@ impl Options {
             root: PathBuf::from("."),
             dev: false,
             connection_info: None,
+            origin: "http://127.0.0.1:4747".to_owned(),
+            managed: false,
         };
         let mut values = arguments.iter();
         while let Some(argument) = values.next() {
             match argument.as_str() {
                 "--dev" => options.dev = true,
+                "--managed" => options.managed = true,
                 "--host" => {
                     // Vite と同じく、指定なしで全インターフェースを待ち受ける。
                     options.listen = SocketAddr::from(([0, 0, 0, 0], options.listen.port()));
@@ -96,6 +112,9 @@ impl Options {
                 }
                 "--root" => {
                     options.root = PathBuf::from(values.next().ok_or("--root に値がありません")?);
+                }
+                "--origin" => {
+                    options.origin = values.next().ok_or("--origin に値がありません")?.clone();
                 }
                 "--connection-info" => {
                     options.connection_info = Some(PathBuf::from(
@@ -136,11 +155,17 @@ async fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let (reload, _) = broadcast::channel(16);
+    let oidc = oidc::from_env()?;
+    if oidc.is_some() {
+        eprintln!("web OIDC login enabled");
+    }
     let state = AppState {
         dist: dist.clone(),
         dev: options.dev,
         reload: reload.clone(),
         connection_info: options.connection_info.clone(),
+        oidc: oidc.map(Arc::new),
+        oidc_origin: options.origin.clone(),
     };
 
     // 監視は配信の間ずっと生きている必要がある。
@@ -159,6 +184,8 @@ async fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
         .route("/{host}/{workspace}", get(index))
         .route("/{host}/{workspace}/", get(index))
         .route(WEBTRANSPORT_ENDPOINT_PATH, get(webtransport_endpoint))
+        .route("/auth/oidc/start", get(oidc::start))
+        .route("/auth/oidc/callback", get(oidc::callback))
         .route("/__reload", get(reload_events))
         .route("/__reload.js", get(reload_script))
         .with_state(state)
@@ -178,6 +205,19 @@ async fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
 
     let listener = TcpListener::bind(options.listen).await?;
     let address = listener.local_addr()?;
+    if options.managed {
+        // 親プロセスは先頭行の `ready=` を待ち、アドレスを公開先として扱う。
+        use std::io::Write;
+        println!("ready={address}");
+        std::io::stdout().flush()?;
+        // 親が終了したら、接続中の socket が残っていても公開を止める。
+        std::thread::Builder::new()
+            .name("lapis-web-parent".into())
+            .spawn(|| {
+                let _ = std::io::copy(&mut std::io::stdin().lock(), &mut std::io::sink());
+                std::process::exit(0);
+            })?;
+    }
     print_addresses(address);
     if options.dev {
         eprintln!("web: watching {}", WATCHED_DIRECTORIES.join(", "));
