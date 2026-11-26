@@ -66,7 +66,7 @@ class TestPathRouting(unittest.TestCase):
         )
         self.assertEqual(
             jobs_for_paths(["extensions/acp/contract/src/lib.rs"]),
-            {"repository", "rust_core", "host", "desktop", "web"},
+            {"repository", "rust_core", "host", "desktop", "web", "extensions"},
         )
 
     def test_moved_git_and_acp_adapters_keep_rust_surfaces(self):
@@ -82,7 +82,7 @@ class TestPathRouting(unittest.TestCase):
 
     def test_new_extension_paths_run_repository_and_all_rust_surfaces(self):
         """拡張の事前登録がなくても、コードと宣言・アセットを検証する。"""
-        expected = {"repository", "rust_core", "host", "desktop", "web"}
+        expected = {"repository", "rust_core", "host", "desktop", "web", "extensions"}
         for path in (
             "extensions/new-plugin/manifest.json",
             "extensions/new-plugin/host/src/lib.rs",
@@ -94,7 +94,23 @@ class TestPathRouting(unittest.TestCase):
             self.assertEqual(jobs_for_paths([path]), expected, path)
 
     def test_extension_packaging_scripts_also_run_host_tests(self):
-        self.assertEqual(jobs_for_paths(["scripts/extensions/package.py"]), {"repository", "rust_core", "host"})
+        self.assertEqual(jobs_for_paths(["scripts/extensions/package.py"]), {"repository", "rust_core", "host", "extensions"})
+
+    def test_extension_runtime_and_process_adapters_run_the_extensions_route(self):
+        """拡張の native 実行と PTY の実装は extensions route でも検証する。"""
+        expected = {"rust_core", "host", "desktop", "extensions"}
+        for path in (
+            "host/adapters/extension-runtime/src/lib.rs",
+            "host/adapters/process/src/lib.rs",
+        ):
+            self.assertEqual(jobs_for_paths([path]), expected, path)
+
+    def test_examples_run_repository_and_the_routes_that_build_them(self):
+        """例は rust_core と extensions route がビルドし、repository が検査する。"""
+        self.assertEqual(
+            jobs_for_paths(["examples/native-extension/src/lib.rs"]),
+            {"repository", "rust_core", "extensions"},
+        )
 
     def test_terminal_extension_runs_only_the_surfaces_it_affects(self):
         """Terminal 拡張は契約と実装で影響する surface が分かれる。"""
@@ -106,11 +122,11 @@ class TestPathRouting(unittest.TestCase):
         # 独立ロジックは native と component の両経路で使う。
         self.assertEqual(
             jobs_for_paths(["extensions/terminal/logic/src/lib.rs"]),
-            {"repository", "rust_core", "host", "desktop", "web"},
+            {"repository", "rust_core", "host", "desktop", "web", "extensions"},
         )
         self.assertEqual(
             jobs_for_paths(["protocol/extension-api/native/src/lib.rs"]),
-            {"rust_core", "host", "desktop"},
+            {"rust_core", "host", "desktop", "extensions"},
         )
         for path in (
             "extensions/terminal/adapter/src/lib.rs",

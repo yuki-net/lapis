@@ -56,6 +56,10 @@ PATH_RULES = [
     (["host/extensions-entry/"], {"rust_core", "host", "desktop"}),
     (["host/runtime/"], {"rust_core", "host", "desktop"}),
     (["host/domains/"], {"rust_core", "host", "desktop"}),
+    # 拡張の native 実行と PTY は extensions route が持つため、その実装を
+    # 含む adapter だけを先に拾う。
+    (["host/adapters/extension-runtime/", "host/adapters/process/"],
+     {"rust_core", "host", "desktop", "extensions"}),
     (["host/adapters/"], {"rust_core", "host", "desktop"}),
     (["host/transport/web/"], {"rust_core", "host", "desktop", "web"}),
     (["host/transport/"], {"rust_core", "host", "desktop"}),
@@ -67,8 +71,8 @@ PATH_RULES = [
     # Protocol / Client transport。
     # 領域の README はコード変更ではないため repository だけで検証する。
     (["protocol/README.md", "protocol/extension-api/README.md"], {"repository"}),
-    (["protocol/extension-api/native/"], {"rust_core", "host", "desktop"}),
-    (["protocol/extension-api/"], {"rust_core", "host", "desktop", "web"}),
+    (["protocol/extension-api/native/"], {"rust_core", "host", "desktop", "extensions"}),
+    (["protocol/extension-api/"], {"rust_core", "host", "desktop", "web", "extensions"}),
     (["protocol/types/"], {"rust_core", "host", "desktop", "web"}),
     (["protocol/wire/client-api/"], {"rust_core", "host", "desktop", "web"}),
     (["protocol/wire/dto/"], {"rust_core", "host", "desktop", "web"}),
@@ -90,8 +94,12 @@ PATH_RULES = [
     (["extensions/git/adapter/", "extensions/acp/adapter/"],
      {"rust_core", "host", "desktop"}),
     # 未登録の拡張・宣言・アセットも Client へ影響し得るため、既知の Host
-    # 専用箇所以外は広く検証する。
-    (["extensions/"], {"repository", "rust_core", "host", "desktop", "web"}),
+    # 専用箇所以外は広く検証する。native / PTY は extensions route も見る。
+    (["extensions/"], {"repository", "rust_core", "host", "desktop", "web", "extensions"}),
+
+    # 拡張の例は rust_core がビルドし、extensions route が native / PTY を
+    # 実行する。fixture 自体は repository の検査対象でもある。
+    (["examples/"], {"repository", "rust_core", "extensions"}),
 
     # Mobile。
     (["apps/mobile/"], {"mobile"}),
@@ -105,7 +113,7 @@ PATH_RULES = [
 
     # CI・scripts。
     # package 生成と Host の読み込みを同じ fixture で検証する。
-    (["scripts/extensions/"], {"repository", "rust_core", "host"}),
+    (["scripts/extensions/"], {"repository", "rust_core", "host", "extensions"}),
     (["scripts/"], {"repository"}),
     # 自動開発フロー。仕様・policy・手順・reviewer のコードは repository で検証する。
     (["automation/", "reviewer/"], {"repository"}),

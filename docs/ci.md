@@ -137,7 +137,8 @@ python -m scripts.ci.policy --base origin/develop
 | `lint` | linux, windows | clippy。Linux は backend、Windows は workspace 全体（`cfg(windows)` を検査するため全 OS）。診断は JSON で集め、注釈とサマリにする |
 | `dev_commands` | windows | 開発起動コマンド・`dev-session` のテスト |
 | `rust_core` | linux, windows | backend 全体の architecture / test と外部拡張 component |
-| `host` | windows | Host の architecture / test / build と承認済み拡張 PTY・Web 公開 |
+| `host` | windows | Host の architecture / test / build と Web 公開 |
+| `extensions` | windows | 拡張の native / PTY 検証（fixture のビルド、`extension-runtime`、`local-process` の PTY、PTY 拡張） |
 | `desktop` | windows | Desktop の architecture / test / build と GPUI patch 検証 |
 | `mobile` | linux, windows | KMP のユニットテストと Android ビルド（Linux では `./gradlew`、Windows では `gradlew.bat`） |
 | `web` | linux, windows | Web のビルドと接続処理テスト（`{npm}` が OS の実行ファイル名になる） |

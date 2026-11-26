@@ -11,6 +11,7 @@ from scripts.ci.model import OS_LABELS, RUNNERS, Route
 from scripts.ci.routes import (
     desktop,
     dev_commands,
+    extensions,
     format as format_route,
     host,
     lint,
@@ -29,6 +30,7 @@ ORDER = (
     "dev_commands",
     "rust_core",
     "host",
+    "extensions",
     "desktop",
     "mobile",
     "web",
@@ -44,6 +46,7 @@ ROUTES: dict[str, Route] = {
         dev_commands,
         rust_core,
         host,
+        extensions,
         desktop,
         mobile,
         web,
