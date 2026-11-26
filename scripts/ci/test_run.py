@@ -252,6 +252,121 @@ class RunTests(unittest.TestCase):
         self.assertIn("| step | result | time |", buffer.getvalue())
 
 
+class StepPathsTests(unittest.TestCase):
+    """`Step.paths` で変更 path に無関係な step を skip する。"""
+
+    def test_step_without_paths_always_runs(self):
+        step = Step("always", [sys.executable, "-c", "pass"])
+        self.assertTrue(run.step_paths_match(step, []))
+        self.assertTrue(run.step_paths_match(step, ["host/app/src/client.rs"]))
+        self.assertTrue(run.step_paths_match(step, None))
+
+    def test_step_paths_skip_when_no_changed_path_matches(self):
+        step = Step(
+            "web", [sys.executable, "-c", "pass"],
+            paths=("host/transport/web/", "host/app/src/web_publisher.rs"),
+        )
+        self.assertFalse(run.step_paths_match(step, ["host/app/src/client.rs"]))
+        self.assertFalse(run.step_paths_match(step, []))
+
+    def test_step_paths_run_when_a_changed_path_matches(self):
+        step = Step(
+            "web", [sys.executable, "-c", "pass"],
+            paths=("host/transport/web/", "host/app/src/web_publisher.rs"),
+        )
+        self.assertTrue(run.step_paths_match(step, ["host/transport/web/src/main.rs"]))
+        self.assertTrue(run.step_paths_match(step, ["host/app/src/web_publisher.rs"]))
+
+    def test_unknown_base_runs_every_step(self):
+        """base を解決できないときは安全側に倒して全 step を実行する。"""
+        step = Step("web", [sys.executable, "-c", "pass"], paths=("host/transport/web/",))
+        self.assertTrue(run.step_paths_match(step, None))
+
+    def test_paths_skip_is_reported_as_a_skipped_step(self):
+        route = route_with(
+            Step("web", [sys.executable, "-c", "pass"], paths=("host/transport/web/",)),
+            Step("always", [sys.executable, "-c", "pass"]),
+        )
+
+        def fake_step(_route, step, _log, _writer=None, _os_name=None, _temp=None):
+            return {"name": step.name, "ok": True, "seconds": 0.0, "output": ""}
+
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(report, "on_github", return_value=False), \
+             patch.object(run, "run_step", side_effect=fake_step) as step_runner, \
+             patch.object(report, "notice") as notice, \
+             patch.dict(os.environ, {state.ENV: directory}):
+            payload = run.execute(
+                route, None, quiet=True, changed=["host/app/src/client.rs"]
+            )
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(
+            payload["steps"][0],
+            {"name": "web", "ok": True, "skipped": True, "seconds": 0.0},
+        )
+        self.assertNotIn("skipped", payload["steps"][1])
+        self.assertEqual([call.args[1].name for call in step_runner.call_args_list], ["always"])
+        self.assertTrue(
+            any("skip web (no matching path)" in str(call.args[0]) for call in notice.call_args_list)
+        )
+
+    def test_all_steps_run_when_changed_paths_are_unknown(self):
+        route = route_with(
+            Step("web", [sys.executable, "-c", "pass"], paths=("host/transport/web/",)),
+        )
+
+        def fake_step(_route, step, _log, _writer=None, _os_name=None, _temp=None):
+            return {"name": step.name, "ok": True, "seconds": 0.0, "output": ""}
+
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(report, "on_github", return_value=False), \
+             patch.object(run, "run_step", side_effect=fake_step) as step_runner, \
+             patch.dict(os.environ, {state.ENV: directory}):
+            payload = run.execute(route, None, quiet=True, changed=None)
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(step_runner.call_count, 1)
+        self.assertNotIn("skipped", payload["steps"][0])
+
+    def test_select_changed_returns_none_without_a_base(self):
+        with patch.object(run.paths, "changed_paths") as changed:
+            self.assertIsNone(run.select_changed(None))
+            self.assertIsNone(run.select_changed(""))
+        changed.assert_not_called()
+
+    def test_select_changed_uses_the_committed_diff_only(self):
+        with patch.object(run.paths, "changed_paths", return_value=["a"]) as changed:
+            self.assertEqual(run.select_changed("origin/develop"), ["a"])
+        changed.assert_called_once_with("origin/develop", include_worktree=False)
+
+    def test_main_passes_base_diff_to_execute(self):
+        route = route_for_os("linux")
+        with patch.object(run.report, "on_github", return_value=False), \
+             patch.object(run, "local_os", return_value="linux"), \
+             patch.object(run, "route_for", return_value=route), \
+             patch.object(run, "missing_prerequisites", return_value=[]), \
+             patch.object(run.paths, "changed_paths", return_value=["host/app/src/client.rs"]), \
+             patch.object(run, "execute", return_value={"route": "test", "ok": True, "steps": []}) as execute:
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(invoke(["test", "--base", "origin/develop"]), 0)
+        self.assertEqual(execute.call_args.kwargs["changed"], ["host/app/src/client.rs"])
+
+    def test_main_defaults_base_to_base_sha_env(self):
+        route = route_for_os("linux")
+        with patch.object(run.report, "on_github", return_value=False), \
+             patch.object(run, "local_os", return_value="linux"), \
+             patch.object(run, "route_for", return_value=route), \
+             patch.object(run, "missing_prerequisites", return_value=[]), \
+             patch.object(run.paths, "changed_paths", return_value=None) as changed, \
+             patch.object(run, "execute", return_value={"route": "test", "ok": True, "steps": []}) as execute, \
+             patch.dict(os.environ, {"BASE_SHA": "abc123"}):
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(invoke(["test"]), 0)
+        changed.assert_called_once_with("abc123", include_worktree=False)
+        self.assertIsNone(execute.call_args.kwargs["changed"])
+
+
 def cargo_message(level="warning", file="src/lib.rs", line=1, column=1):
     return json.dumps({
         "reason": "compiler-message",

@@ -56,6 +56,34 @@ python -m scripts.ci.plan --selected --reason
 - CI では作業ツリーが clean なので、既定は実質 PR の差分だけになる
 - **CI 定義（`scripts/ci/`、`scripts/check.py`、`.github/workflows/`）の変更は全 route**。どの route が壊れたか分からないため
 
+## 変更 path に無関係な step の skip（`Step.paths`）
+
+route は選ばれても、その中の step が変更 path に関係しないことがある。`Step.paths` に
+パターンを書くと、**どれかの変更 path がどれかのパターンに一致したときだけ**その step を実行する。
+パターンの一致判定は `scripts/ci/paths.py` の `matches`（route の選択と同じ規則）を使う。
+
+```python
+Step(
+    "Build web page server",
+    ["cargo", "build", "--locked", "-p", "lapis-web"],
+    paths=("host/transport/web/", "host/app/src/web_publisher.rs", "apps/web/"),
+)
+```
+
+- `paths` が空（既定）の step は常に実行する。Format / Lint / Repository と、
+  `Check architecture` / `Test Host` のような「その route の本体」は絞らない
+- 変更 path が 1 つも一致しなければ、`skip <step> (no matching path)` を notice に出し、
+  `requires` で skip したときと同じ形（`skipped: True`, `seconds: 0.0`, `output: ""`）で結果に残す
+- **base が無い・解決できないときは全 step を実行する**（安全側）。`workflow_dispatch` の
+  `full` は `BASE_SHA` が空になるので全 step が走る
+- base は `.github/workflows/ci.yml` が `Run <route>` の `BASE_SHA` に
+  `github.event.pull_request.base.sha || github.event.before` を渡し、`run.py` が
+  `changed_paths(base, include_worktree=False)` を 1 回だけ計算する
+- 差分は three-dot（merge-base 基準）なので、`paths` を使う route は `checkout_depth=0` で
+  全履歴を取る
+- 絞るのは入力が本当に分かれている step だけにする。その変更に必要な検証まで落とすなら
+  `paths` を書かない（例: Extensions は PTY 拡張の build / test だけ）
+
 ## GitHub での起動と範囲
 
 ```yaml
@@ -188,6 +216,7 @@ python -m scripts.ci.run repository              # route 全体
 python -m scripts.ci.run rust_core --step lint   # step を絞る
 python -m scripts.ci.run desktop --json          # エージェント向け（ログを抑制）
 python -m scripts.ci.run host --os windows       # CI と違う OS として実行する
+python -m scripts.ci.run host --base origin/develop  # Step.paths を差分で判定する
 python -m scripts.ci.measure host                # step 別の所要時間を並べる
 ```
 
