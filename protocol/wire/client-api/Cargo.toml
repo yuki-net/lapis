@@ -6,8 +6,8 @@ description.workspace = true
 license.workspace = true
 
 [dependencies]
-git-contract = { path = "../../../extensions/git/contract" }
-terminal = { package = "terminal-contract", path = "../../../extensions/terminal/contract" }
+git = { path = "../../types/git" }
+terminal = { package = "terminal-types", path = "../../types/terminal" }
 process = { path = "../../../protocol/types/process" }
 extension-ui-contract = { path = "../../../protocol/types/extension-ui" }
 task = { path = "../../../protocol/types/task" }

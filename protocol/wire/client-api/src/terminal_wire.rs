@@ -1,6 +1,6 @@
 //! Terminal 専用 wire。
 //!
-//! Terminal の型は `terminal-contract` を正本とし、ここでは Host と Client の間で
+//! Terminal の型は `protocol/types/terminal` を正本とし、ここでは Host と Client の間で
 //! 往復する要求・応答の形だけを定義する。要求は Workspace と Workspace 相対 path
 //! だけを運び、Host の絶対 path を wire に載せない。応答の snapshot も Host 側で
 //! Workspace 相対 path へ直してから送る。

@@ -1301,12 +1301,12 @@ dependencies = [
  "document",
  "editor-core",
  "extension-ui-contract",
- "git-contract",
+ "git",
  "process",
  "serde",
  "serde_json",
  "task",
- "terminal-contract",
+ "terminal-types",
  "workbench",
  "workspace",
  "zeroize",
@@ -9256,8 +9256,7 @@ name = "terminal-contract"
 version = "0.1.0"
 dependencies = [
  "futures-channel",
- "serde",
- "serde_json",
+ "terminal-types",
 ]
 
 [[package]]
@@ -9288,6 +9287,14 @@ dependencies = [
 
 [[package]]
 name = "terminal-session-api"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "terminal-types"
 version = "0.1.0"
 dependencies = [
  "serde",
