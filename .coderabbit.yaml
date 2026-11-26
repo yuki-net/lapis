@@ -24,12 +24,12 @@ reviews:
         GPUI の描画スレッドでのブロッキング、描画中の外部 I/O、
         非同期結果による古い状態の反映、
         状態とライフサイクルの所有境界を重点的に確認する。
-    - path: "clients/state/**"
+    - path: "workbench/state/**"
       instructions: |
         GPUI の描画スレッドでのブロッキング、描画中の外部 I/O、
         非同期結果による古い状態の反映、
         状態とライフサイクルの所有境界を重点的に確認する。
-    - path: "clients/ui/**"
+    - path: "workbench/ui/**"
       instructions: |
         GPUI の描画スレッドでのブロッキング、描画中の外部 I/O、
         非同期結果による古い状態の反映、

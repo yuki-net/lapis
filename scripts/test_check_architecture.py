@@ -31,7 +31,7 @@ class ArchitectureTests(unittest.TestCase):
     def test_desktop_layout_contract_rejects_old_identifiers_and_feature_internals(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "clients/ui/src/features/example.rs"
+            source = root / "workbench/ui/src/features/example.rs"
             source.parent.mkdir(parents=True)
             source.write_text('// TabGroupId was removed\nconst TEXT: &str = "DropZone";\n', encoding="utf-8")
             self.assertEqual(check_desktop_layout(root), [])
@@ -56,7 +56,7 @@ class ArchitectureTests(unittest.TestCase):
     def test_feature_viewport_and_user_agent_access_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "clients/ui/src/features/example.rs"
+            source = root / "workbench/ui/src/features/example.rs"
             source.parent.mkdir(parents=True)
             source.write_text('// viewport_size() は共通 wrapper を使う\n', encoding="utf-8")
             self.assertEqual(check_desktop_layout(root), [])
@@ -72,7 +72,7 @@ class ArchitectureTests(unittest.TestCase):
     def test_dialog_access_from_feature_and_root_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            feature = root / "clients/ui/src/features/example.rs"
+            feature = root / "workbench/ui/src/features/example.rs"
             feature.parent.mkdir(parents=True)
             feature.write_text(
                 '// file_dialog() は client wrapper を使う\n', encoding="utf-8"
@@ -88,7 +88,7 @@ class ArchitectureTests(unittest.TestCase):
             )
 
             feature.unlink()
-            root_file = root / "clients/ui/src/root.rs"
+            root_file = root / "workbench/ui/src/root.rs"
             root_file.write_text(
                 'fn f(client: &Client) { client.editor.file_dialog().choose_workspace_path(); }\n',
                 encoding="utf-8",
@@ -100,7 +100,7 @@ class ArchitectureTests(unittest.TestCase):
     def test_feature_manual_scroll_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            feature = root / "clients/ui/src/features/example.rs"
+            feature = root / "workbench/ui/src/features/example.rs"
             feature.parent.mkdir(parents=True)
             feature.write_text(
                 '// overflow_y_scroll() は scroll_viewport を使う\n', encoding="utf-8"
@@ -182,7 +182,7 @@ class ArchitectureTests(unittest.TestCase):
         self.metadata = {"workspace_members": ["model", "runtime", "ui"], "packages": [
             package("model", "protocol/types/example"),
             package("runtime", "host/runtime", ["model"]),
-            package("ui", "clients/ui", ["model"]),
+            package("ui", "workbench/ui", ["model"]),
         ]}
 
     def test_allowed_dependencies(self):
@@ -306,7 +306,7 @@ class ArchitectureTests(unittest.TestCase):
         self.metadata["workspace_members"].extend(["desktop", "adapter", "store", "infra"])
         self.metadata["packages"].extend([
             package("desktop", "apps/desktop/app", ["ui", "adapter", "store"]),
-            package("adapter", "clients/state", ["model"]),
+            package("adapter", "workbench/state", ["model"]),
             package("store", "apps/desktop/persistence", ["adapter", "model"]),
             package("infra", "host/adapters/local", ["runtime"]),
         ])
@@ -321,7 +321,7 @@ class ArchitectureTests(unittest.TestCase):
                 self.assertIn(f"{source} -> {target}", "\n".join(check(metadata, {})))
 
     def test_client_adapter_and_store_cannot_import_gpui_or_native_dialog(self):
-        for path in ("clients/state", "apps/desktop/persistence"):
+        for path in ("workbench/state", "apps/desktop/persistence"):
             for dependency in ("gpui", "rfd"):
                 with self.subTest(path=path, dependency=dependency):
                     metadata = copy.deepcopy(self.metadata)
@@ -397,7 +397,7 @@ class ArchitectureTests(unittest.TestCase):
         # while it inspects DesktopRoot. Other features use normal module declarations.
         violations = [
             path.relative_to(ROOT).as_posix()
-            for path in (ROOT / "clients/ui/src").rglob("*.rs")
+            for path in (ROOT / "workbench/ui/src").rglob("*.rs")
             for line in path.read_text(encoding="utf-8").splitlines()
             if re.search(r"#\s*\[\s*path\s*=", line) and "tools/devtools/mod.rs" not in line
         ]

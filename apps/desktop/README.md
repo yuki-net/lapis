@@ -25,10 +25,10 @@ UIの共通の意図は [Design](../../docs/DESIGN.md)、手動検証の扱い�
 - `app/` は Desktop の起動・終了と依存注入を行う Composition Root。Backend の具体実装を組み立てるのはここに限定します。ネイティブ window の起動 entry は `app/src/desktop.rs` が持ち、`desktop_ui` の初期化 API をイベントループから呼びます。
 - `../launcher/` は起動時に staging 済みの更新を適用してから本体を起動します。manifest の取得・download・更新の同意画面は持ちません（[配布と更新の内部契約](../../docs/specs/release.md)）。
   - library として検証・staging・適用を公開し、`app/` の更新処理と同じ規則を使います。manifest の取得と download は `app/` が行うため、launcher の実行ファイルは network をリンクしません。
-- `../../clients/state/` は Host の表示 cache・Client 操作・復元用表示状態を所有し、GPUI や具体的な OS 実装には依存しません。
+- `../../workbench/state/` は Host の表示 cache・Client 操作・復元用表示状態を所有し、GPUI や具体的な OS 実装には依存しません。
 - `persistence/` は Desktop の Conversation・Window 表示状態・設定を保存します。Backend の実行資源を復元・再起動する責務は持ちません。
 - Local Host は Web 等の端末 credential と失効状態を Host の状態ディレクトリに保存します。Desktop bootstrap 用の credential は起動ごとに生成し、端末用の保存対象から除きます。
-- `../../workbench/shell/` は Window・Panel・Tab・Layout、`../../clients/ui/src/features/` は個別機能の表示・入力・描画を担当します。
+- `../../workbench/shell/` は Window・Panel・Tab・Layout、`../../workbench/ui/src/features/` は個別機能の表示・入力・描画を担当します。
 - 左のProject / Taskで既存フォルダをProjectへ登録し、登録先からPrimaryを一つ、Subを任意で一つ選んで作業Taskを作成します。Git管理されていない既存ソースフォルダも選べます。
 - 作業Taskの選択・Primary/Sub・文書とPanelの復元参照はDesktopの保存状態です。既存のConversation IDを復元キーに再利用し、HostのAgent実行Task/Executionとは区別します。切替ではHostの文書・PTY・CLIを終了しません。Worktreeの作成・カスタマイズはGit操作として扱います。
 - Project / Taskの保存状態が壊れている場合はエラーを表示して書き戻しを拒否します。従来の会話はrootごとのProjectへ移行し、Project未所属の下書きはTask外の復元項目として残します。
@@ -77,10 +77,10 @@ managed Host の Web 公開では、Host と同じディレクトリの `lapis-w
 起動方法・制約は [開発時の起動](../../docs/dev.md) を参照してください。ここでは実装側の前提だけを書きます。
 
 - GPUIの共通View dispatchにHot Reload境界を置き、各Entity / AnyViewの通常描画を対象とします。Theme / Syntaxの可変状態はApp Globalで所有します。
-- 旧TLS実装ではHot Patch後にアクセス違反を確認しました。App Globalへの移行後、ShellとSettingsの表示変更を同一PIDで確認しています。検証範囲は [evidence.txt](../../clients/ui/experiments/hot-reload/evidence.txt) を参照してください。
+- 旧TLS実装ではHot Patch後にアクセス違反を確認しました。App Globalへの移行後、ShellとSettingsの表示変更を同一PIDで確認しています。検証範囲は [evidence.txt](../../workbench/ui/experiments/hot-reload/evidence.txt) を参照してください。
 - Document / 未保存編集 / Tab / Panel / Task / Terminalの状態維持を意図していますが、Hot Reload中の一通りの確認は未実施です。
 - 接続先はDioxus CLIが設定する環境変数から取得し、接続は起動時の1回だけです。
-- 実装の詳細は [ui/experiments/hot-reload/README.md](../../clients/ui/experiments/hot-reload/README.md) を参照してください。
+- 実装の詳細は [ui/experiments/hot-reload/README.md](../../workbench/ui/experiments/hot-reload/README.md) を参照してください。
 
 ## Host接続
 
@@ -130,7 +130,7 @@ Scrollback は Host の Model に含まれる履歴を画面の前に描画し�
 ## 共通Tab操作
 
 - TabBar、TabItem、追加PickerはPanel固有の実装にせず、Shellの共通描画・`FeatureRegistry`の`UiContribution`を使う。Featureが独自のTab管理やPickerを持たない。
-- `UiContribution`は表示名、アイコン、カテゴリ、初期配置、複数起動方針、配置能力、表示条件、タブの参照方法を宣言する。Pickerは登録情報から表示し、未登録のダミー操作を追加しない。宣言の型は `protocol/types/extension-ui` が正本で、`FeatureRegistry`（GPUI の実体解決）は `clients/ui/src/extension_ui` に残す。
+- `UiContribution`は表示名、アイコン、カテゴリ、初期配置、複数起動方針、配置能力、表示条件、タブの参照方法を宣言する。Pickerは登録情報から表示し、未登録のダミー操作を追加しない。宣言の型は `protocol/types/extension-ui` が正本で、`FeatureRegistry`（GPUI の実体解決）は `workbench/ui/src/extension_ui` に残す。
 - タブの個体を所有する機能は `ViewLifecycle` を実装して `FeatureRegistry` へ登録する。Terminalはこの形で「宣言の供給者」と「個体とSessionの所有者」を兼ね、Shellにターミナル固有の分岐を持たない。`references_external_resource` を宣言したタブは、Session IDを保存値へ持ち、Resourceの開始・接続・終了を所有する機能が行う。
 - Tool Pickerはクリックされた`+`の座標をアンカーにし、共通PopupのWindow端補正、外側クリック、Escape、上下キー、Enter、ShellへのFocus復帰を使う。
 - HeaderのZone開閉ボタン群は表示設定で隠せるが、ViewメニューとCommand Searchから同じZone Commandを実行できる。個別Panelの非表示はタブとHost Resourceを保持する。

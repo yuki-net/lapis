@@ -6,7 +6,7 @@ description.workspace = true
 license.workspace = true
 
 [dependencies]
-desktop-client = { path = "../../clients/state" }
+desktop-client = { path = "../state" }
 editor-core = { path = "../../protocol/types/editor-core" }
 extension-ui-contract = { path = "../../protocol/types/extension-ui" }
 getrandom.workspace = true

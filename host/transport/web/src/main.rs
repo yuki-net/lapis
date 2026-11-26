@@ -38,8 +38,8 @@ const WEBTRANSPORT_ENDPOINT_PATH: &str = "/__webtransport";
 const DEFAULT_DIST: &str = "apps/web/dist";
 /// Wasm UI の依存が収まるディレクトリ。ここにある `.rs` を監視する。
 const WATCHED_DIRECTORIES: [&str; 6] = [
-    "clients/ui",
-    "clients/state",
+    "workbench/ui",
+    "workbench/state",
     "protocol",
     "extensions",
     "apps/web/src",
@@ -489,7 +489,7 @@ mod tests {
 
     #[test]
     fn generated_artifacts_do_not_trigger_rebuilds() {
-        assert!(is_relevant(Path::new("clients/ui/src/lib.rs")));
+        assert!(is_relevant(Path::new("workbench/ui/src/lib.rs")));
         assert!(is_relevant(Path::new("apps/web/wasm/src/lib.rs")));
         assert!(!is_relevant(Path::new(
             "apps/web/src/generated/wasm/lapis_ui.js"

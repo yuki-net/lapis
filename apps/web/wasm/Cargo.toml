@@ -9,7 +9,7 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-desktop-client = { path = "../../../clients/state" }
+desktop-client = { path = "../../../workbench/state" }
 document = { path = "../../../protocol/types/document" }
 editor-core = { path = "../../../protocol/types/editor-core" }
 git = { package = "git-contract", path = "../../../extensions/git/contract" }
@@ -22,7 +22,7 @@ workspace = { path = "../../../protocol/types/workspace" }
 client-api = { path = "../../../protocol/wire/client-api" }
 client-core = { path = "../../../protocol/wire-client" }
 console_error_panic_hook = "0.1"
-desktop-ui = { path = "../../../clients/ui" }
+desktop-ui = { path = "../../../workbench/ui" }
 futures-channel = "0.3"
 futures-util = "0.3"
 gloo-timers = { version = "0.3", features = ["futures"] }

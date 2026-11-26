@@ -19,6 +19,8 @@ class TestPathRouting(unittest.TestCase):
     """path routingロジックのテスト。"""
 
     def test_client_persistence_and_locales_select_rust_core(self):
+        self.assertEqual(jobs_for_paths(["workbench/state/src/lib.rs"]), {"desktop", "rust_core", "web"})
+        # 移設前の path も削除差分として同じ面へ割り当てる。
         self.assertEqual(jobs_for_paths(["clients/state/src/lib.rs"]), {"desktop", "rust_core", "web"})
         self.assertEqual(jobs_for_paths(["apps/desktop/persistence/src/lib.rs"]), {"desktop", "rust_core"})
         self.assertEqual(jobs_for_paths(["locales/ja-JP/messages/common.json"]), {"repository", "rust_core", "desktop"})
@@ -125,7 +127,10 @@ class TestPathRouting(unittest.TestCase):
         )
 
     def test_ui_path_runs_desktop_and_web(self):
-        """clients/ui は desktop-ui として wasm でもビルドされるため Web ジョブも実行する。"""
+        """workbench/ui は desktop-ui として wasm でもビルドされるため Web ジョブも実行する。"""
+        for path in ("workbench/ui/src/root.rs", "workbench/ui/assets/IBMPlexSans-Regular.ttf"):
+            self.assertEqual(jobs_for_paths([path]), {"desktop", "web"}, path)
+        # 移設前の path も削除差分として同じ面へ割り当てる。
         for path in ("clients/ui/src/root.rs", "clients/ui/assets/IBMPlexSans-Regular.ttf"):
             self.assertEqual(jobs_for_paths([path]), {"desktop", "web"}, path)
 
@@ -135,11 +140,15 @@ class TestPathRouting(unittest.TestCase):
             self.assertEqual(jobs_for_paths([path]), {"rust_core", "desktop", "web"}, path)
 
     def test_state_path_runs_web_for_wasm_build(self):
-        """clients/state は wasm ビルドの依存に入るため Web ジョブも実行する。"""
+        """workbench/state は wasm ビルドの依存に入るため Web ジョブも実行する。"""
+        self.assertEqual(jobs_for_paths(["workbench/state/src/lib.rs"]), {"desktop", "rust_core", "web"})
+        # 移設前の path も削除差分として同じ面へ割り当てる。
         self.assertEqual(jobs_for_paths(["clients/state/src/lib.rs"]), {"desktop", "rust_core", "web"})
 
     def test_web_host_paths_run_web(self):
         for path in (
+            "workbench/state/src/web_host/extension_terminal.rs",
+            "workbench/state/src/terminal_extension/web_projection.rs",
             "clients/state/src/web_host/extension_terminal.rs",
             "clients/state/src/terminal_extension/web_projection.rs",
             "apps/web/wasm/src/entry.rs",
@@ -150,6 +159,8 @@ class TestPathRouting(unittest.TestCase):
     def test_wasm_build_dependency_paths_run_web(self):
         """desktop-ui の wasm 依存 crate の変更で Web ジョブが選ばれる。"""
         for path in (
+            "workbench/ui/src/lib.rs",
+            "workbench/state/src/lib.rs",
             "clients/ui/src/lib.rs",
             "clients/state/src/lib.rs",
             "protocol/wire-client/src/lib.rs",

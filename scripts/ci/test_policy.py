@@ -39,7 +39,7 @@ class ProtectedPathTests(unittest.TestCase):
     def test_product_code_is_not_protected(self):
         for path in (
             "apps/desktop/app/src/main.rs",
-            "clients/state/src/lib.rs",
+            "workbench/state/src/lib.rs",
             "docs/ci.md",
             "host/app/Cargo.toml",
             "Cargo.lock",

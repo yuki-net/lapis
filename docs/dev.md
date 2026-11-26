@@ -139,7 +139,7 @@ loopback で待ち受けているときは `open` の 1 行だけです。
 - 初回と依存 crate を変えたときは数十秒かかります。2回目以降は cargo の増分ビルドで数秒です。
 - 250ms 以内の連続保存は1回にまとまり、ビルド中に保存した分は終わってから1回だけ追加で走ります。ビルドは常に1本です。
 - 失敗すると `lapis-web` のコンソールに `web: build failed` と出力の末尾20行が出て、古い `dist` を配り続けます。画面は壊れず、修正して保存すれば再試行します。
-- 監視するのは `clients/ui`・`clients/state`・`protocol`・`extensions` の `.rs` と `apps/web` のページ一式です。`vendor/`（patched GPUI）や `apps/web/src/generated` 配下は監視しません。必要なら `npm run wasm` を手で実行してください。
+- 監視するのは `workbench/ui`・`workbench/state`・`protocol`・`extensions` の `.rs` と `apps/web` のページ一式です。`vendor/`（patched GPUI）や `apps/web/src/generated` 配下は監視しません。必要なら `npm run wasm` を手で実行してください。
 - 再ビルドは開発サーバーだけの機能です。`npm run build` と CI は起動時に1回だけ生成します。
 
 ## Windows でのプロセス表示

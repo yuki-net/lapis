@@ -12,8 +12,8 @@ hot-reload = ["desktop-ui/hot-reload"]
 host = { path = "../../../host/app" }
 client-api = { path = "../../../protocol/wire/client-api" }
 zeroize.workspace = true
-desktop-client = { path = "../../../clients/state" }
-desktop-ui = { path = "../../../clients/ui" }
+desktop-client = { path = "../../../workbench/state" }
+desktop-ui = { path = "../../../workbench/ui" }
 terminal = { package = "terminal-contract", path = "../../../extensions/terminal/contract" }
 futures-channel = "0.3"
 lapis-launcher = { path = "../../launcher" }

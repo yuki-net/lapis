@@ -2,8 +2,6 @@
 members = [
     "apps/desktop/*",
     "apps/launcher",
-    "clients/state",
-    "clients/ui",
     "workbench/*",
     "protocol/wire-client",
     "apps/web/wasm",
