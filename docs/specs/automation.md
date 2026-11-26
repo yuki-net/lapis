@@ -28,27 +28,29 @@ Issue から実装・レビュー・マージまでを自動化するときの�
 | 役割 | 実体 | できること | しないこと |
 | --- | --- | --- | --- |
 | **人間** | あなた | Issue 作成、`#N を作って`、**merge**、保護パスの承認 | — |
-| **coordinator** | オーナー側 Orca bot | 監視、オーナーの疑問解決、`dispatch.py` の起動 | 実装、レビュー、merge、保護パス変更 |
+| **coordinator** | オーナー側 Orca bot | 監視、オーナーの疑問解決、`dispatch.py` の起動 | 実装、レビュー、merge、approve、保護パス変更、コード編集 |
 | **worker** | OpenCode（Orca worktree） | 実装、push、PR 作成 | merge、保護パス変更、オーナーの token の使用 |
 | **reviewer** | OpenCode（PR ごとに新規セッション） | PR のレビュー、所見の報告 | **GitHub への書き込み**、merge、保護パス変更 |
 
 - worker と reviewer は **別 GitHub App・別 token**
-- reviewer は **read-only**（`contents: read` / `pull requests: read`）
+- reviewer は **read-only**（`contents: read` / `pull requests: read` / `checks: read` / `commit statuses: read`）
 - coordinator は監視と質問対応だけで、コードを書かない
 - オーナーの `gh` ログイン（keyring）は worker / reviewer に渡さない
 
 ## 実行環境（この Windows ホスト）
 
 - Hyper-V / WSL2 の VM は作らない
-- Orca の worktree と OpenCode セッションをこのホストで動かす
-- worker: `orca worktree create --name issue-N --agent opencode --prompt "<Issue>"`
+- Windows の**別ローカルユーザー `orcaworker`** で `orca serve` を起動し、オーナーの Orca に pair する
+- worker / reviewer は `orcaworker` の Orca worktree / セッションで動く
+- オーナーの `gh` keyring は `orcaworker` から読めない（これが境界）
+- 追加の防御として、将来はサービスアカウント + localhost ブローカー（B）を重ねられる
+- worker: `orca worktree create --environment orcaworker --name issue-N --agent opencode --prompt "<Issue>"`
 - reviewer: PR ごとに新しいセッション。**PR が open の間は保持し、merge / close で解放**する
-- 秘密の隔離境界は未決定。`automation/KEYS.md` の 2 案（別 Windows ユーザー / サービスアカウント）から選ぶ
 
 ## 認証
 
 - GitHub App の private key で JWT を作り、installation token（1 時間）を発行する
-- **ブローカー**が localhost で動き、`gh` / `git` の呼び出しごとに子プロセスへ token を渡す
+- **ブローカー**が `orcaworker`（B を重ねる場合はサービスアカウント）で動き、`gh` / `git` の呼び出しごとに子プロセスへ token を渡す
 - token はプロセスの環境変数・ログ・ファイルに残さない
 - `GH_CONFIG_DIR` はロールごとに分ける。オーナーの keyring は使わない
 - token は**残り 5 分で再発行**する
@@ -62,8 +64,9 @@ Issue から実装・レビュー・マージまでを自動化するときの�
   ↓
 coordinator: automation/dispatch.py --issue N
   - Issue の確認（open、受け入れ条件）
-  - ai-building ラベル、ローカルロック
-  - orca worktree create --name issue-N --agent opencode --prompt "<Issue>"
+  - ai-building ラベル（coordinator の token）
+  - ローカルロック
+  - orca worktree create --environment orcaworker --name issue-N --agent opencode --prompt "<Issue>"
   ↓
 worker: 実装 → push → PR
   ↓
@@ -85,8 +88,8 @@ coordinator の dispatch は起動だけを行う。実装・レビュー・merg
   1. Issue が open で、受け入れ条件が書かれている
   2. `ai-building` が付いていない
   3. ローカルロック（`%LOCALAPPDATA%\lapis\locks\`）が取れる
-  4. `ai-building` を付ける
-  5. `orca worktree create --name issue-N --agent opencode --prompt "<Issue>"` で worker を起動
+  4. `ai-building` を付ける（coordinator の token）
+  5. `orca worktree create --environment orcaworker --name issue-N --agent opencode --prompt "<Issue>"` で worker を起動
 - 二重起動・競合はラベルとロックで防ぐ
 - 異常終了に備え、`ai-building` は heartbeat と `stale_building_minutes` で回収する
 
@@ -94,11 +97,13 @@ coordinator の dispatch は起動だけを行う。実装・レビュー・merg
 
 - worker App の installation token を使う。**オーナーの token は使わない**
 - token はブローカーが発行し、子プロセスにだけ渡す
-- 権限は `contents: write` と `pull requests: write`。必要になったときだけ `workflows: write`
+- 権限は `contents: write` / `pull requests: write` / `checks: read` / `commit statuses: read`
+- `issues: write` と `workflows: write` は付けない。ラベルは coordinator が付ける
+- CI は App の `checks: read` / `commit statuses: read` で読む
 - OpenCode を基本、Junie CLI を fallback にする
 - 作業後に PR を作る。PR の本文に Issue をリンクする
 - 失敗の扱い:
-  - 連続 2 回で `ai-needs-human`
+  - 連続 2 回で `ai-needs-human`（coordinator が付ける）
   - 60 分で timeout
   - 保護パスを触った場合は人間の承認が必要
 - worker は merge しない
@@ -114,7 +119,7 @@ coordinator の dispatch は起動だけを行う。実装・レビュー・merg
 - 並列は 2〜4。PR ごとに claim して二重レビューを防ぐ
 - push されたら古い判定を捨て、新しい SHA で再レビュー
 - **GitHub には書き込まない**。verdict はローカルの dashboard / Orca に残す
-- レビュー対象: diff、最新 SHA の CI、`automation/policy.toml`、Issue / PR の本文
+- レビュー対象: diff、最新 SHA の CI（`checks: read` / `commit statuses: read` で読む）、`automation/policy.toml`、Issue / PR の本文
 - コードは実行しない
 - reviewer 自身の PR はレビューしない（別の reviewer か人間）
 
@@ -132,8 +137,9 @@ reviewer は merge しない。`roles.toml` の `merge` は全ロールで `fals
 ## 秘密
 
 - 秘密（App private key、AI API キー、`.env`）は **repo に置かない**
-- 鍵は**ブローカーのアカウントだけ**が読める場所に置く。境界は `automation/KEYS.md` の 2 案から選ぶ
-- オーナーの `gh` keyring は使わない
+- 主: 別 Windows ユーザー `orcaworker` の profile に置き、ACL をそのユーザーだけにする
+- 追加の防御: サービスアカウント + localhost ブローカー（B）を重ねられる
+- オーナーの `gh` keyring は使わない（`orcaworker` から読めない）
 - `.gitignore` と `scripts/ci/test_no_tracked_secrets.py` で混入を防ぐ
 - App の作り方は `automation/apps.md`、鍵と token の扱いは `automation/KEYS.md`
 - 3 人目以降のロールは `automation/roles.toml` に追加する。コードの変更は不要にする
@@ -153,7 +159,10 @@ reviewer は merge しない。`roles.toml` の `merge` は全ロールで `fals
 - Protected ruleset: CODEOWNERS（`reviews`）の承認
 - 人間（owner）は Review / Protected を bypass できる。CI は bypass しない
 - reviewer App は `reviews` team に入れない
-- App の `Checks` / `Commit statuses` は **Write を付けない**
+- worker / reviewer の App は `checks: read` / `commit statuses: read` を持つ
+- `issues: write` は coordinator のみ。worker / reviewer には付けない
+- `workflows: write` は付けない。`.github/workflows` の変更は人が行う
+- `checks` / `commit statuses` の **Write は付けない**
 
 ## 資産の置き場
 
@@ -163,7 +172,7 @@ reviewer は merge しない。`roles.toml` の `merge` は全ロールで `fals
 | policy / roles / App 手順 / 鍵の手順 | `automation/` |
 | reviewer のコード / dashboard | `reviewer/` |
 | エージェント手順 | `.opencode/skills/build-issue/`、`.opencode/skills/review-pr/` |
-| 秘密 | ブローカーのアカウント（repo 外） |
+| 秘密 | `orcaworker` の profile（repo 外） |
 | 状態 / ログ | ホストのローカル（資産ではない） |
 
 ## マイルストーン
@@ -171,16 +180,15 @@ reviewer は merge しない。`roles.toml` の `merge` は全ロールで `fals
 | # | 内容 | 完了条件 |
 | --- | --- | --- |
 | M1 | 仕様 + policy + roles + App 手順 + skill + 秘密混入テスト | PR が通る |
-| M2 | 鍵の境界 + ブローカー + App 作成 + `Gate` required | worker / reviewer の token が別スコープで動く |
+| M2 | 別ユーザー `orcaworker` + Orca pair + ブローカー + App 作成 + `Gate` required | worker / reviewer の token が別スコープで動く |
 | M3 | worker + OpenCode + dispatch | テスト Issue から PR |
 | M4 | reviewer + OpenCode + dashboard | 既存 PR を dry-run レビューし、merge / close で解放 |
 | M5 | 端到端 | 通常 PR を人間がマージできる |
 
 ## リスク
 
-- 同一 Windows ユーザーでは `gh auth token` で keyring が読める（境界は別ユーザー / サービスアカウント）
+- worker / reviewer をオーナーと同じユーザーで動かすと `gh auth token` で keyring が読める。`orcaworker` で動かす
 - GitHub App token の 1 時間失効
-- App token で CI を読むには `checks: read` / `commit statuses: read` が必要（未確定）
 - ラベルの取り残し・二重起動
 - reviewer のコンテキスト肥大と API コスト
 - `Gate` 必須化と flaky test の関係

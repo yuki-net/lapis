@@ -10,7 +10,7 @@ description: 人間が明示した Issue 番号を worker に渡し、実装か�
 - 人間が Issue を別の場所で作っている
 - 人間が「#N を作って」と明示したときだけ実行する
 - Issue には受け入れ条件が書かれている
-- worker はこの Windows ホストの Orca worktree で動く（VM は使わない）
+- worker は Windows の別ユーザー `orcaworker` の Orca worktree で動く（VM は使わない）
 
 ## 手順
 
@@ -32,16 +32,16 @@ python automation/dispatch.py --issue N
 
 `dispatch.py` が決定的に行うこと:
 
-- `ai-building` ラベル
+- `ai-building` ラベル（coordinator の token）
 - ローカルロック（`%LOCALAPPDATA%\lapis\locks\`）
-- `orca worktree create --name issue-N --agent opencode --prompt "<Issue>"`
+- `orca worktree create --environment orcaworker --name issue-N --agent opencode --prompt "<Issue>"`
 - ブローカー経由の worker token を子プロセスに渡す
 
 3. worker の状態を確認する
 
 - Orca の worker セッション
 - PR の有無
-- CI の状態（coordinator が読む）
+- CI の状態（worker App の `checks: read` / `commit statuses: read` で読む。coordinator も監視する）
 
 4. 停止条件
 
@@ -50,7 +50,7 @@ python automation/dispatch.py --issue N
 - 保護パスを触った
 - コンフリクトや仕様の矛盾
 
-この場合は `ai-needs-human` を付け、理由を Issue / PR に残して止まる。
+この場合は coordinator に `ai-needs-human` を付けてもらい、理由を Issue / PR に残して止まる。
 
 ## 禁止
 

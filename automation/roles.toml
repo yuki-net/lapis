@@ -1,7 +1,8 @@
 # 自動化のロール定義。3 人目以降はここに 1 ブロック足す。
-# 鍵の実体はブローカーが解決する。roles.toml にファイルパスを書かない。
-# coordinator（オーナー側 Orca bot）はここに含めない。監視と質問対応だけを行い、
-# 実装・レビュー・merge はしない。
+# worker / reviewer は Windows の別ユーザー `orcaworker` で動く。
+# 鍵の実体はブローカーが解決する。roles.toml に実パスを書かない。
+# coordinator（オーナー側 Orca bot）はここに含めない。監視と進行だけを行い、
+# merge・approve・保護パス変更・コード編集はしない。
 
 version = 1
 
@@ -9,10 +10,10 @@ version = 1
 agent = "opencode"
 fallback_agent = "junie"
 merge = false
-key_ref = "worker"
 # App 作成後に埋める。空のままでは dispatch しない。
 app_id = ""
 installation_id = ""
+private_key = ""
 bot_login = "lapis-worker[bot]"
 
 [roles.reviewer]
@@ -20,18 +21,18 @@ agent = "opencode"
 fallback_agent = "junie"
 # reviewer は read-only。merge しない。
 merge = false
-key_ref = "reviewer"
 app_id = ""
 installation_id = ""
+private_key = ""
 bot_login = "lapis-reviewer[bot]"
 
 # 3 人目（例: 可否判断だけを行う judge）。
-# App を作り、read-only（Contents: R / Pull requests: R）で足す。
+# App を作り、read-only（Contents: R / Pull requests: R / Checks: R / Commit statuses: R）で足す。
 # [roles.judge]
 # agent = "opencode"
 # fallback_agent = "junie"
 # merge = false
-# key_ref = "judge"
 # app_id = ""
 # installation_id = ""
+# private_key = ""
 # bot_login = "lapis-judge[bot]"

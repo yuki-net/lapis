@@ -1,7 +1,8 @@
 # GitHub App の作り方
 
 worker / reviewer / 3 人目（judge など）は、すべて同じ手順で作る。
-**鍵は repo に置かない。** ブローカーのアカウントだけが読める場所に置く。
+**鍵は repo に置かない。** `orcaworker` ユーザー（または B を重ねる場合はサービスアカウント）
+だけが読める場所に置く。
 
 ## 1. App を作る
 
@@ -20,12 +21,14 @@ worker / reviewer / 3 人目（judge など）は、すべて同じ手順で作�
 
 | 権限 | 値 |
 | --- | --- |
-| Contents | **Read and write**（push / merge に必要） |
+| Contents | **Read and write**（push に必要） |
 | Pull requests | **Read and write**（PR 作成） |
+| Checks | **Read**（CI を読む） |
+| Commit statuses | **Read**（status を読む） |
 | Metadata | Read（必須） |
 
-`Workflows: Read and write` は、worker が `.github/workflows/` を変更する必要が
-出たときだけ付ける。`.github/` は保護パスなので、通常は付けない。
+- `Issues: Write` は付けない（ラベルは coordinator）
+- `Workflows: Write` は常用しない。`.github/workflows` の変更は人が行い、必要な PR だけ一時的に昇格する
 
 ### reviewer
 
@@ -33,18 +36,18 @@ worker / reviewer / 3 人目（judge など）は、すべて同じ手順で作�
 | --- | --- |
 | Contents | **Read** |
 | Pull requests | **Read** |
+| Checks | **Read** |
+| Commit statuses | **Read** |
 | Metadata | Read（必須） |
 
-reviewer は **GitHub に書き込まない**。コメント・ラベル・merge はしない。
+reviewer は **GitHub に書き込まない**。コメント・ラベル・review・merge はしない。
 
-## 3. 追加で必要になるかもしれない権限（未確定）
+## 3. 共通の注意
 
-- **CI を App token で読む場合**: `Checks: Read` と `Commit statuses: Read` が必要。
-  `gh pr view --json statusCheckRollup` / `gh pr checks` はこの 2 つを要求する。
-  coordinator（オーナー token）が CI を読むなら、App には付けない。
-- **ラベルを App で付ける場合**: `Issues: Read and write` が必要。
-  coordinator が付けるなら、worker / reviewer には付けない。
-- `Checks` / `Commit statuses` の **Write は付けない**（required check を偽造できる）。
+- `Checks` / `Commit statuses` は **Read だけ**。Write を付けると required check を偽造できる
+- `Issues: Write` は coordinator のみ。worker / reviewer には付けない
+- `Checks: Read` / `Commit statuses: Read` が無いと `gh pr view --json statusCheckRollup` /
+  `gh pr checks` が `Resource not accessible by integration` で失敗する
 
 ## 4. インストール
 
@@ -54,11 +57,14 @@ reviewer は **GitHub に書き込まない**。コメント・ラベル・merge
 
 ## 5. 鍵の置き場
 
-`automation/KEYS.md` の境界（別 Windows ユーザー / サービスアカウント）に従う。
+`automation/KEYS.md` の A（`orcaworker` ユーザー）に従う。
 
-- 鍵はブローカーのアカウントだけが読める場所に置く（ACL）
-- `roles.toml` には `key_ref` だけを書き、パスや鍵は書かない
+- 鍵は `C:\Users\orcaworker\.lapis\secrets\<role>\app.pem` に置く（ACL: `orcaworker`）
+- `roles.toml` の `private_key` は **App 作成後に埋める**。それまでは空のまま
 - オーナーの `gh` keyring は使わない
+
+B（サービスアカウント + localhost ブローカー）を重ねる場合は、鍵を
+`C:\ProgramData\lapis\secrets\` に移し、ACL を `lapis-broker` だけにする。
 
 ## 6. reviewer の追加設定
 
@@ -70,14 +76,15 @@ reviewer は **GitHub に書き込まない**。コメント・ラベル・merge
 
 1. 同じ手順で App を作る（read-only を基本）
 2. `automation/roles.toml` に `[roles.<name>]` を足す
-3. ブローカーに `key_ref` の鍵を置く
+3. `orcaworker` の `secrets\<name>\app.pem` を置く
 4. 必要なら ruleset の bypass を追加する（Protected には追加しない）
 
-コードの変更は不要。`roles.toml` とブローカーの鍵の配置だけで増やせる。
+コードの変更は不要。`roles.toml` と鍵の配置だけで増やせる。
 
 ## 8. 確認
 
 - `gh api -i /app` は App の JWT で確認できる
 - installation token は `automation/KEYS.md` の手順で発行する
-- worker token で `gh pr create` ができること
-- reviewer token で `gh pr view` ができ、`gh pr comment` / `gh pr merge` は失敗することを確認する
+- worker token で `gh pr create` と `gh pr checks` ができること
+- reviewer token で `gh pr view` / `gh pr checks` ができ、
+  `gh pr comment` / `gh pr merge` は失敗することを確認する

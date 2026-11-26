@@ -7,7 +7,7 @@ description: PR を PR ごとの新しいセッションでレビューし、所
 
 ## 前提
 
-- reviewer App の **read-only** token を使う（`contents: read` / `pull requests: read`）
+- reviewer App の **read-only** token を使う（`contents: read` / `pull requests: read` / `checks: read` / `commit statuses: read`）
 - オーナーの token / keyring は使わない
 - **GitHub に書き込まない**（コメント・ラベル・review・merge をしない）
 - PR ごとに新しいセッションを開く（前の PR の文脈を持ち越さない）
@@ -30,8 +30,7 @@ gh pr view N --json number,headRefOid,headRepository,isCrossRepository,author,fi
 4. 新しい OpenCode セッションで、次を渡してレビューする
 
 - PR の diff（API で取得。コードは実行しない）
-- 最新 SHA の CI 結果
-  - App token で読めない場合は、coordinator（オーナー token）から受け取る
+- 最新 SHA の CI 結果（`checks: read` / `commit statuses: read` で読む）
 - `automation/policy.toml`
 - Issue / PR の本文
 
