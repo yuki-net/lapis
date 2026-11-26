@@ -1,6 +1,6 @@
 //! ACP 拡張の wire 境界。
 //!
-//! ACP 固有の型・実装は `extensions/acp` の host 側（`local-acp`）に閉じ込め、
+//! ACP 固有の型・実装は `extensions/acp` の adapter 側（`local-acp`）に閉じ込め、
 //! ここでは core と Client が知る必要がある識別子だけを公開する。
 
 /// Task の runner 識別子。実行系の選択はこの文字列だけで表現する。

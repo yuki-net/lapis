@@ -15,7 +15,6 @@ members = [
     "host/tasks",
     "host/app",
     "host/adapters/*",
-    "host/extensions/*",
     "host/extensions-entry",
     "host/transport/*",
     "protocol/types/*",

@@ -26,8 +26,8 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 | `host/workbench/` | Workbench の wire 境界・容量検証・永続化 port | 画面描画、Workspace の正規状態全体 |
 | `host/documents/` | Document 資源・未保存状態・snapshot | ファイル I/O、Workspace の正規状態全体 |
 | `host/adapters/` | FS、runner、検索、永続化 | 画面の判断 |
-| `host/extensions/git/` | Git 拡張の Host 実装（CLI 操作・監視） | 画面の判断、Workspace の正規状態 |
-| `host/extensions/acp/` | ACP client 境界（ハーネス起動、ACP 送受信、`TaskEvent` への変換） | Task の正規状態、core の型 |
+| `extensions/git/adapter/` | Git 拡張の Host 実装（CLI 操作・監視） | 画面の判断、Workspace の正規状態 |
+| `extensions/acp/adapter/` | ACP client 境界（ハーネス起動、ACP 送受信、`TaskEvent` への変換） | Task の正規状態、core の型 |
 | `host/extensions-entry/` | 拡張の入口（導入済み拡張の目録・状態、`.lapis` package の読み込み・互換照合・署名検証、package と拡張データの置き場所） | Wasm ランタイム上での実行、画面の判断 |
 | `host/transport/` | 認証・wire・接続と共通 Runtime への配送 | 独立した Workspace/Document 正本 |
 | `host/app/` | Runtime と具体実装の組み立て、開始・終了 | UI |
@@ -46,7 +46,7 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 - 状態・値・エラーは各機能の domain crate（`document` / `git` / `task` / `workspace` / `workbench` / `settings` など）が所有する。機能をまたぐ移動は、複数 crate が同じ型を必要とする場合だけ行う。
 - 拡張へ自己完結させる機能は、型・port を自分の contract crate が正本として持つ。Terminal は `extensions/terminal/contract` が型・wire DTO・`TerminalBackend` port を所有し、`protocol/types/terminal` は置かない。実装を移す前後で正本が二重にならないよう、移動は正本の移送と同じ PR で完結させる。
 - 自己完結した拡張は `extensions/<機能>/` の下を役割ディレクトリで分ける。`contract/` は契約、`host/` は Host 側の正規状態、`adapter/` は OS に触れる具体実装、`assets/` は拡張が配布する固定データを置く。役割を追加するときは、その領域の README に「誰が何を判断するために置くか」を書いてから増やす。層の意味は拡張の中でも変えない（`host/` は runtime、`adapter/` は infrastructure として依存検査する）。
-- port（`WorkspaceRepository` / `TerminalBackend` / `GitBackend` / `TaskBackend` / `WorkspaceSearchBackend` / `DocumentRepository` / `WorkbenchConnection` / `SettingsRepository`）は、実装ではなく利用側が正本を持つ crate に置く。`TerminalBackend` は `extensions/terminal/contract`、それ以外は各機能の domain crate が持つ。実装は `host/adapters/*`、`host/extensions/*`、および自己完結した拡張の `extensions/<機能>/host` / `extensions/<機能>/adapter` が持つ。
+- port（`WorkspaceRepository` / `TerminalBackend` / `GitBackend` / `TaskBackend` / `WorkspaceSearchBackend` / `DocumentRepository` / `WorkbenchConnection` / `SettingsRepository`）は、実装ではなく利用側が正本を持つ crate に置く。`TerminalBackend` は `extensions/terminal/contract`、それ以外は各機能の domain crate が持つ。実装は `host/adapters/*`、および自己完結した拡張の `extensions/<機能>/host` / `extensions/<機能>/adapter` が持つ。
 - 追加の集約は行わない。現状の配置で「どの crate が正本か」が一意になっており、統合すると domain 間の依存が増えるだけで判断材料が増えない。
 
 ### `host/application` を独立させない
@@ -214,7 +214,7 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 - `ConversationViewState.workbench`にはMode・選択Task・View所属と、IDE用Layout・IDEの作業Task・AgentのTask別Layoutを保存する。Layoutの退避値にWorkbench自身を入れ子で複製しない。これらを永続化の変更判定にも含める。初回はIDEでも保存Layoutを復元し、以後のIDEのTask選択では復元しない。Mode切替は現在の表示を対応する保存先へ退避し、作業Taskの切替成功を確認してから確定する。旧保存値はIDE・空のBindingへ移行し、Host Resourceや実行中Sessionを永続化値から再生成しない。
 - Task所属のViewはAgentで別Taskを選択すると非表示にし、IDEでは現在の配置を維持する。共有Toolの配置はTask Layoutの復元時にも個体IDを維持する。Terminalの表示コンテキストはViewのTask/Resource Bindingから解決し、共有Terminalは現在の接続先を維持する。Terminal参照はEditorや選択中Taskへ移さず、実際の接続先Taskへ保存する。再Attach・操作待ち・接続失敗の未確定表示を空のTerminal一覧として保存しない。Resource固定参照は対応済みFeatureと実在するIDに限定し、対象がなければ別Resourceへフォールバックしない。
 - Agent 実行エンジンは `runner` 識別子で選び、core に固有の型や分岐を置かない。未対応機能を表示だけのButtonで完了扱いにせず、既存能力の範囲を共通RegistryとCommandで表現する。Task一覧は選択中Taskに属するAgent表示だけを描画する。別TaskのSessionを自動起動・自動追加せず、既存のTask / Worktree / Terminal / Agent開始操作を明示的な入口として再利用する。
-- ACP client は `host/extensions/acp`（crate `local-acp`）が境界を持ち、ACP の型・起動・`session/update` の解釈を `task` の値へ変換する。対象は安定面の最小セット（`initialize` / `session/new` / `session/prompt` / `session/update` / `session/request_permission` / `session/cancel`）に限る。最初のハーネスは OpenCode（`opencode acp`）とする。ACP Registry・複数プロバイダ同時接続・Subagent Sessions RFD は対象外。
+- ACP client は `extensions/acp/adapter`（crate `local-acp`）が境界を持ち、ACP の型・起動・`session/update` の解釈を `task` の値へ変換する。対象は安定面の最小セット（`initialize` / `session/new` / `session/prompt` / `session/update` / `session/request_permission` / `session/cancel`）に限る。最初のハーネスは OpenCode（`opencode acp`）とする。ACP Registry・複数プロバイダ同時接続・Subagent Sessions RFD は対象外。
 
 ## 拡張の入口
 
