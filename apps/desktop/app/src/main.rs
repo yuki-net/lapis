@@ -188,9 +188,7 @@ fn main() {
     }
     let git_session = GitSession::new(host.git());
     let local_processes = local_process::LocalProcessRegistry::new(process::ProcessOrigin::Desktop);
-    let terminal_backend: Arc<dyn terminal::TerminalBackend> = Arc::new(
-        lapis::extension_terminal::ExtensionTerminals::new(host.clone()),
-    );
+    let terminal_backend: Arc<dyn terminal::TerminalBackend> = host.terminals();
     let terminal_session = TerminalSession::new(terminal_backend);
     let search_session = if use_loopback {
         WorkspaceSearchSession::new(Arc::new(LoopbackBackend::new(

@@ -106,23 +106,21 @@ pub(crate) fn terminal_relative_cwd(path: &Path) -> Result<String, String> {
 
 /// Host の同名・巨大・範囲外 session を描画器へ渡さない。
 pub(crate) fn validate_terminal_sessions(
-    sessions: &[crate::terminal_extension::v1::Session],
+    sessions: &[terminal::TerminalSnapshot],
 ) -> Result<(), String> {
     let mut ids = std::collections::BTreeSet::new();
     if sessions.len() > 64
         || sessions.iter().any(|session| {
-            session.id.is_empty()
-                || session.id.len() > 256
-                || session.columns == 0
-                || session.columns > 512
-                || session.rows == 0
-                || session.rows > 256
-                || !ids.insert(session.id.as_str())
-                || (session.working_directory != "."
-                    && client_api::WorkspaceRelativePath::from_path(Path::new(
-                        &session.working_directory,
-                    ))
-                    .is_err())
+            let id = session.id.as_str();
+            id.is_empty()
+                || id.len() > 256
+                || session.screen.size.columns == 0
+                || session.screen.size.columns > 512
+                || session.screen.size.rows == 0
+                || session.screen.size.rows > 256
+                || !ids.insert(id)
+                || !(session.cwd.as_os_str().is_empty()
+                    || client_api::WorkspaceRelativePath::from_path(&session.cwd).is_ok())
         })
     {
         return Err("Terminal session 一覧が不正です".into());
@@ -201,18 +199,20 @@ mod tests {
 
     #[test]
     fn terminal_session_listing_rejects_duplicates_and_unsafe_metadata() {
-        use crate::terminal_extension::v1::Session;
-        let valid = Session {
-            id: "pty-1".into(),
-            columns: 80,
-            rows: 24,
-            working_directory: ".".into(),
-            owner: None,
+        use terminal::{
+            TerminalId, TerminalScreen, TerminalSize, TerminalSnapshot, TerminalStatus,
+        };
+        let valid = TerminalSnapshot {
+            id: TerminalId::new("pty-1"),
+            cwd: std::path::PathBuf::new(),
+            status: TerminalStatus::Running,
+            revision: 0,
+            screen: TerminalScreen::empty(TerminalSize::new(80, 24)),
         };
         assert!(validate_terminal_sessions(std::slice::from_ref(&valid)).is_ok());
         assert!(validate_terminal_sessions(&[valid.clone(), valid.clone()]).is_err());
         let mut invalid = valid;
-        invalid.working_directory = "../outside".into();
+        invalid.cwd = Path::new("../outside").to_owned();
         assert!(validate_terminal_sessions(&[invalid]).is_err());
     }
 

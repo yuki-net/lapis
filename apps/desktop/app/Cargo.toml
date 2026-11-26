@@ -32,16 +32,10 @@ sysinfo.workspace = true
 wire = { path = "../../../protocol/wire/dto" }
 
 [dev-dependencies]
-base64 = "0.22"
-ed25519-dalek = "3"
-serde_json.workspace = true
 editor-core = { path = "../../../protocol/types/editor-core" }
 workbench = { path = "../../../protocol/types/workbench" }
 workspace = { path = "../../../protocol/types/workspace" }
 tempfile.workspace = true
-
-[target.'cfg(not(windows))'.dev-dependencies]
-local-terminal = { path = "../../../extensions/terminal/adapter" }
 
 [build-dependencies]
 winresource.workspace = true

@@ -1,8 +1,12 @@
-//! Web の認証済み接続に紐づく Terminal 拡張セッション。
+//! Web の認証済み接続に紐づく Terminal セッション。
 
 use std::{cell::RefCell, collections::HashMap};
 use std::{path::Path, rc::Rc};
 
+use client_api::{
+    RequestBody, ResponseBody, TerminalRequest, TerminalResponse,
+    WorkspaceRelativePath as ApiWorkspaceRelativePath,
+};
 use client_core::browser::BrowserConnection;
 use editor_core::WorkspaceId;
 use futures_channel::mpsc;
@@ -12,7 +16,7 @@ use terminal::{
     TerminalProfiles, TerminalScreen, TerminalSize, TerminalSnapshot, TerminalStatus,
 };
 
-use super::{BACKEND, SWITCHING, TerminalOutputStream, terminal_operation};
+use super::{BACKEND, SWITCHING, TerminalOutputStream};
 use crate::{
     terminal_extension::{v1, web_projection::Projection},
     web_switch::{terminal_relative_cwd, validate_terminal_sessions},
@@ -39,6 +43,8 @@ enum UiCommand {
 struct UiEntry {
     projection: Projection,
     commands: mpsc::Sender<UiCommand>,
+    /// Host が払い出した ID。ローカル ID との重複表示を防ぐ。
+    host_id: Option<String>,
 }
 
 struct UiRegistry {
@@ -54,7 +60,7 @@ thread_local! {
     static UI_REGISTRY: RefCell<Option<Rc<RefCell<UiRegistry>>>> = const { RefCell::new(None) };
 }
 
-/// 既存 UI の同期 port を Web の非同期 Terminal 拡張に接続する。
+/// 既存 UI の同期 port を Web の非同期 Terminal 接続へ接続する。
 #[derive(Clone, Copy)]
 pub struct ExtensionTerminalBackend;
 
@@ -105,18 +111,29 @@ fn registry() -> Result<Rc<RefCell<UiRegistry>>, TerminalError> {
                 if let Ok(sessions) = ExtensionTerminal::list().await
                     && ensure_current(&connection, &workspace).is_ok()
                 {
+                    let mut state = active.borrow_mut();
+                    let active_ids = state
+                        .entries
+                        .values()
+                        .filter_map(|entry| entry.host_id.clone())
+                        .collect::<Vec<_>>();
                     let found = sessions
                         .into_iter()
+                        .filter(|session| {
+                            !active_ids
+                                .iter()
+                                .any(|id| id.as_str() == session.id.as_str())
+                        })
                         .map(|session| {
+                            let cwd = Path::new(super::ROOT).join(&session.cwd);
                             TerminalSnapshot::empty(
-                                TerminalId::new(session.id),
-                                Path::new(super::ROOT).join(session.working_directory),
+                                session.id,
+                                cwd,
                                 TerminalStatus::Running,
-                                TerminalSize::new(session.columns, session.rows),
+                                session.screen.size,
                             )
                         })
                         .collect::<Vec<_>>();
-                    let mut state = active.borrow_mut();
                     if state.discovered != found {
                         state.discovered = found;
                         notify(&mut state);
@@ -183,15 +200,15 @@ fn create_actor(
         UiEntry {
             projection: Projection::new(snapshot.clone()),
             commands,
+            host_id: attach.then(|| id.as_str().to_owned()),
         },
     );
     let state = registry.clone();
     wasm_bindgen_futures::spawn_local(async move {
         let result = if attach {
-            ExtensionTerminal::attach(id.as_str()).await
+            ExtensionTerminal::attach(id.as_str(), &path).await
         } else {
-            ExtensionTerminal::start_profile_with_id(&path, size, profile, Some(id.as_str().into()))
-                .await
+            ExtensionTerminal::start_profile(&path, size, profile).await
         };
         match result {
             Ok(session) => run_actor(state, id, session, receiver).await,
@@ -215,6 +232,12 @@ async fn run_actor(
     mut session: ExtensionTerminal,
     mut commands: mpsc::Receiver<UiCommand>,
 ) {
+    {
+        let mut state = registry.borrow_mut();
+        if let Some(entry) = state.entries.get_mut(id.as_str()) {
+            entry.host_id = Some(session.id().to_owned());
+        }
+    }
     let mut commands_since_read = 0u8;
     loop {
         let command = commands.next().fuse();
@@ -406,9 +429,7 @@ pub struct ExtensionTerminal {
     workspace: WorkspaceId,
     id: String,
     cwd: String,
-    owner: Option<String>,
     stream: TerminalOutputStream,
-    renderer: terminal_portable_renderer::Renderer,
     closed: bool,
 }
 
@@ -439,169 +460,142 @@ fn ensure_current(
     Ok(())
 }
 
-async fn call<T: serde::Serialize, R: serde::de::DeserializeOwned>(
+/// UI の仮想 root 配下の path を、専用 wire の Workspace 相対 path へ変換する。
+fn parse_cwd(value: &str) -> Result<Option<ApiWorkspaceRelativePath>, String> {
+    if value == "." || value.is_empty() {
+        return Ok(None);
+    }
+    ApiWorkspaceRelativePath::parse(value)
+        .map(Some)
+        .map_err(|_| "Terminal の作業パスが不正です".into())
+}
+
+async fn call(
     connection: &Rc<BrowserConnection>,
     workspace: &WorkspaceId,
-    operation: &str,
-    input: &T,
-) -> Result<R, String> {
+    request: TerminalRequest,
+) -> Result<TerminalResponse, String> {
     ensure_current(connection, workspace)?;
-    let result = terminal_operation(operation, input).await;
+    let response = super::request(connection, RequestBody::Terminal(request)).await?;
     ensure_current(connection, workspace)?;
-    result
+    let ResponseBody::Terminal(response) = response else {
+        return Err("Terminal の応答が不正です".into());
+    };
+    Ok(response)
 }
 
 impl ExtensionTerminal {
     pub async fn profiles() -> Result<TerminalProfiles, String> {
         let (connection, workspace) = connected()?;
-        let response: v1::ProfilesResponse = call(
+        let response = call(
             &connection,
             &workspace,
-            v1::PROFILES,
-            &v1::ProfilesRequest {},
+            TerminalRequest::Profiles {
+                workspace_id: super::api_workspace(&workspace),
+                cwd: None,
+            },
         )
         .await?;
-        crate::terminal_extension::profiles_from_wire(response)
+        let TerminalResponse::Profiles { profiles } = response else {
+            return Err("Terminal profile の応答が不正です".into());
+        };
+        Ok(profiles)
     }
 
-    pub async fn list() -> Result<Vec<v1::Session>, String> {
+    pub async fn list() -> Result<Vec<TerminalSnapshot>, String> {
         let (connection, workspace) = connected()?;
-        let response: v1::ListResponse =
-            call(&connection, &workspace, v1::LIST, &v1::ListRequest {}).await?;
-        validate_terminal_sessions(&response.sessions)?;
-        Ok(response.sessions)
-    }
-
-    pub async fn attach(id: &str) -> Result<Self, String> {
-        let (connection, workspace) = connected()?;
-        let session = Self::list()
-            .await?
-            .into_iter()
-            .find(|session| session.id == id)
-            .ok_or("Terminal session がありません")?;
-        ensure_current(&connection, &workspace)?;
-        let info: v1::InfoResponse =
-            call(&connection, &workspace, v1::INFO, &v1::InfoRequest {}).await?;
-        let renderer = terminal_portable_renderer::Renderer::with_conpty(
-            TerminalSize::new(session.columns, session.rows),
-            info.pty == v1::PtyFlavor::Conpty,
-        )?;
-        let attached: v1::OwnerResponse = call(
+        let response = call(
             &connection,
             &workspace,
-            v1::ATTACH,
-            &v1::IdRequest { id: id.into() },
+            TerminalRequest::List {
+                workspace_id: super::api_workspace(&workspace),
+                cwd: None,
+            },
         )
         .await?;
-        let stream = TerminalOutputStream::new(id.into())?;
-        ensure_current(&connection, &workspace)?;
-        Ok(Self {
-            connection,
-            workspace,
-            id: id.into(),
-            cwd: session.working_directory,
-            owner: attached.owner,
-            stream,
-            renderer,
-            closed: false,
-        })
+        let TerminalResponse::Sessions { sessions } = response else {
+            return Err("Terminal 一覧の応答が不正です".into());
+        };
+        validate_terminal_sessions(&sessions)?;
+        Ok(sessions)
     }
 
-    pub async fn start(
-        path: &Path,
-        size: TerminalSize,
-        shell: Option<v1::ShellCommand>,
-    ) -> Result<Self, String> {
-        Self::start_with_id(path, size, shell, None).await
+    pub async fn attach(id: &str, path: &Path) -> Result<Self, String> {
+        let relative = terminal_relative_cwd(path)?;
+        let (connection, workspace) = connected()?;
+        let response = call(
+            &connection,
+            &workspace,
+            TerminalRequest::Attach {
+                workspace_id: super::api_workspace(&workspace),
+                cwd: parse_cwd(&relative)?,
+                id: TerminalId::new(id),
+            },
+        )
+        .await?;
+        let TerminalResponse::Attached { snapshot } = response else {
+            return Err("Terminal の attach 応答が不正です".into());
+        };
+        Self::from_snapshot(connection, workspace, relative, snapshot)
     }
 
-    pub async fn start_profile_with_id(
+    pub async fn start_profile(
         path: &Path,
         size: TerminalSize,
         profile: Option<String>,
-        requested_id: Option<String>,
     ) -> Result<Self, String> {
-        let cwd = terminal_relative_cwd(path)?;
+        if size.columns == 0 || size.rows == 0 || size.columns > 512 || size.rows > 256 {
+            return Err("Terminal のサイズが不正です".into());
+        }
+        let relative = terminal_relative_cwd(path)?;
         let (connection, workspace) = connected()?;
-        let info: v1::InfoResponse =
-            call(&connection, &workspace, v1::INFO, &v1::InfoRequest {}).await?;
-        let renderer = terminal_portable_renderer::Renderer::with_conpty(
-            size,
-            info.pty == v1::PtyFlavor::Conpty,
-        )?;
-        let started: v1::StartResponse = call(
+        let response = call(
             &connection,
             &workspace,
-            v1::START_PROFILE,
-            &v1::StartProfileRequest {
-                requested_id: requested_id.clone(),
-                profile,
-                working_directory: cwd.clone(),
+            TerminalRequest::StartProfile {
+                workspace_id: super::api_workspace(&workspace),
+                cwd: parse_cwd(&relative)?,
                 columns: size.columns,
                 rows: size.rows,
+                profile: profile.map(TerminalProfileId::new),
             },
         )
         .await?;
-        Self::from_started(connection, workspace, cwd, renderer, started, requested_id)
-    }
-
-    pub async fn start_with_id(
-        path: &Path,
-        size: TerminalSize,
-        shell: Option<v1::ShellCommand>,
-        requested_id: Option<String>,
-    ) -> Result<Self, String> {
-        let cwd = terminal_relative_cwd(path)?;
-        let (connection, workspace) = connected()?;
-        let info: v1::InfoResponse =
-            call(&connection, &workspace, v1::INFO, &v1::InfoRequest {}).await?;
-        let renderer = terminal_portable_renderer::Renderer::with_conpty(
-            size,
-            info.pty == v1::PtyFlavor::Conpty,
-        )?;
-        let shell = shell.unwrap_or(info.default_shell);
-        let started: v1::StartResponse = call(
+        let TerminalResponse::Started { id } = response else {
+            return Err("Terminal の開始応答が不正です".into());
+        };
+        let attached = call(
             &connection,
             &workspace,
-            v1::START,
-            &v1::StartRequest {
-                requested_id: requested_id.clone(),
-                program: shell.program,
-                arguments: shell.arguments,
-                environment: shell.environment,
-                working_directory: cwd.clone(),
-                columns: size.columns,
-                rows: size.rows,
+            TerminalRequest::Attach {
+                workspace_id: super::api_workspace(&workspace),
+                cwd: parse_cwd(&relative)?,
+                id,
             },
         )
         .await?;
-        Self::from_started(connection, workspace, cwd, renderer, started, requested_id)
+        let TerminalResponse::Attached { snapshot } = attached else {
+            return Err("Terminal の attach 応答が不正です".into());
+        };
+        Self::from_snapshot(connection, workspace, relative, snapshot)
     }
 
-    fn from_started(
+    fn from_snapshot(
         connection: Rc<BrowserConnection>,
         workspace: WorkspaceId,
         cwd: String,
-        renderer: terminal_portable_renderer::Renderer,
-        started: v1::StartResponse,
-        requested_id: Option<String>,
+        snapshot: TerminalSnapshot,
     ) -> Result<Self, String> {
-        if started.id.is_empty()
-            || started.id.len() > 256
-            || requested_id.as_ref().is_some_and(|id| id != &started.id)
-        {
+        let id = snapshot.id.as_str().to_owned();
+        if id.is_empty() || id.len() > 256 {
             return Err("Terminal session ID が不正です".into());
         }
-        let stream = TerminalOutputStream::new(started.id.clone())?;
-        ensure_current(&connection, &workspace)?;
         Ok(Self {
             connection,
             workspace,
-            id: started.id,
+            id,
             cwd,
-            owner: started.owner,
-            stream,
-            renderer,
+            stream: TerminalOutputStream::new(snapshot),
             closed: false,
         })
     }
@@ -613,7 +607,7 @@ impl ExtensionTerminal {
         &self.cwd
     }
     pub fn owner(&self) -> Option<&str> {
-        self.owner.as_deref()
+        self.stream.owner()
     }
 
     fn ensure_open(&self) -> Result<(), String> {
@@ -623,60 +617,67 @@ impl ExtensionTerminal {
         ensure_current(&self.connection, &self.workspace)
     }
 
-    pub async fn read(&mut self, timeout_ms: u32) -> Result<ExtensionTerminalUpdate, String> {
+    pub async fn read(&mut self, _timeout_ms: u32) -> Result<ExtensionTerminalUpdate, String> {
         self.ensure_open()?;
-        let batch = self.stream.read(v1::MAX_READ_BYTES, timeout_ms).await?;
-        if let Err(error) = self.ensure_open() {
-            self.stream.discard(batch)?;
-            return Err(error);
-        }
-        let mut result = None;
-        self.stream.apply(batch, |output| {
-            let reply = self.renderer.process(&output.bytes);
-            result = Some((self.renderer.snapshot(), reply, output.clone()));
-            Ok(())
-        })?;
-        let (screen, reply, output) = result.expect("successful apply supplies output");
-        self.owner = output.owner.clone();
-        let session = self.connection.session_id();
-        let is_owner = session
-            .as_ref()
-            .is_some_and(|session| output.owner.as_deref() == Some(session.as_str()));
-        let reply_error = if is_owner && !reply.is_empty() {
-            self.write_bytes(&reply).await.err()
-        } else {
-            None
+        let response = call(
+            &self.connection,
+            &self.workspace,
+            TerminalRequest::Poll {
+                workspace_id: super::api_workspace(&self.workspace),
+                id: TerminalId::new(self.id.clone()),
+            },
+        )
+        .await?;
+        let TerminalResponse::Events { events } = response else {
+            return Err("Terminal の poll 応答が不正です".into());
         };
+        if !self.stream.apply(events)? {
+            // 差分が飛んだ。Host の snapshot から画面を作り直す。
+            self.resync_screen().await?;
+        }
         Ok(ExtensionTerminalUpdate {
-            screen,
-            owner: output.owner,
-            exit: output.exit,
-            read_error: output.read_error,
-            write_error: output.write_error,
-            reply_error,
+            screen: self.stream.screen().clone(),
+            owner: self.stream.owner().map(str::to_owned),
+            exit: self.stream.take_exit().map(|code| v1::Exit { code }),
+            read_error: self.stream.take_failure(),
+            write_error: None,
+            reply_error: None,
         })
     }
 
-    async fn write_bytes(&self, bytes: &[u8]) -> Result<(), String> {
-        self.ensure_open()?;
-        for chunk in bytes.chunks(v1::MAX_READ_BYTES as usize) {
-            call::<_, ()>(
-                &self.connection,
-                &self.workspace,
-                v1::WRITE,
-                &v1::WriteRequest {
-                    id: self.id.clone(),
-                    bytes: chunk.to_vec(),
-                },
-            )
-            .await?;
-        }
+    async fn resync_screen(&mut self) -> Result<(), String> {
+        let response = call(
+            &self.connection,
+            &self.workspace,
+            TerminalRequest::Attach {
+                workspace_id: super::api_workspace(&self.workspace),
+                cwd: parse_cwd(&self.cwd)?,
+                id: TerminalId::new(self.id.clone()),
+            },
+        )
+        .await?;
+        let TerminalResponse::Attached { snapshot } = response else {
+            return Err("Terminal の attach 応答が不正です".into());
+        };
+        self.stream.reset(snapshot);
         Ok(())
+    }
+
+    async fn complete(&self, request: TerminalRequest) -> Result<(), String> {
+        match call(&self.connection, &self.workspace, request).await? {
+            TerminalResponse::Completed => Ok(()),
+            _ => Err("Terminal の応答が不正です".into()),
+        }
     }
 
     pub async fn input(&self, input: &TerminalInput) -> Result<(), String> {
         self.ensure_open()?;
-        self.write_bytes(&self.renderer.input(input)?).await
+        self.complete(TerminalRequest::Input {
+            workspace_id: super::api_workspace(&self.workspace),
+            id: TerminalId::new(self.id.clone()),
+            input: input.clone(),
+        })
+        .await
     }
 
     pub async fn resize(&mut self, size: TerminalSize) -> Result<TerminalScreen, String> {
@@ -685,56 +686,48 @@ impl ExtensionTerminal {
         if size.columns == 0 || size.rows == 0 || size.columns > 512 || size.rows > 256 {
             return Err("Terminal のサイズが不正です".into());
         }
-        call::<_, ()>(
-            &self.connection,
-            &self.workspace,
-            v1::RESIZE,
-            &v1::ResizeRequest {
-                id: self.id.clone(),
-                columns: size.columns,
-                rows: size.rows,
-            },
-        )
+        self.complete(TerminalRequest::Resize {
+            workspace_id: super::api_workspace(&self.workspace),
+            id: TerminalId::new(self.id.clone()),
+            columns: size.columns,
+            rows: size.rows,
+        })
         .await?;
-        self.renderer.resize(size)?;
-        Ok(self.renderer.snapshot())
+        Ok(self.stream.screen().clone())
     }
 
-    async fn owner_operation(&mut self, operation: &str) -> Result<(), String> {
-        self.ensure_open()?;
-        let response: v1::OwnerResponse = call(
-            &self.connection,
-            &self.workspace,
-            operation,
-            &v1::IdRequest {
-                id: self.id.clone(),
-            },
-        )
-        .await?;
-        self.owner = response.owner;
-        Ok(())
-    }
     pub async fn claim(&mut self) -> Result<(), String> {
-        self.owner_operation(v1::CLAIM).await
-    }
-    pub async fn release(&mut self) -> Result<(), String> {
-        self.owner_operation(v1::RELEASE).await
-    }
-    pub async fn detach(&mut self) -> Result<(), String> {
-        self.owner_operation(v1::DETACH).await?;
-        self.closed = true;
+        self.ensure_open()?;
+        self.complete(TerminalRequest::Claim {
+            workspace_id: super::api_workspace(&self.workspace),
+            id: TerminalId::new(self.id.clone()),
+        })
+        .await?;
+        let owner = self
+            .connection
+            .session_id()
+            .map(|session| session.as_str().to_owned());
+        self.stream.set_owner(owner);
         Ok(())
     }
+
+    pub async fn release(&mut self) -> Result<(), String> {
+        self.ensure_open()?;
+        self.complete(TerminalRequest::Release {
+            workspace_id: super::api_workspace(&self.workspace),
+            id: TerminalId::new(self.id.clone()),
+        })
+        .await?;
+        self.stream.set_owner(None);
+        Ok(())
+    }
+
     pub async fn close(&mut self) -> Result<(), String> {
         self.ensure_open()?;
-        call::<_, ()>(
-            &self.connection,
-            &self.workspace,
-            v1::CLOSE,
-            &v1::IdRequest {
-                id: self.id.clone(),
-            },
-        )
+        self.complete(TerminalRequest::Terminate {
+            workspace_id: super::api_workspace(&self.workspace),
+            id: TerminalId::new(self.id.clone()),
+        })
         .await?;
         self.closed = true;
         Ok(())

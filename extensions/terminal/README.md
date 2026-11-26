@@ -1,17 +1,17 @@
 # Terminal 拡張
 
-Terminal のセッション操作、公開 DTO、Client の画面モデルを配置する領域です。Host の共通プロトコルは Terminal の型に依存せず、汎用拡張操作とプロセス能力を提供します。Client の表示器への配線には Terminal 固有のコードが残っています。
+Terminal のセッション操作、公開 DTO、Client の画面モデルを配置する領域です。Host は Terminal 専用の `terminal` request を提供し、PTY とプロセス情報を Host 内で仲介します。
 
 ## 構成
 
 - `component/`: 公開 WIT を通して Host の能力を使う Wasm 実行アダプターと、表示・設定・翻訳の宣言。
 - `host/`（crate `terminal-host`）: 拡張セッション操作の判断。Host 能力を port として受け取り、Wasm や Host の内部実装を参照しない。`component/` と `native/` はここを共有する。
 - `native/`: 公開 native ABI v1 を使って同じロジックを接続する。Windows x86_64 の配布入力には、このライブラリと共通の設定・表示宣言を含める。
-- `api/`: component とクライアントが共有するセッション操作の v1 DTO。操作名も `terminal.v1.*` で版を持つ。Host 内部型には依存しない。
+- `api/`: component が使うセッション操作の v1 DTO。操作名も `terminal.v1.*` で版を持つ。Host 内部型には依存しない。Client は専用 `terminal` wire の契約を使う。
 - `contract/`（crate `terminal-contract`、参照名 `terminal`）: Terminal の型・wire DTO・`TerminalBackend` port の正本。
-- `adapter/`（crate `local-terminal`）: `TerminalHost` port の PTY 実装と、Host 側の Terminal セッションサービス。現行 Host の配線は未接続で、一部の非 Windows テストで使う。
+- `adapter/`（crate `local-terminal`）: `TerminalHost` port の PTY 実装と、Host 側の Terminal セッションサービス。Host の `BackendClient::terminals()` がこのサービスを使う。
 - `renderer/`（crate `terminal-renderer`）: Desktop のネイティブ描画器。VT/ANSI の画面状態と入力変換を担い、PTY を所有しない。
-- `portable-renderer/`（crate `terminal-portable-renderer`）: Web と Wasm でもビルドできる画面モデル。ターミナル画面を Wasm で描画するものではない。Web はこのモデルをクライアント側で描画し、拡張ロジックだけが Wasm で動く。
+- `portable-renderer/`（crate `terminal-portable-renderer`）: Web と Wasm でもビルドできる画面モデル。現在の Web は Host が生成した snapshot と差分を適用するため、PTY 出力の描画には使わない。
 
 `component/`、`host/`、`api/` は同じ親ディレクトリに置けば本体の Cargo workspace 外でも
 ビルドできる。`python -m scripts.extensions.smoke_terminal` はその状態をコピーで再現し、
@@ -33,7 +33,7 @@ workspace 設定なしでビルドできることを検証する。
 
 ## 配線
 
-Desktop と Web は拡張の `terminal.v1.*` 操作を汎用の `host.extensions.dispatch` 経由で呼びます。Host は必要な PTY とプロセス情報を公開能力として仲介します。Terminal の ON／OFF は Host の次回起動で反映します。
+Desktop と Web は Terminal 専用の `terminal` request（`TerminalRequest` / `TerminalResponse`）を使います。Desktop は in-process の Host サービスを直接呼び、Web は認証済み接続の wire へ送ります。汎用の `host.extensions.dispatch` は Terminal の操作経路には使いません。Host は必要な PTY とプロセス情報を自分で仲介します。Terminal の ON／OFF は Host の次回起動で反映します。
 
 開発起動では `scripts/extensions/dev_bundle.py` が `extensions/` の宣言を発見して同梱 package を作ります。Windows x86_64 では native アダプターを使用します。
 
@@ -42,8 +42,8 @@ Desktop と Web は拡張の `terminal.v1.*` 操作を汎用の `host.extensions
 - タブを開くとセッションを開始し、タブを閉じると終了します。
 - Workspace の切断は detach で、PTY は残ります。
 - タブごとに個別のセッションを持ちます。
-- `terminal.v1.profiles` で選択肢を取得し、
-  `terminal.v1.start-profile` に profile ID を渡す。起動 command は拡張側で決定し、
+- `terminal.profiles` で選択肢を取得し、
+  `terminal.start-profile` に profile ID を渡す。起動 command は Host が決定し、
   未知の ID を拒否する。Desktop・Web は接続ごとに同じ操作を使用する。
 - フォント、行送り、カーソル、既定 profile は拡張の設定宣言から設定する。
   拡張側が未設定の場合は既存の Terminal 設定値を参照し、値がなければ描画器の既定値を使う。
