@@ -105,7 +105,7 @@ delta として受け取る。protocol 0.13 で追加した契約で、Desktop�
   誰も見ていない更新で workspace の event 連番を消費しないため。
 - Host は Workspace を閉じても最後に受理した view state を保持し、次に参加した Client へ
   snapshot として返す。永続化はせず、Host の終了で失う。
-- `WorkspaceView` は `clients/state` の `WorkspaceViewState` のうち、Client 固有の
+- `WorkspaceView` は `workbench/state` の `WorkspaceViewState` のうち、Client 固有の
   `root`（絶対 path）と未保存内容（`draft_content`）を除いた形。Document の内容は
   保存済みのものだけを既存の Workbench 同期・Document API 経由で共有し、未保存 buffer の
   リアルタイム共有はこの契約に含めない。

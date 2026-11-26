@@ -27,13 +27,16 @@ PATH_RULES = [
     (["scripts/check.py", "scripts/test_check.py", "scripts/ci/", ".github/workflows/"],
      set(ALL_JOBS)),
     # Desktop 関連。
-    # clients/state と clients/ui は Web の wasm ビルド（apps/web/wasm）でも
-    # コンパイルされる。
+    # workbench/state と workbench/ui は Web の wasm ビルド（apps/web/wasm）でも
+    # コンパイルされる。clients/state と clients/ui は移設前の path で、削除差分として
+    # 現れるため同じ面へ割り当てる。
     (["clients/state/"], {"desktop", "rust_core", "web"}),
     (["apps/desktop/persistence/"], {"desktop", "rust_core"}),
     (["apps/launcher/"], {"desktop", "rust_core"}),
     (["apps/desktop/"], {"desktop"}),
     (["clients/ui/"], {"desktop", "web"}),
+    (["workbench/state/"], {"desktop", "rust_core", "web"}),
+    (["workbench/ui/"], {"desktop", "web"}),
     (["workbench/"], {"rust_core", "desktop", "web"}),
     (["tools/devtools/"], {"desktop"}),
     (["vendor/gpui/"], {"desktop"}),

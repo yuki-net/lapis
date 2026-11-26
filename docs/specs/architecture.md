@@ -7,7 +7,7 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 | 領域 | 所有するもの | 所有しないもの |
 | --- | --- | --- |
 | `apps/desktop/` | Desktop の起動 entry・Composition Root・表示状態の保存 | 共通 UI の Window / Panel 実装、Host 上の実行資源 |
-| `clients/` | Client の Feature 実装、Resource への配線、表示 cache | Host 上の実行資源、共通 Window / Panel の実装 |
+| `workbench/state/`・`workbench/ui/` | Client の Feature 実装、Resource への配線、表示 cache | Host 上の実行資源、共通 Window / Panel の実装 |
 | `workbench/shell/` | Window / Panel / Tab の状態、Dock 配置、Shell の描画 | Feature の実装、Host の正規状態 |
 | `workbench/ui-kit/` | 共通 Widget、Theme / Token、通知・ローカライズの表示基盤 | Feature 固有の画面、Host の判断 |
 | `tools/devtools/` | 開発時のみ使う Inspector・診断 UI（desktop-ui から `#[path]` で読み込む） | 製品の画面構成、Host の正規状態 |
@@ -105,7 +105,7 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 ## 設定の所有境界
 
 - 設定値の所有者は `User` / `Host` / `ProjectShared` / `ProjectLocal` のスコープで表し、項目ごとに保存を許すスコープは `protocol/types/settings` の定義データが決める。優先順位・保存形式・UI の組み立て規則は [設定のスコープと所有者](settings.md) を正本とする。
-- 共有 state と解決済みの実効値は `clients/state` が所有する。Feature は解決結果だけを読み、Feature ごとに設定 cache を作らない。
+- 共有 state と解決済みの実効値は `workbench/state` が所有する。Feature は解決結果だけを読み、Feature ごとに設定 cache を作らない。
 - 設定の保存は Feature の描画・入力処理から直接行わず、`SettingsCoordinator` の worker へ渡す。
 
 ## Desktop の更新境界
@@ -117,7 +117,7 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 - Window 終了時は受付済み入力と表示状態の保存を完了させる。購読・表示 worker の破棄によって Host の Terminal・Agent を終了しない。保存先や Workspace が失われても、復元用 draft を無言で破棄しない。
 
 - 更新の適用は `apps/launcher/` が行い、Desktop の Composition Root と状態を共有しない。更新の検出・download・同意はアプリ側の責務であり、launcher は `staging/` と `current.json` の契約だけを使う（[配布と更新の内部契約](release.md)）。
-- アプリ側の更新は `apps/desktop/app/` が所有し、manifest の取得・検証・staging は launcher の library を共用する。状態は `clients/state` の `UpdateWatch` / `UpdateController` で共有し、UI は描画と操作の入口だけを持つ。data 世代の決定は `app/` の `install.rs` が行い、Feature から layout を直接読まない。
+- アプリ側の更新は `apps/desktop/app/` が所有し、manifest の取得・検証・staging は launcher の library を共用する。状態は `workbench/state` の `UpdateWatch` / `UpdateController` で共有し、UI は描画と操作の入口だけを持つ。data 世代の決定は `app/` の `install.rs` が行い、Feature から layout を直接読まない。
 
 ## Desktop の WindowGroup
 
@@ -169,10 +169,10 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 
 ## UI の target 分割
 
-- `clients/ui` は単一 crate（`desktop-ui`）のまま、Dashboard の Layout と Window の所有を Shell が担う。target 固有の起動 entry は `apps/desktop/app`（Desktop）と `apps/web/wasm`（crate `web`、Web）が持つ。
+- `workbench/ui` は単一 crate（`desktop-ui`）のまま、Dashboard の Layout と Window の所有を Shell が担う。target 固有の起動 entry は `apps/desktop/app`（Desktop）と `apps/web/wasm`（crate `web`、Web）が持つ。
 - `kit` は tokens / theme / components / `LayoutProfile` / `InteractionPolicy` を持ち、Desktop と Web の両方から使う。kit は Host や Client の状態を所有しない。
 - `apps/desktop/app` はネイティブ window の起動（`run`）と Composition Root を持ち、`desktop_ui::desktop_application` / `initialize` / `open_desktop_window` / `on_last_window_closed` をイベントループから呼ぶ。
-- `clients/ui/src/desktop` は window options と `window_host`（Window と Feature の所有、WindowGroup）を持つ。`window_host` は両 target の Shell / Root が共有するため、Desktop 専用の entry として切り出さない。
+- `workbench/ui/src/desktop` は window options と `window_host`（Window と Feature の所有、WindowGroup）を持つ。`window_host` は両 target の Shell / Root が共有するため、Desktop 専用の entry として切り出さない。
 - Web の起動（`run_web`）、wasm 用の backend 組み立て、prototype backend、Host 接続の wasm entry は `apps/web/wasm`（crate `web`）が持つ。ネイティブではビルドしない。
 - 両 target が共有する `DesktopServices` / `InitialView` / `WindowFactory` / `open_desktop_window` は crate ルートの `app` に置く。target 固有のコードを `app` へ戻さない。
 - target 別の entry が共通 UI を起動する際のフォント・App Global・Keymap・最初の Window の組み立ては `entry` に集約し、platform 固有の初期化だけを各 app が行う。
@@ -191,7 +191,7 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 
 ## Desktop の共通Tab操作
 
-- `UiContribution` がViewの表示名・アイコン・カテゴリ・初期配置・複数起動方針・配置能力・表示条件・タブの参照方法を宣言し、`FeatureRegistry`が共通Pickerへ提供する。FeatureごとのTabBarやPanel所有者を作らない。宣言の型は `protocol/types/extension-ui`（crate `extension-ui-contract`）が正本で、`FeatureRegistry` は GPUI の実体と表示状態を `clients/ui` 側で所有する。
+- `UiContribution` がViewの表示名・アイコン・カテゴリ・初期配置・複数起動方針・配置能力・表示条件・タブの参照方法を宣言し、`FeatureRegistry`が共通Pickerへ提供する。FeatureごとのTabBarやPanel所有者を作らない。宣言の型は `protocol/types/extension-ui`（crate `extension-ui-contract`）が正本で、`FeatureRegistry` は GPUI の実体と表示状態を `workbench/ui` 側で所有する。
 - 通知履歴はGPUI App全体で共有し、Rootごとに分かれるWindowGroupには所有させない。通知種別の既定PolicyがPopupへの配送を決め、発生時のActive Windowだけに最新3件まで一時表示する。Popupの終了と履歴の削除は別操作とする。CenterはPickerへ表示しない通常のTabとして共通Layoutを使う。
 - Tabの追加・選択・非表示・Closeは配置状態を更新する操作であり、HostのDocument・Terminal・Agentを終了する操作ではない。
 - タブは種類ごとの単一実体ではなく、個体（`ViewInstanceId`）ごとの実体として扱う。`UiContribution`の複数起動方針で個体化するか単一実体を共有するかを決める。Terminalは`multiple_instances`で個体化し、2つ目のタブは新しいSessionを起動する。同じDocumentは`DocumentId`で同一タブを指すため、開き直しは複製せず既存タブの選択になる。状態を持たない単一表示のToolは共有実体のままとする。
@@ -250,7 +250,7 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 
 `python scripts/check_architecture.py` は `cargo metadata --locked --no-deps` の全 workspace member と全 dependency（dev/build/target 条件を含む）を検査する。
 許可行列は `scripts/check_architecture.py` が実行上の正本。models は models のみ、protocol は models、application は models、runtime は application/models/protocol、infrastructure は application/runtime/models、transport は runtime/protocol/models へ依存できる。各層内の依存も許可する。
-Desktop の Composition Root は `apps/desktop/app/` として具体実装を組み立てる。通常の Client (`clients/cli/` 等) は models/protocol への依存に限定し、Backend の実装に直接依存させない。Desktop UI は `clients/state/` と models/protocol のみへ依存できる。`clients/state/` は models/protocol、Desktop 表示状態を保存する persistence は state/models のみへ依存できる。Backend からこれらの Client 実装への依存は dev-dependency も禁止する。
+Desktop の Composition Root は `apps/desktop/app/` として具体実装を組み立てる。通常の Client (`clients/cli/` 等) は models/protocol への依存に限定し、Backend の実装に直接依存させない。Desktop UI は `workbench/state/` と models/protocol のみへ依存できる。`workbench/state/` は models/protocol、Desktop 表示状態を保存する persistence は state/models のみへ依存できる。Backend からこれらの Client 実装への依存は dev-dependency も禁止する。
 Backend と共通契約から GPUI/native dialog への依存は禁止。
 
 既存違反は `scripts/architecture-exceptions.json` の完全一致した crate 対と理由に限定する。未使用例外も失敗するため、削除した違反を再導入する余地を残さない。新規違反を「移行中」として追加しない。

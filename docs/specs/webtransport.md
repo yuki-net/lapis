@@ -103,7 +103,7 @@ managed Host（`host/app/src/web_publisher.rs`）は `lapis-web` の子プロセ
 | `host/transport/web-bridge/` | 削除。`oidc` は `lapis-web` へ移す |
 | `remote::RemoteServer` / axum WebSocket | 削除（未使用。`axum`/`axum-server` 依存を `remote` から外す） |
 | `wire::REMOTE_WEBSOCKET_PATH` / `REMOTE_WEBSOCKET_PROTOCOL` / `WEB_BRIDGE_PORT` | 削除。`WEB_PAGE_PORT` は残す |
-| `clients/state/src/web_access.rs` の `bridge_port` / `bridge_url` / `websocket_scheme` | 削除し、ページ URL だけを表示する。設定 UI の `web-bridge-url` も削除 |
+| `workbench/state/src/web_access.rs` の `bridge_port` / `bridge_url` / `websocket_scheme` | 削除し、ページ URL だけを表示する。設定 UI の `web-bridge-url` も削除 |
 | `host/app/tests/managed_web_auth.rs` の `LAPIS_WEB_BRIDGE*` | 置き換え（下の検証） |
 | `scripts/ci/paths.py` の `host/transport/web-bridge/` 規則 | 削除 |
 | `scripts/dev-session` / `.run/Run Web (Bridge).run.xml` / `.cargo/config.toml` の `web-bridge` | `lapis-web` に置き換え |

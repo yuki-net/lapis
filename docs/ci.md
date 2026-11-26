@@ -217,7 +217,7 @@ route ごとに 1 job（**この機械の OS**）を並列で起動し、全 job
 CI  worktree
 
 OK Host / Windows             [########--] 14/18   12m03s
->> Desktop / Windows          [#####-----]  9/18    7m41s  clients/ui/src/shell/layout.rs
+>> Desktop / Windows          [#####-----]  9/18    7m41s  workbench/ui/src/shell/layout.rs
 .. Web / Windows              [----------]  0/3      -      (waiting)
 
 [2/3 done] 12m34s  Ctrl+C to stop
