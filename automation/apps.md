@@ -1,7 +1,7 @@
 # GitHub App の作り方
 
 worker / reviewer / 3 人目（judge など）は、すべて同じ手順で作る。
-**鍵は repo に置かない。** VM の各ユーザーの home に置く。
+**鍵は repo に置かない。** ブローカーのアカウントだけが読める場所に置く。
 
 ## 1. App を作る
 
@@ -16,72 +16,68 @@ worker / reviewer / 3 人目（judge など）は、すべて同じ手順で作�
 
 ## 2. 権限
 
-Repository permissions:
+### worker
 
 | 権限 | 値 |
 | --- | --- |
 | Contents | **Read and write**（push / merge に必要） |
-| Pull requests | **Read and write**（PR / review / merge） |
-| Issues | **Read and write**（PR のラベル・コメント） |
-| Checks | **Read**（CI の結果を読む） |
-| Commit statuses | **Read**（status を読む） |
+| Pull requests | **Read and write**（PR 作成） |
 | Metadata | Read（必須） |
 
-付与しないもの（write にしないもの）:
+`Workflows: Read and write` は、worker が `.github/workflows/` を変更する必要が
+出たときだけ付ける。`.github/` は保護パスなので、通常は付けない。
 
-- Actions
-- Workflows
-- Administration
-- Secrets
-- Environments
-- Checks の Write
-- Commit statuses の Write
+### reviewer
 
-> `Checks` / `Commit statuses` は **Read だけ**にする。Write を付けると required check を
-> 偽造できる。worker / reviewer のどちらにも Write を付けない。
-> Read が無いと、reviewer は CI の結果を読めない。
+| 権限 | 値 |
+| --- | --- |
+| Contents | **Read** |
+| Pull requests | **Read** |
+| Metadata | Read（必須） |
 
-## 3. インストール
+reviewer は **GitHub に書き込まない**。コメント・ラベル・merge はしない。
+
+## 3. 追加で必要になるかもしれない権限（未確定）
+
+- **CI を App token で読む場合**: `Checks: Read` と `Commit statuses: Read` が必要。
+  `gh pr view --json statusCheckRollup` / `gh pr checks` はこの 2 つを要求する。
+  coordinator（オーナー token）が CI を読むなら、App には付けない。
+- **ラベルを App で付ける場合**: `Issues: Read and write` が必要。
+  coordinator が付けるなら、worker / reviewer には付けない。
+- `Checks` / `Commit statuses` の **Write は付けない**（required check を偽造できる）。
+
+## 4. インストール
 
 1. App の **Install App** から `yuki-net/lapis` にインストール
 2. App ID と Installation ID を控える
 3. **Generate a private key** で `.pem` をダウンロード（一度しか出ない）
 
-## 4. 鍵の置き場
+## 5. 鍵の置き場
 
-VM の各ユーザーで:
+`automation/KEYS.md` の境界（別 Windows ユーザー / サービスアカウント）に従う。
 
-```bash
-mkdir -p ~/.config/lapis/worker
-install -m 600 /path/to/lapis-worker.pem ~/.config/lapis/worker/app.pem
-```
+- 鍵はブローカーのアカウントだけが読める場所に置く（ACL）
+- `roles.toml` には `key_ref` だけを書き、パスや鍵は書かない
+- オーナーの `gh` keyring は使わない
 
-`~/.config/lapis/worker/env` に App ID / Installation ID を書く（600）。
+## 6. reviewer の追加設定
 
-`roles.toml` には **パスだけ**を書き、鍵は書かない。
+- **Review / Protected の bypass には追加しない**（reviewer は merge しない）
+- `reviews` team には**入れない**
+- worker App も bypass には入れない
 
-## 5. reviewer の追加設定
+## 7. 3 人目以降
 
-reviewer App だけ:
-
-1. ruleset `Review` の **bypass actors** に `Integration` として追加する
-   - `bypass_mode: pull_request`
-2. `Protected` の bypass には**追加しない**
-3. `reviews` team には**入れない**（Code Owner 承認を満たさせない）
-
-worker App はどちらの bypass にも入れない。
-
-## 6. 3 人目以降
-
-1. 同じ手順で App を作る
+1. 同じ手順で App を作る（read-only を基本）
 2. `automation/roles.toml` に `[roles.<name>]` を足す
-3. VM のユーザーと `~/.config/lapis/<name>/app.pem` を用意する
+3. ブローカーに `key_ref` の鍵を置く
 4. 必要なら ruleset の bypass を追加する（Protected には追加しない）
 
-コードの変更は不要。`roles.toml` と鍵の配置だけで増やせる。
+コードの変更は不要。`roles.toml` とブローカーの鍵の配置だけで増やせる。
 
-## 7. 確認
+## 8. 確認
 
 - `gh api -i /app` は App の JWT で確認できる
 - installation token は `automation/KEYS.md` の手順で発行する
-- token で `gh pr list` が見えること、`gh pr merge` は worker では失敗することを確認する
+- worker token で `gh pr create` ができること
+- reviewer token で `gh pr view` ができ、`gh pr comment` / `gh pr merge` は失敗することを確認する

@@ -1,13 +1,19 @@
-# 自動マージ・リトライ・保護パスの正本。
+# レビュー・リトライ・保護パスの正本。
 # 実装（dispatch / reviewer）はこの値を読む。値をコードに散らさない。
+# 自動マージはしない。merge は人間（またはオーナーが明示したとき）だけ。
 
 version = 1
 
-[auto_merge]
+[merge]
+# reviewer は merge しない。人間が merge する。
+mode = "manual"
+
+[review]
 # CI の必須チェック。Gate を required にした後で有効になる。
 require_ci = "Gate"
-require_review = true
-# PR の author がこの一覧にいるときだけ自動マージする。
+# reviewer の所見。approve 以外は人間に渡す。
+require_verdict = "approve"
+# PR の author がこの一覧にいるときだけ通常 PR として扱う。
 # worker App の bot login は App 作成後に確定する。
 allow_authors = ["lapis-worker[bot]", "yukiidayo"]
 deny_forks = true
@@ -25,8 +31,8 @@ stale_building_minutes = 60
 job_timeout_minutes = 60
 
 [protected_paths]
-# ここを 1 つでも触った PR は自動マージしない。人間が承認する。
-# CODEOWNERS の保護範囲に合わせる（Policy notice は lint 基盤・CI・自動化のみ）。
+# ここを 1 つでも触った PR は、人間が承認するまで merge しない。
+# CODEOWNERS の保護範囲に合わせる。
 paths = [
   ".github/",
   "automation/",
