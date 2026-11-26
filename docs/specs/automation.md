@@ -41,6 +41,8 @@ Issue から実装・レビュー・マージまでを自動化するときの�
 
 - Hyper-V / WSL2 の VM は作らない
 - Windows の**別ローカルユーザー `orcaworker`** で `orca serve` を起動し、オーナーの Orca に pair する
+  - 初回はホストで `orca environment add --name orcaworker --pairing-code "orca://pair?code=..."` する
+  - pairing link は起動ごとに変わる。起動スクリプトがログから拾う（M2）
 - worker / reviewer は `orcaworker` の Orca worktree / セッションで動く
 - オーナーの `gh` keyring は `orcaworker` から読めない（これが境界）
 - 追加の防御として、将来はサービスアカウント + localhost ブローカー（B）を重ねられる
