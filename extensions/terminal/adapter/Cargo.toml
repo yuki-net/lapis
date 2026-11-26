@@ -7,6 +7,9 @@ license.workspace = true
 
 [dependencies]
 futures-channel = "0.3"
+local-process = { path = "../../../host/adapters/process" }
+process = { path = "../../../protocol/types/process" }
 terminal = { package = "terminal-contract", path = "../contract" }
+terminal-host = { path = "../host" }
 terminal-renderer = { path = "../renderer" }
 portable-pty.workspace = true

@@ -54,11 +54,11 @@ def build_standalone():
     with tempfile.TemporaryDirectory(prefix="terminal-native-", dir=ROOT / "target") as temp:
         root = Path(temp)
         for relative in ("protocol/extension-api/native", "extensions/terminal/api",
-                         "extensions/terminal/logic", "extensions/terminal/native"):
+                         "extensions/terminal/host", "extensions/terminal/native"):
             shutil.copytree(ROOT / relative, root / relative)
         (root / "Cargo.toml").write_text(
             '[workspace]\nresolver = "3"\nmembers = ["protocol/extension-api/native", '
-            '"extensions/terminal/api", "extensions/terminal/logic", "extensions/terminal/native"]\n',
+            '"extensions/terminal/api", "extensions/terminal/host", "extensions/terminal/native"]\n',
             encoding="utf-8",
         )
         command = ["cargo", "build", "--offline", "--manifest-path", str(root / "Cargo.toml"),

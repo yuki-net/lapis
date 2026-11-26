@@ -59,6 +59,7 @@ impl RemoteRequestHandler for HostRemoteHandler {
                 | RequestBody::HostExtensionSetCapability(_)
                 | RequestBody::HostExtensionDispatch(_)
                 | RequestBody::DocumentRelocate(_)
+                | RequestBody::Terminal(_)
         ) {
             return self.inner.handle(grant, request);
         }
@@ -84,6 +85,11 @@ impl RemoteRequestHandler for HostRemoteHandler {
                         capability::EXTENSIONS_EXECUTE | capability::HOST_MANAGE
                     )
                 })
+            } else if matches!(request.body, RequestBody::Terminal(_)) {
+                grant
+                    .capabilities()
+                    .iter()
+                    .any(|capability| capability.as_str() == capability::WORKSPACE_TERMINAL)
             } else if matches!(
                 request.body,
                 RequestBody::HostExtensionSetEnabled(_)
@@ -246,6 +252,12 @@ impl RemoteRequestHandler for HostRemoteHandler {
                             Err(message) => web_error(message),
                         }
                     }
+                    RequestBody::Terminal(request) => crate::host_terminals::dispatch(
+                        &host,
+                        grant.session_id(),
+                        grant.workspace_id(),
+                        request,
+                    ),
                     RequestBody::HostExtensionSetEnabled(request) => {
                         if extensions_entry::ExtensionPackageId::try_new(&request.id).is_err() {
                             return error(INVALID_REQUEST);
@@ -343,6 +355,14 @@ impl RemoteRequestHandler for HostRemoteHandler {
     fn disconnect(&self, grant: &SessionGrant) {
         self.host
             .extension_session_disconnected(grant.session_id(), grant.workspace_id());
+        // PTY は残し、切断した接続の操作権だけを解放して再アタッチできるようにする。
+        if let Err(error) = self
+            .host
+            .terminals_service()
+            .release_session(grant.session_id().as_str())
+        {
+            eprintln!("Terminal の操作権を解放できません: {error}");
+        }
         self.inner.disconnect(grant);
     }
 }

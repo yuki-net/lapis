@@ -20,6 +20,7 @@ pub use client::{BackendClient, ExtensionConnection};
 mod extension_pty;
 mod extensions;
 mod features;
+mod host_terminals;
 mod session_view;
 mod web_publisher;
 mod workbench;
@@ -46,6 +47,7 @@ pub fn supported_capabilities() -> client_api::CapabilitySet {
             "workspace.tasks.control",
             "workspace.process.read",
             "workspace.process.control",
+            "workspace.terminal",
             EXTENSIONS_READ,
             EXTENSIONS_MANAGE,
             EXTENSIONS_EXECUTE,
@@ -92,6 +94,9 @@ struct HostInner {
     extension_startup_errors: std::collections::BTreeMap<String, String>,
     /// Host 自身と Host が spawn したプロセスのレジストリ。
     processes: Arc<dyn process::ProcessRegistry>,
+    /// Host が直接所有する Terminal。拡張 PTY とは別のレジストリで、Host の
+    /// `TerminalService` だけが保持する。session の終了と Workspace の破棄で回収する。
+    terminals: Arc<local_terminal::TerminalService>,
 }
 
 impl HostInner {
@@ -268,6 +273,11 @@ impl BackendHost {
             }
         };
         let processes = local_process::LocalProcessRegistry::new(process::ProcessOrigin::Host);
+        let terminals = Arc::new(local_terminal::TerminalService::new(
+            local_terminal::LocalTerminalHost::new(Arc::new(
+                local_process::pty::LocalPtyService::default(),
+            )),
+        ));
         let host = Self {
             inner: Arc::new(HostInner {
                 service: BackendService::start(state)?,
@@ -284,6 +294,7 @@ impl BackendHost {
                 extension_runtime_ids,
                 extension_startup_errors,
                 processes,
+                terminals,
             }),
         };
         if let Some(store) = &host.inner.store {
@@ -485,6 +496,25 @@ impl BackendHost {
     }
     pub fn processes(&self) -> Arc<dyn process::ProcessConnection> {
         BackendClient::from(self.clone()).processes()
+    }
+    /// Host が所有する Terminal。Desktop の in-process 接続とリモート接続で共有する。
+    pub fn terminals(&self) -> Arc<dyn terminal::TerminalBackend> {
+        BackendClient::from(self.clone()).terminals()
+    }
+
+    pub(crate) fn terminals_service(&self) -> Arc<local_terminal::TerminalService> {
+        Arc::clone(&self.inner.terminals)
+    }
+
+    /// 登録済み Workspace の Host 上の root。Terminal の path 解決に使う。
+    pub(crate) fn workspace_root(&self, workspace: &WorkspaceId) -> Option<PathBuf> {
+        self.inner
+            .workspaces
+            .lock()
+            .ok()?
+            .iter()
+            .find(|(_, id)| *id == workspace)
+            .map(|(root, _)| root.clone())
     }
 
     /// 導入済み拡張の目録を宣言として返す。Host の state directory が正本。

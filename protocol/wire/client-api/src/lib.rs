@@ -29,6 +29,7 @@ mod request;
 mod response;
 mod revision;
 mod snapshot;
+mod terminal_wire;
 mod version;
 mod view;
 mod workbench;
@@ -87,6 +88,11 @@ pub use request::RequestBody;
 pub use response::ResponseBody;
 pub use revision::{EventSequence, Revision};
 pub use snapshot::{SnapshotReason, SnapshotRequest, SnapshotResponse, WorkspaceSnapshot};
+pub use terminal::{
+    TerminalDelta, TerminalEvent, TerminalId, TerminalInput, TerminalProfile, TerminalProfileId,
+    TerminalProfiles, TerminalScreen, TerminalSize, TerminalSnapshot, TerminalStatus,
+};
+pub use terminal_wire::{TerminalRequest, TerminalResponse};
 pub use version::{
     CURRENT_PROTOCOL, InvalidProtocolRange, ProtocolRange, ProtocolVersion, VersionMismatch,
 };

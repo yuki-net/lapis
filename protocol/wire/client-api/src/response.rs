@@ -40,6 +40,8 @@ pub enum ResponseBody {
     HostExtensionSetCapability(crate::HostExtensionSetCapabilityResponse),
     #[serde(rename = "host.extensions.dispatch")]
     HostExtensionDispatch(crate::HostExtensionDispatchResponse),
+    #[serde(rename = "terminal")]
+    Terminal(crate::TerminalResponse),
     #[serde(rename = "document.relocate")]
     DocumentRelocate(crate::DocumentCloseResponse),
     #[serde(rename = "files.create_directory")]
@@ -112,6 +114,7 @@ impl ResponseBody {
             Self::HostExtensionCapabilities(_) => Some("host.extensions.capabilities"),
             Self::HostExtensionSetCapability(_) => Some("host.extensions.set_capability"),
             Self::HostExtensionDispatch(_) => Some("host.extensions.dispatch"),
+            Self::Terminal(_) => Some("terminal"),
             Self::DocumentRelocate(_) => Some("document.relocate"),
             Self::CreateDirectory(_) => Some("files.create_directory"),
             Self::DocumentInspect(_) => Some("document.inspect"),

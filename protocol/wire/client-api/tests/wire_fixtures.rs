@@ -9,8 +9,8 @@ use client_api::{
     AuthMethod, AuthRequired, AuthenticateRequest, CURRENT_PROTOCOL, ClientId, ClientKind,
     ClientMessage, CredentialId, ErrorCode, EventBody, EventEnvelope, EventSequence, HelloRequest,
     HelloResponse, INVALID_REQUEST, OidcClientConfig, OidcRequest, PairedResponse, ProtocolError,
-    ProtocolRange, RequestBody, RequestEnvelope, RequestId, ServerMessage, SessionId, WorkspaceId,
-    WorkspaceListRequest,
+    ProtocolRange, RequestBody, RequestEnvelope, RequestId, ResponseBody, ResponseEnvelope,
+    ServerMessage, SessionId, WorkspaceId, WorkspaceListRequest,
 };
 
 const CLIENT_HELLO: &str = r#"{"protocol":{"major":0,"minimum_minor":14,"maximum_minor":14},"client_id":"mobile-1","client_name":"Mobile","client_kind":"android","requested_capabilities":[]}"#;
@@ -27,6 +27,9 @@ const PAIRED_RESPONSE: &str = r#"{"type":"auth.paired","payload":{"hello":{"prot
 const VIEW_SUBSCRIBE: &str = r#"{"request_id":"request-2","type":"workspace.view.subscribe","payload":{"workspace_id":"workspace-1"}}"#;
 const VIEW_UPDATE: &str = r#"{"request_id":"request-3","type":"workspace.view.update","payload":{"workspace_id":"workspace-1","view":{"open_documents":[],"active_path":null,"active_document_id":null}}}"#;
 const VIEW_CHANGED: &str = r#"{"event_sequence":8,"type":"workspace.view_changed","payload":{"workspace_id":"workspace-1","revision":3,"view":{"open_documents":[{"document_id":"document-1","path":"src/main.rs","cursor_char":4,"selection_start":0,"selection_end":0,"scroll_x":0.0,"scroll_y":12.5}],"active_path":"src/main.rs","active_document_id":"document-1"}}}"#;
+/// Terminal 専用 wire。要求は Workspace 相対 path だけを運ぶ。
+const TERMINAL_START: &str = r#"{"request_id":"request-5","type":"terminal","payload":{"operation":"start","workspace_id":"workspace-1","columns":80,"rows":24}}"#;
+const TERMINAL_STARTED: &str = r#"{"request_id":"request-5","type":"terminal","payload":{"result":"started","id":"terminal-1"}}"#;
 
 const MOBILE_TEST_PATH: &str = "../../../clients/mobile/sharedUi/src/commonTest/kotlin/dev/lapis/mobile/protocol/ProtocolSerializationTest.kt";
 
@@ -172,6 +175,33 @@ fn view_state_messages_match_the_documented_wire_shape() {
         },
     };
     assert_eq!(serde_json::to_string(&event).unwrap(), VIEW_CHANGED);
+}
+
+#[test]
+fn terminal_wire_round_trips_a_workspace_scoped_request() {
+    use client_api::{TerminalId, TerminalRequest, TerminalResponse};
+    let workspace_id = WorkspaceId::try_new("workspace-1").unwrap();
+    let request = RequestEnvelope {
+        request_id: RequestId::try_new("request-5").unwrap(),
+        body: RequestBody::Terminal(TerminalRequest::Start {
+            workspace_id,
+            cwd: None,
+            columns: 80,
+            rows: 24,
+        }),
+    };
+    assert_eq!(serde_json::to_string(&request).unwrap(), TERMINAL_START);
+    let decoded: RequestEnvelope = serde_json::from_str(TERMINAL_START).unwrap();
+    assert_eq!(decoded, request);
+
+    let response = ResponseEnvelope {
+        request_id: RequestId::try_new("request-5").unwrap(),
+        body: ResponseBody::Terminal(TerminalResponse::Started {
+            id: TerminalId::new("terminal-1"),
+        }),
+    };
+    assert_eq!(serde_json::to_string(&response).unwrap(), TERMINAL_STARTED);
+    assert!(response.matches_request(&decoded));
 }
 
 #[test]

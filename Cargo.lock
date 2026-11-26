@@ -1306,6 +1306,7 @@ dependencies = [
  "serde",
  "serde_json",
  "task",
+ "terminal-contract",
  "workbench",
  "workspace",
  "zeroize",
@@ -4408,6 +4409,7 @@ dependencies = [
  "git-contract",
  "libc",
  "local-process",
+ "local-terminal",
  "platform",
  "process",
  "rcgen",
@@ -4420,6 +4422,7 @@ dependencies = [
  "sysinfo",
  "task",
  "tempfile",
+ "terminal-contract",
  "time",
  "tokio",
  "tokio-tungstenite",
@@ -5228,7 +5231,7 @@ version = "0.1.0"
 dependencies = [
  "extension-native-api",
  "serde_json",
- "terminal-logic",
+ "terminal-host",
 ]
 
 [[package]]
@@ -5490,8 +5493,11 @@ name = "local-terminal"
 version = "0.1.0"
 dependencies = [
  "futures-channel",
+ "local-process",
  "portable-pty",
+ "process",
  "terminal-contract",
+ "terminal-host",
  "terminal-renderer",
 ]
 
@@ -9268,7 +9274,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "terminal-logic"
+name = "terminal-host"
 version = "0.1.0"
 dependencies = [
  "serde",

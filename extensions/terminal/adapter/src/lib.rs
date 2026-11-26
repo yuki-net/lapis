@@ -4,6 +4,12 @@
 //! 参照側は crate 名 `local_terminal`（package `local-terminal`）で依存し、
 //! `host/adapters/terminal` のような複製を置かない。
 
+mod host;
+mod service;
+
+pub use host::LocalTerminalHost;
+pub use service::TerminalService;
+
 use std::{
     collections::{HashMap, VecDeque},
     io::Read,

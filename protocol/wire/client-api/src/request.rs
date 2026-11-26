@@ -40,6 +40,8 @@ pub enum RequestBody {
     HostExtensionSetCapability(crate::HostExtensionSetCapabilityRequest),
     #[serde(rename = "host.extensions.dispatch")]
     HostExtensionDispatch(crate::HostExtensionDispatchRequest),
+    #[serde(rename = "terminal")]
+    Terminal(crate::TerminalRequest),
     #[serde(rename = "document.relocate")]
     DocumentRelocate(crate::DocumentRelocateRequest),
     #[serde(rename = "files.create_directory")]
@@ -110,6 +112,7 @@ impl RequestBody {
             Self::HostExtensionCapabilities(_) => "host.extensions.capabilities",
             Self::HostExtensionSetCapability(_) => "host.extensions.set_capability",
             Self::HostExtensionDispatch(_) => "host.extensions.dispatch",
+            Self::Terminal(_) => "terminal",
             Self::DocumentRelocate(_) => "document.relocate",
             Self::CreateDirectory(_) => "files.create_directory",
             Self::DocumentInspect(_) => "document.inspect",
@@ -152,6 +155,7 @@ impl RequestBody {
             | Self::HostWebStart(_)
             | Self::HostWebStop(_) => capability::HOST_MANAGE,
             Self::HostExtensionDispatch(_) => capability::EXTENSIONS_EXECUTE,
+            Self::Terminal(_) => capability::WORKSPACE_TERMINAL,
             Self::HostExtensionSetEnabled(_) | Self::HostExtensionSetCapability(_) => {
                 capability::EXTENSIONS_MANAGE
             }
@@ -203,6 +207,7 @@ impl RequestBody {
             | Self::HostExtensionSetCapability(_)
             | Self::HostExtensionDispatch(_)
             | Self::DocumentRelocate(_) => None,
+            Self::Terminal(request) => Some(request.workspace_id()),
             Self::CreateDirectory(request) => Some(&request.workspace_id),
             Self::DocumentUntitled(request) => Some(&request.workspace_id),
             Self::DocumentInspect(_)
@@ -273,6 +278,26 @@ mod tests {
     fn legacy_terminal_request_is_rejected() {
         let value = serde_json::json!({"type": "terminal.start", "payload": {}});
         assert!(serde_json::from_value::<RequestBody>(value).is_err());
+    }
+
+    #[test]
+    fn terminal_requests_are_scoped_to_their_workspace_and_capability() {
+        let workspace_id = WorkspaceId::try_new("workspace-1").unwrap();
+        let request = RequestBody::Terminal(crate::TerminalRequest::List {
+            workspace_id: workspace_id.clone(),
+            cwd: Some(crate::WorkspaceRelativePath::parse("crates/app").unwrap()),
+        });
+        assert_eq!(request.method(), "terminal");
+        assert_eq!(
+            request.required_capability(),
+            capability::WORKSPACE_TERMINAL
+        );
+        assert_eq!(request.workspace_id(), Some(&workspace_id));
+        let encoded = serde_json::to_string(&request).unwrap();
+        assert_eq!(
+            serde_json::from_str::<RequestBody>(&encoded).unwrap(),
+            request
+        );
     }
 
     #[test]
