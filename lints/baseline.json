@@ -2,9 +2,6 @@
   "rule": "file-length",
   "limit": 3000,
   "files": {
-    "workbench/state/src/lib.rs": 3343,
-    "workbench/ui/src/features/settings.rs": 3646,
-    "workbench/ui/src/features/terminal/state.rs": 3126,
-    "workbench/ui/src/root.rs": 3040
+    "workbench/ui/src/features/terminal/state.rs": 3126
   }
 }
