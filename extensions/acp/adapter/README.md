@@ -4,7 +4,7 @@ Lapis から外部ハーネス（コーディングエージェント）へ接�
 
 ## 構成
 
-- `host/extensions/acp/`（crate `local-acp`）: ACP の client 実装。ハーネス起動、`initialize` / `session/new` / `session/prompt` の送信、`session/update` / `session/request_permission` / `session/cancel` の受信と、`task::TaskEvent` への変換を所有します。
+- `extensions/acp/adapter/`（crate `local-acp`）: ACP の client 実装。ハーネス起動、`initialize` / `session/new` / `session/prompt` の送信、`session/update` / `session/request_permission` / `session/cancel` の受信と、`task::TaskEvent` への変換を所有します。
 - `extensions/acp/contract/`（crate `acp-contract`）: core と Client が知る必要がある runner 識別子（`ACP_RUNNER`）だけを公開します。ACP の型は置きません。
 
 ACP 固有の型・起動引数・更新の解釈は `local-acp` の内側に閉じ込め、外へは `task` の値（`ExecutionStatus` / `TaskEvent`）だけを渡します。

@@ -9,7 +9,7 @@ license.workspace = true
 acp-contract = { path = "../../../extensions/acp/contract" }
 editor-core = { path = "../../../protocol/types/editor-core" }
 process = { path = "../../../protocol/types/process" }
-local-acp = { path = "../../extensions/acp" }
+local-acp = { path = "../../../extensions/acp/adapter" }
 local-fs = { path = "../fs" }
 notify.workspace = true
 serde.workspace = true

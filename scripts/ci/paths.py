@@ -81,6 +81,10 @@ PATH_RULES = [
     (["extensions/terminal/contract/"], {"rust_core", "host", "desktop", "web"}),
     (["extensions/terminal/adapter/", "extensions/terminal/README.md"],
      {"rust_core", "host", "desktop"}),
+    # Git / ACP の Host 実装は adapter（infrastructure）として extensions 配下へ
+    # 移した。契約と異なり Client の wasm ではビルドしない。
+    (["extensions/git/adapter/", "extensions/acp/adapter/"],
+     {"rust_core", "host", "desktop"}),
     # 未登録の拡張・宣言・アセットも Client へ影響し得るため、既知の Host
     # 専用箇所以外は広く検証する。
     (["extensions/"], {"repository", "rust_core", "host", "desktop", "web"}),

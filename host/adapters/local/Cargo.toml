@@ -10,7 +10,7 @@ document = { path = "../../../protocol/types/document" }
 editor-core = { path = "../../../protocol/types/editor-core" }
 git = { package = "git-contract", path = "../../../extensions/git/contract" }
 local-credentials = { path = "../credentials" }
-local-git = { path = "../../extensions/git" }
+local-git = { path = "../../../extensions/git/adapter" }
 local-tasks = { path = "../tasks" }
 local-search = { path = "../search" }
 local-workbench = { path = "../workbench" }

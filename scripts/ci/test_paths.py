@@ -67,6 +67,17 @@ class TestPathRouting(unittest.TestCase):
             {"repository", "rust_core", "host", "desktop", "web"},
         )
 
+    def test_moved_git_and_acp_adapters_keep_rust_surfaces(self):
+        """extensions 配下へ移した Host 実装も、旧 host/extensions と同じ面を検証する。"""
+        expected = {"rust_core", "host", "desktop"}
+        for path in (
+            "extensions/git/adapter/src/lib.rs",
+            "extensions/git/adapter/Cargo.toml",
+            "extensions/acp/adapter/src/session.rs",
+            "extensions/acp/adapter/README.md",
+        ):
+            self.assertEqual(jobs_for_paths([path]), expected, path)
+
     def test_new_extension_paths_run_repository_and_all_rust_surfaces(self):
         """拡張の事前登録がなくても、コードと宣言・アセットを検証する。"""
         expected = {"repository", "rust_core", "host", "desktop", "web"}
