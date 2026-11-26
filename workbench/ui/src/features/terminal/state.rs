@@ -1617,7 +1617,7 @@ mod tests {
         let extensions = settings.extension_contributions();
         let generation = extensions.begin_reload();
         let declaration: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../../extensions/terminal/component/contributions.json"
+            "../../../../../extensions/terminal/contributions.json"
         ))
         .unwrap();
         extensions.apply(generation, serde_json::from_value(serde_json::json!({

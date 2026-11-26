@@ -1,7 +1,0 @@
-package lapis:extension@1.0.0;
-
-/// 拡張ホストが起動時と停止時に呼び出す。能力 API は別の契約として追加する。
-world extension {
-    export activate: func();
-    export deactivate: func();
-}

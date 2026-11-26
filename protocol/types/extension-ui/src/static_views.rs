@@ -121,8 +121,8 @@ mod tests {
 
     #[test]
     fn terminal_package_declares_a_valid_view() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../extensions/terminal/component");
+        let root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../extensions/terminal");
         let contributions: StaticContributions =
             serde_json::from_slice(&std::fs::read(root.join("contributions.json")).unwrap())
                 .unwrap();

@@ -57,15 +57,6 @@ PTY_STEPS = (
         "Test approved wasm pty",
         ["cargo", "test", "--locked", "-p", "host", "approved_wasm_uses_host_pty_and_shutdown_reclaims_it", "--", "--ignored"],
     ),
-    Step(
-        "Build terminal component",
-        ["cargo", "build", "--locked", "--manifest-path", "extensions/terminal/component/Cargo.toml",
-         "--target", "wasm32-wasip2", "--target-dir", "target/terminal-component"],
-    ),
-    Step(
-        "Test terminal component pty",
-        ["cargo", "test", "--locked", "-p", "host", "terminal_component_uses_approved_host_pty", "--", "--ignored"],
-    ),
 )
 
 ROUTE = Route(

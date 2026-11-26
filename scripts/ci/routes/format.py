@@ -19,9 +19,5 @@ ROUTE = Route(
             "Check dev-session formatting",
             ["cargo", "fmt", "--manifest-path", "scripts/dev-session/Cargo.toml", "--", "--check"],
         ),
-        Step(
-            "Check terminal component formatting",
-            ["cargo", "fmt", "--manifest-path", "extensions/terminal/component/Cargo.toml", "--", "--check"],
-        ),
     ),
 )

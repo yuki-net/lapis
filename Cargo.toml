@@ -22,7 +22,7 @@ members = [
     "extensions/git/*",
     "extensions/terminal/*",
 ]
-exclude = ["vendor/gpui", "vendor/portable-pty", "extensions/terminal/component"]
+exclude = ["vendor/gpui", "vendor/portable-pty"]
 resolver = "3"
 
 [workspace.package]

@@ -2,21 +2,18 @@
 
 Terminal のセッション操作、公開 DTO、Client の画面モデルを配置する領域です。Host は Terminal 専用の `terminal` request を提供し、PTY とプロセス情報を Host 内で仲介します。
 
+同梱 package に含めるのは宣言だけで、実行時の挙動は `host/` が持ちます。`extension.json` は `contributions.json` と `views.json` だけを `files` に列挙し、`extension.wasm` や `process.pty` capability を持ちません。
+
 ## 構成
 
-- `component/`: 公開 WIT を通して Host の能力を使う Wasm 実行アダプターと、表示・設定・翻訳の宣言。
-- `host/`（crate `terminal-host`）: 拡張セッション操作の判断。Host 能力を port として受け取り、Wasm や Host の内部実装を参照しない。`component/` と `native/` はここを共有する。
+- `extension.json` / `contributions.json` / `views.json`: 同梱 package の宣言。設定・翻訳・表示だけを宣言する。
+- `host/`（crate `terminal-host`）: 拡張セッション操作の判断。Host 能力を port として受け取り、実行環境の内部実装を参照しない。`native/` はここを共有する。
 - `native/`: 公開 native ABI v1 を使って同じロジックを接続する。Windows x86_64 の配布入力には、このライブラリと共通の設定・表示宣言を含める。
-- `api/`: component が使うセッション操作の v1 DTO。操作名も `terminal.v1.*` で版を持つ。Host 内部型には依存しない。Client は専用 `terminal` wire の契約を使う。
+- `api/`: セッション操作の v1 DTO。操作名も `terminal.v1.*` で版を持つ。Host 内部型には依存しない。Client は専用 `terminal` wire の契約を使う。
 - `contract/`（crate `terminal-contract`、参照名 `terminal`）: Terminal の型・wire DTO・`TerminalBackend` port の正本。
 - `adapter/`（crate `local-terminal`）: `TerminalHost` port の PTY 実装と、Host 側の Terminal セッションサービス。Host の `BackendClient::terminals()` がこのサービスを使う。
 - `renderer/`（crate `terminal-renderer`）: Desktop のネイティブ描画器。VT/ANSI の画面状態と入力変換を担い、PTY を所有しない。
 - `portable-renderer/`（crate `terminal-portable-renderer`）: Web と Wasm でもビルドできる画面モデル。現在の Web は Host が生成した snapshot と差分を適用するため、PTY 出力の描画には使わない。
-
-`component/`、`host/`、`api/` は同じ親ディレクトリに置けば本体の Cargo workspace 外でも
-ビルドできる。`python -m scripts.extensions.smoke_terminal` はその状態をコピーで再現し、
-Wasm のビルドと PTY 操作に加え、`contract/` と `portable-renderer/` も本体の
-workspace 設定なしでビルドできることを検証する。
 
 ## ディレクトリ規約の判断
 
