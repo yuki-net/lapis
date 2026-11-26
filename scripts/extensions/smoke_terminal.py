@@ -24,20 +24,20 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="terminal-standalone-", dir=ROOT / "target") as temp:
         standalone = Path(temp)
         shutil.copytree(ROOT / "extensions/terminal/api", standalone / "api")
-        shutil.copytree(ROOT / "extensions/terminal/logic", standalone / "logic")
+        shutil.copytree(ROOT / "extensions/terminal/host", standalone / "host")
         shutil.copytree(ROOT / "extensions/terminal/component", standalone / "component")
         subprocess.run(["cargo", "build", "--locked", "--manifest-path", str(standalone / "component/Cargo.toml"),
                         "--target", "wasm32-wasip2", "--target-dir", str(TARGET)], cwd=ROOT, check=True)
         # 同じロジックを本体 workspace と Wasm 実行基盤のない環境でも検証する。
         native = standalone / "native"
         native.mkdir()
-        for name in ("api", "logic"):
+        for name in ("api", "host"):
             shutil.copytree(standalone / name, native / name)
         (native / "Cargo.toml").write_text(
-            '[workspace]\nresolver = "3"\nmembers = ["api", "logic"]\n', encoding="utf-8"
+            '[workspace]\nresolver = "3"\nmembers = ["api", "host"]\n', encoding="utf-8"
         )
         native_test = ["cargo", "test", "--manifest-path", str(native / "Cargo.toml"),
-                       "--package", "terminal-logic", "--target-dir", str(TARGET), "--offline"]
+                       "--package", "terminal-host", "--target-dir", str(TARGET), "--offline"]
         subprocess.run(native_test, cwd=ROOT, check=True)
         subprocess.run([*native_test, "--locked"], cwd=ROOT, check=True)
         # 画面モデルも本体の workspace 設定に依存せず、拡張と一緒に持ち出せる。

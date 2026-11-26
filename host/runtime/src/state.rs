@@ -726,6 +726,8 @@ impl BackendState {
                 self.require_connected(session)?;
                 self.snapshot(session)
             }
+            // Terminal は Host の専用 service が扱う。Runtime の状態には載せない。
+            RequestBody::Terminal(_) => Err(BackendStateError::WorkspaceNotConnected),
         }
     }
 

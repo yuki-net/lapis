@@ -239,7 +239,14 @@ def check(metadata, exceptions, root=ROOT):
             if dependency.get("kind") == "dev" or target not in packages:
                 continue
             manifest = Path(packages[target]["manifest_path"]).as_posix()
-            if "/extensions/terminal/" in manifest:
+            # Terminal 拡張の Wasm / native 配布物だけは Host から到達させない。
+            # Host は extensions/terminal/host（runtime）と adapter（infrastructure）
+            # へ依存できるが、配布用 component と native は実行基盤の一部であり、
+            # Host のビルドへ混ぜると wasm/native ABI の都合が Host へ漏れる。
+            if (
+                "/extensions/terminal/component/" in manifest
+                or "/extensions/terminal/native/" in manifest
+            ):
                 errors.append(f"host -> {target}: terminal extension dependency")
             else:
                 pending.append(target)

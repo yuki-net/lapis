@@ -6,7 +6,7 @@ wit_bindgen::generate!({ path: "wit", world: "terminal", generate_all });
 
 use lapis::process_info::host as info;
 use lapis::pty::sessions as pty;
-use terminal_logic::{TerminalHost, process_info, sessions};
+use terminal_host::{TerminalHost, process_info, sessions};
 
 struct WitHost;
 
@@ -90,12 +90,12 @@ impl TerminalHost for WitHost {
 
 struct Terminal;
 thread_local! {
-    static INSTANCE: std::cell::RefCell<Option<terminal_logic::TerminalLogic>> = const { std::cell::RefCell::new(None) };
+    static INSTANCE: std::cell::RefCell<Option<terminal_host::TerminalLogic>> = const { std::cell::RefCell::new(None) };
 }
 impl Guest for Terminal {
     fn activate() {
         INSTANCE.with(|instance| {
-            *instance.borrow_mut() = Some(terminal_logic::TerminalLogic::new(Box::new(WitHost)));
+            *instance.borrow_mut() = Some(terminal_host::TerminalLogic::new(Box::new(WitHost)));
         });
     }
     fn deactivate() {

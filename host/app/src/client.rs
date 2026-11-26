@@ -235,6 +235,10 @@ impl BackendClient {
     pub fn processes(&self) -> Arc<dyn process::ProcessConnection> {
         Arc::new(crate::features::HostProcesses::new(self.clone()))
     }
+    /// Host が所有する Terminal。Desktop の in-process 接続とリモート接続で共有する。
+    pub fn terminals(&self) -> Arc<dyn terminal::TerminalBackend> {
+        Arc::new(crate::host_terminals::HostTerminals::new(self.clone()))
+    }
 
     /// Local Host で Web 用の一回限りの招待を発行する。呼び出しは worker で行う。
     pub fn issue_web_invitation(
@@ -575,6 +579,14 @@ impl BackendClient {
             .find(|(_, id)| id == workspace)
             .map(|(root, _)| root)
             .ok_or(BackendServiceError::Unavailable)
+    }
+    /// in-process Host を持つ接続だけを返す。Terminal のように process を跨がず
+    /// 直接 service を使う経路で参照する。
+    pub(crate) fn embedded_host(&self) -> Option<&BackendHost> {
+        match &self.source {
+            Source::Embedded(host) => Some(host),
+            Source::Local(_) | Source::Quic { .. } => None,
+        }
     }
     pub(crate) fn connect(&self, root: &Path) -> Result<Client, BackendServiceError> {
         self.connect_workspace(self.register_workspace(root)?)

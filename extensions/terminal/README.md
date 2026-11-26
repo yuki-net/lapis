@@ -5,15 +5,15 @@ Terminal のセッション操作、公開 DTO、Client の画面モデルを配
 ## 構成
 
 - `component/`: 公開 WIT を通して Host の能力を使う Wasm 実行アダプターと、表示・設定・翻訳の宣言。
-- `logic/`: セッション操作の判断。Host 能力を port として受け取り、Wasm や Host の内部実装を参照しない。
+- `host/`（crate `terminal-host`）: 拡張セッション操作の判断。Host 能力を port として受け取り、Wasm や Host の内部実装を参照しない。`component/` と `native/` はここを共有する。
 - `native/`: 公開 native ABI v1 を使って同じロジックを接続する。Windows x86_64 の配布入力には、このライブラリと共通の設定・表示宣言を含める。
 - `api/`: component とクライアントが共有するセッション操作の v1 DTO。操作名も `terminal.v1.*` で版を持つ。Host 内部型には依存しない。
 - `contract/`（crate `terminal-contract`、参照名 `terminal`）: Terminal の型・wire DTO・`TerminalBackend` port の正本。
-- `adapter/`（crate `local-terminal`）: 旧 `TerminalBackend` の PTY 実装。現行 Host は参照せず、一部の非 Windows テストで使う。
+- `adapter/`（crate `local-terminal`）: `TerminalHost` port の PTY 実装と、Host 側の Terminal セッションサービス。現行 Host の配線は未接続で、一部の非 Windows テストで使う。
 - `renderer/`（crate `terminal-renderer`）: Desktop のネイティブ描画器。VT/ANSI の画面状態と入力変換を担い、PTY を所有しない。
 - `portable-renderer/`（crate `terminal-portable-renderer`）: Web と Wasm でもビルドできる画面モデル。ターミナル画面を Wasm で描画するものではない。Web はこのモデルをクライアント側で描画し、拡張ロジックだけが Wasm で動く。
 
-`component/`、`logic/`、`api/` は同じ親ディレクトリに置けば本体の Cargo workspace 外でも
+`component/`、`host/`、`api/` は同じ親ディレクトリに置けば本体の Cargo workspace 外でも
 ビルドできる。`python -m scripts.extensions.smoke_terminal` はその状態をコピーで再現し、
 Wasm のビルドと PTY 操作に加え、`contract/` と `portable-renderer/` も本体の
 workspace 設定なしでビルドできることを検証する。
@@ -23,13 +23,13 @@ workspace 設定なしでビルドできることを検証する。
 役割ディレクトリで分けます。機能ごとの `src/` を平坦に並べると、契約と OS 依存実装と Host 状態のどれが正本か読み取れなくなるためです。
 
 - `contract/` は `protocol/types/` と同じ「models」層として依存検査します。現在は Client 側の描画・入力モデルと旧 adapter が参照します。
-- `logic/` もセッション状態と操作判断を持つため「runtime」層として扱います。Host の能力は port 経由で利用します。
+- `host/` もセッション状態と操作判断を持つため「runtime」層として扱います。Host の能力は port 経由で利用します。
 - `native/` は ABI とロジックを接続する「infrastructure」層として扱います。
 - `adapter/` は `host/adapters/*` と同じ「infrastructure」層として扱います。OS API と外部プロセスに触れるためです。
 - `renderer/` は PTY や Host を参照しない画面モデルとして扱います。
 - 固定データを配布する必要が出たら `assets/` を追加します。現時点で Terminal は配布する固定データを持たないため作りません。
 
-拡張の中にあっても層の意味は変えません。`scripts/check_architecture.py` は `extensions/<機能>/{contract,adapter}` をこの対応で分類します。
+拡張の中にあっても層の意味は変えません。`scripts/check_architecture.py` は `extensions/<機能>/{contract,host,adapter}` をこの対応で分類します。
 
 ## 配線
 
@@ -60,6 +60,6 @@ Terminal の Client UI は、共通 Layout の宣言と内部レジストリを�
 
 ## 検証
 
-- `cargo test -p terminal-contract -p terminal-renderer -p local-terminal`
+- `cargo test -p terminal-contract -p terminal-host -p terminal-renderer -p local-terminal`
 - `python scripts/check_architecture.py`
 - `python -m unittest scripts.ci.test_paths`

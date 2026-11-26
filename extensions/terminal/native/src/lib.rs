@@ -10,7 +10,7 @@ use std::{
     ffi::c_void,
     panic::{AssertUnwindSafe, catch_unwind},
 };
-use terminal_logic::{TerminalHost, TerminalLogic, process_info, sessions};
+use terminal_host::{TerminalHost, TerminalLogic, process_info, sessions};
 
 struct NativeHost(HostApiV1);
 

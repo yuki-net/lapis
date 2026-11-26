@@ -16,6 +16,8 @@ pub const FILES_READ: &str = "workspace.files.read";
 pub const FILES_WRITE: &str = "workspace.files.write";
 pub const DOCUMENTS_READ: &str = "workspace.documents.read";
 pub const DOCUMENTS_WRITE: &str = "workspace.documents.write";
+/// Terminal の開始・操作・終了を Host へ要求する。
+pub const WORKSPACE_TERMINAL: &str = "workspace.terminal";
 /// 導入済み拡張の宣言を読む。有効化・無効化は含まない。
 ///
 /// `host.` を付けないのは、Host 管理権限ではなく、拡張の宣言を表示する通常の

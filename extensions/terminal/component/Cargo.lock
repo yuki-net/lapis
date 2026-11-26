@@ -71,7 +71,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
- "terminal-logic",
+ "terminal-host",
  "wit-bindgen",
 ]
 
@@ -204,7 +204,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "terminal-logic"
+name = "terminal-host"
 version = "0.1.0"
 dependencies = [
  "serde",

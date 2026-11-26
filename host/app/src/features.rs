@@ -9,18 +9,18 @@ use git::{GitConnection, GitDiffSnapshot, GitError, GitErrorKind, GitSnapshot, W
 use process::{ProcessConnection, ProcessError, ProcessErrorKind, ProcessRootId, ProcessSnapshot};
 use task::{TaskConnection, TaskControl, TaskError, TaskSnapshot, TaskStart};
 
-struct Connections {
+pub(super) struct Connections {
     host: BackendClient,
     clients: std::sync::Mutex<std::collections::HashMap<client_api::WorkspaceId, Client>>,
 }
 impl Connections {
-    fn new(host: BackendClient) -> Self {
+    pub(super) fn new(host: BackendClient) -> Self {
         Self {
             host,
             clients: Default::default(),
         }
     }
-    fn connect(&self, workspace: client_api::WorkspaceId) -> Result<Client, String> {
+    pub(super) fn connect(&self, workspace: client_api::WorkspaceId) -> Result<Client, String> {
         let mut clients = self
             .clients
             .lock()
