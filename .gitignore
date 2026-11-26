@@ -15,4 +15,13 @@
 # Junie の作業ディレクトリ（ローカル専用）
 .junie/
 
+# automation / reviewer の秘密（repo には置かない）
+/automation/**/.env
+/automation/**/*.pem
+/automation/**/*.key
+/reviewer/**/.env
+/reviewer/**/*.pem
+/reviewer/**/*.key
+/.secrets/
+
 __pycache__/

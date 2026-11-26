@@ -30,3 +30,10 @@
 /LICENSE                               @yuki-net/reviews
 /SECURITY.md                           @yuki-net/reviews
 /CONTRIBUTING.md                       @yuki-net/reviews
+
+# 自動化・reviewer
+/automation/                           @yuki-net/reviews
+/reviewer/                             @yuki-net/reviews
+/docs/specs/automation.md              @yuki-net/reviews
+/.opencode/skills/build-issue/         @yuki-net/reviews
+/.opencode/skills/review-pr/           @yuki-net/reviews

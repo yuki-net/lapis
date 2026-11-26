@@ -1,0 +1,49 @@
+# 自動マージ・リトライ・保護パスの正本。
+# 実装（dispatch / reviewer）はこの値を読む。値をコードに散らさない。
+
+version = 1
+
+[auto_merge]
+# CI の必須チェック。Gate を required にした後で有効になる。
+require_ci = "Gate"
+require_review = true
+# PR の author がこの一覧にいるときだけ自動マージする。
+# worker App の bot login は App 作成後に確定する。
+allow_authors = ["lapis-worker[bot]", "yukiidayo"]
+deny_forks = true
+max_files = 40
+max_lines = 800
+
+[limits]
+# reviewer の差し戻し回数。超えたら ai-needs-human。
+max_review_rounds = 3
+# worker の連続失敗回数。
+max_fix_attempts = 2
+# ai-building のまま残ったジョブを回収するまでの分数。
+stale_building_minutes = 60
+# 1 ジョブ（worker / review）の上限。
+job_timeout_minutes = 60
+
+[protected_paths]
+# ここを 1 つでも触った PR は自動マージしない。人間が承認する。
+# CODEOWNERS の保護範囲に合わせる（Policy notice は lint 基盤・CI・自動化のみ）。
+paths = [
+  ".github/",
+  "automation/",
+  "reviewer/",
+  "lints/",
+  "scripts/ci/",
+  "scripts/check*.py",
+  "scripts/architecture-exceptions.json",
+  "AGENTS.md",
+  "Cargo.toml",
+  "Cargo.lock",
+  "protocol/",
+  "release/",
+  "clippy.toml",
+  "rust-toolchain.toml",
+  "rustfmt.toml",
+  "docs/specs/automation.md",
+  ".opencode/skills/build-issue/",
+  ".opencode/skills/review-pr/",
+]

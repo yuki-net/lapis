@@ -1,0 +1,39 @@
+# 自動化のロール定義。3 人目以降はここに 1 ブロック足す。
+# private_key は VM 上のパス。鍵そのものは repo に置かない。
+# coordinator（ホストの Orca bot）はここに含めない。人間の token でラベルと
+# worktree 作成だけを行い、merge しない。
+
+version = 1
+
+[roles.worker]
+agent = "opencode"
+fallback_agent = "junie"
+environment = "worker-env"
+merge = false
+# App 作成後に埋める。空のままでは dispatch しない。
+app_id = ""
+installation_id = ""
+private_key = "~/.config/lapis/worker/app.pem"
+bot_login = "lapis-worker[bot]"
+
+[roles.reviewer]
+agent = "opencode"
+fallback_agent = "junie"
+environment = "reviewer-env"
+merge = true
+app_id = ""
+installation_id = ""
+private_key = "~/.config/lapis/reviewer/app.pem"
+bot_login = "lapis-reviewer[bot]"
+
+# 3 人目（例: 可否判断だけを行う judge）。
+# App を作り、同じ権限（Contents: R / Pull requests: RW）で足す。
+# [roles.judge]
+# agent = "opencode"
+# fallback_agent = "junie"
+# environment = "reviewer-env"
+# merge = false
+# app_id = ""
+# installation_id = ""
+# private_key = "~/.config/lapis/judge/app.pem"
+# bot_login = "lapis-judge[bot]"

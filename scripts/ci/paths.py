@@ -97,6 +97,8 @@ PATH_RULES = [
     # package 生成と Host の読み込みを同じ fixture で検証する。
     (["scripts/extensions/"], {"repository", "rust_core", "host"}),
     (["scripts/"], {"repository"}),
+    # 自動開発フロー。仕様・policy・手順・reviewer のコードは repository で検証する。
+    (["automation/", "reviewer/"], {"repository"}),
     # エージェント用の設定・スキルはコードではない。
     ([".opencode/"], {"repository"}),
     # launcher は release/trusted-keys.json を build 時に埋め込む。

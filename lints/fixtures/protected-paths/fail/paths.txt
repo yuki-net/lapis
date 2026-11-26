@@ -2,3 +2,7 @@ lints/README.md
 scripts/ci/plan.py
 .github/workflows/ci.yml
 AGENTS.md
+automation/policy.toml
+reviewer/cli.py
+docs/specs/automation.md
+.opencode/skills/review-pr/SKILL.md
