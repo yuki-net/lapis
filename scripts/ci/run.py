@@ -104,7 +104,7 @@ def missing_prerequisites(route) -> list[str]:
     missing = []
     for name in required:
         if name == "gradle":
-            exists = shutil.which("gradle") is not None or (ROOT / "clients/mobile/gradlew").exists()
+            exists = shutil.which("gradle") is not None or (ROOT / "apps/mobile/gradlew").exists()
         elif name == "posix":
             exists = os.name != "nt"
         else:

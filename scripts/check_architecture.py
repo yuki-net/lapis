@@ -123,13 +123,9 @@ def layer(manifest, root):
         ("protocol/types/", "models"), ("protocol/wire/dto/", "models"),
         ("protocol/wire/client-api/", "protocol"), ("protocol/wire-client/", "client_core"),
         ("host/application/", "application"), ("host/runtime/", "runtime"),
-        ("host/workbench/", "runtime"),
-        ("host/documents/", "runtime"),
+        ("host/domains/", "runtime"),
         ("host/adapters/", "infrastructure"), ("host/extensions/", "infrastructure"),
         ("host/extensions-entry/", "infrastructure"),
-        ("host/workspaces/", "runtime"),
-        ("host/auth/", "runtime"),
-        ("host/tasks/", "runtime"),
         ("host/transport/", "transport"),
         ("host/app/", "host"), ("clients/ui/", "ui"),
         ("workbench/ui-kit/", "workbench_ui"),
@@ -181,7 +177,7 @@ def check_duplicate_type_names(root=ROOT):
             continue
         for path in base.rglob("*.rs"):
             posix = path.as_posix()
-            if "/target/" in posix or "/vendor/" in posix or "/clients/mobile/" in posix:
+            if "/target/" in posix or "/vendor/" in posix or "/apps/mobile/" in posix:
                 continue
             text = path.read_text(encoding="utf-8")
             crate = crate_name_of(path, root)

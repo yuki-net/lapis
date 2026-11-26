@@ -222,7 +222,14 @@ class TestPathRouting(unittest.TestCase):
         self.assertIn("rust_core", jobs)
 
     def test_mobile_path_runs_mobile(self):
+        self.assertIn("mobile", jobs_for_paths(["apps/mobile/sharedUi/src/main.kt"]))
         self.assertIn("mobile", jobs_for_paths(["clients/mobile/sharedUi/src/main.kt"]))
+
+    def test_host_domain_path_runs_rust_surfaces(self):
+        self.assertEqual(
+            jobs_for_paths(["host/domains/documents/src/lib.rs"]),
+            {"rust_core", "host", "desktop"},
+        )
 
     def test_web_path_runs_web(self):
         for path in ("apps/web/package.json", "apps/web/wasm/src/lib.rs"):

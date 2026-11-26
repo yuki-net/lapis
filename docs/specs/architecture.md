@@ -23,8 +23,11 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 | `protocol/wire-client/` | Client共通の非同期要求・応答照合と接続世代 | UI、具体的な通信経路 |
 | `host/application/` | 操作と判断、port による外部連携 | GPUI、OS 固有 API |
 | `host/runtime/` | 正規状態、操作の直列化、購読・revision・実行資源の寿命 | Window、Panel、focus |
-| `host/workbench/` | Workbench の wire 境界・容量検証・永続化 port | 画面描画、Workspace の正規状態全体 |
-| `host/documents/` | Document 資源・未保存状態・snapshot | ファイル I/O、Workspace の正規状態全体 |
+| `host/domains/workbench/` | Workbench の wire 境界・容量検証・永続化 port | 画面描画、Workspace の正規状態全体 |
+| `host/domains/documents/` | Document 資源・未保存状態・snapshot | ファイル I/O、Workspace の正規状態全体 |
+| `host/domains/workspaces/` | Workspace の path 解決とファイル port | Workspace の正規状態全体、OS 固有のファイル I/O |
+| `host/domains/auth/` | 永続化する認証・端末の正規表現 | 認証処理、wire、OS 固有の実装 |
+| `host/domains/tasks/` | Task のオーケストレーション（実行資源の管理） | Task の正規状態（`host/runtime` が所有） |
 | `host/adapters/` | FS、runner、検索、永続化 | 画面の判断 |
 | `extensions/git/adapter/` | Git 拡張の Host 実装（CLI 操作・監視） | 画面の判断、Workspace の正規状態 |
 | `extensions/acp/adapter/` | ACP client 境界（ハーネス起動、ACP 送受信、`TaskEvent` への変換） | Task の正規状態、core の型 |
@@ -52,7 +55,7 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 ### `host/application` を独立させない
 
 - 操作の判断は `host/runtime`（`state` / `operations` / `state/*`）が持ち、`runtime` を application とみなす。`host/application` は作らない。
-- 理由: 判断と正規状態が同じ lock と寿命を共有しており、crate を分けると状態の受け渡しだけの層が増える。実際の境界は `host/workbench` / `host/documents` / `host/workspaces` として既に切り出している。
+- 理由: 判断と正規状態が同じ lock と寿命を共有しており、crate を分けると状態の受け渡しだけの層が増える。実際の境界は `host/domains/workbench` / `host/domains/documents` / `host/domains/workspaces` として既に切り出している。
 - 将来、外部 I/O を伴わない純粋な判断が増え、`runtime` から独立した寿命を持つ場合だけ再検討する。
 
 ### Runtime を分割しない
