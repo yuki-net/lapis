@@ -13,11 +13,11 @@ client-api = { path = "../../protocol/wire/client-api" }
 document = { path = "../../protocol/types/document" }
 text = { path = "../../protocol/types/text" }
 workbench = { path = "../../protocol/types/workbench" }
-workbench-state = { path = "../workbench" }
-document-state = { path = "../documents" }
-workspace-state = { path = "../workspaces" }
-auth-state = { path = "../auth" }
-task-state = { path = "../tasks" }
+workbench-state = { path = "../domains/workbench" }
+document-state = { path = "../domains/documents" }
+workspace-state = { path = "../domains/workspaces" }
+auth-state = { path = "../domains/auth" }
+task-state = { path = "../domains/tasks" }
 serde.workspace = true
 serde_json.workspace = true
 

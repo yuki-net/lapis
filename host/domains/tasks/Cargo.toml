@@ -6,9 +6,9 @@ description.workspace = true
 license.workspace = true
 
 [dependencies]
-editor-core = { path = "../../protocol/types/editor-core" }
-git = { package = "git-contract", path = "../../extensions/git/contract" }
-task = { path = "../../protocol/types/task" }
+editor-core = { path = "../../../protocol/types/editor-core" }
+git = { package = "git-contract", path = "../../../extensions/git/contract" }
+task = { path = "../../../protocol/types/task" }
 
 [dev-dependencies]
 tempfile.workspace = true

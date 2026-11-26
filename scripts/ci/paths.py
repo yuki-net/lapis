@@ -52,6 +52,7 @@ PATH_RULES = [
     (["host/extensions/"], {"rust_core", "host", "desktop"}),
     (["host/extensions-entry/"], {"rust_core", "host", "desktop"}),
     (["host/runtime/"], {"rust_core", "host", "desktop"}),
+    (["host/domains/"], {"rust_core", "host", "desktop"}),
     (["host/adapters/"], {"rust_core", "host", "desktop"}),
     (["host/transport/web/"], {"rust_core", "host", "desktop", "web"}),
     (["host/transport/"], {"rust_core", "host", "desktop"}),
@@ -90,6 +91,8 @@ PATH_RULES = [
     (["extensions/"], {"repository", "rust_core", "host", "desktop", "web"}),
 
     # Mobile。
+    (["apps/mobile/"], {"mobile"}),
+    # 移設前の path は削除差分として現れるため、全 job を起こさず Mobile へ割り当てる。
     (["clients/mobile/"], {"mobile"}),
 
     # Web。

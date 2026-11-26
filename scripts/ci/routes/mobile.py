@@ -15,7 +15,7 @@ ROUTE = Route(
     timeout_minutes=45,
     java=JAVA_VERSION,
     gradle=True,
-    working_directory="clients/mobile",
+    working_directory="apps/mobile",
     steps=(
         Step(
             "Test shared KMP code",

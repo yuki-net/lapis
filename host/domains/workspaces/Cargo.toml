@@ -6,8 +6,8 @@ description.workspace = true
 license.workspace = true
 
 [dependencies]
-client-api = { path = "../../protocol/wire/client-api" }
-document = { path = "../../protocol/types/document" }
+client-api = { path = "../../../protocol/wire/client-api" }
+document = { path = "../../../protocol/types/document" }
 
 [dev-dependencies]
 tempfile.workspace = true
