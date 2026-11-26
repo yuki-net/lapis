@@ -98,3 +98,29 @@ fn embedded_backend_client_terminals_start_and_read_a_session() {
     assert!(terminals.list(&root).unwrap().is_empty());
     assert!(terminals.poll(&id).is_err());
 }
+
+#[test]
+fn embedded_terminals_emit_change_notifications_while_sessions_exist() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let host = host::BackendHost::start().unwrap();
+    host.register_workspace(&root).unwrap();
+    let terminals = host::BackendClient::from(host).terminals();
+    let mut changes = terminals.changes().expect("changes is available");
+    // changes() は購読を 1 本だけ返す。UI と同じく 1 度だけ取得する。
+    assert!(terminals.changes().is_none());
+
+    let id = terminals.start(&root, 80, 24).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if changes.try_recv().is_ok() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "terminal session did not emit a change notification"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    terminals.terminate(&id).unwrap();
+}

@@ -32,6 +32,7 @@ use futures_channel::{mpsc, oneshot};
 use git::{GitConnection, GitDiffSnapshot, GitError, GitErrorKind, GitSnapshot, WorktreeSnapshot};
 use settings::{SettingsDocument, SettingsError, SettingsRepository, SettingsScope};
 use task::{TaskConnection, TaskControl, TaskError, TaskSnapshot, TaskStart};
+use terminal::{TerminalEvent, TerminalRevision, TerminalScreen, TerminalSnapshot};
 use workbench::ConversationViewState;
 use workspace::{
     FileEntry, SearchError, SearchHit, WorkspaceError, WorkspaceIdentity, WorkspaceRepository,
@@ -916,130 +917,97 @@ pub async fn dispatch_extension(
     crate::extension_management::validate_dispatch_response(response, current, &input)
 }
 
-/// Terminal 拡張の DTO を汎用の拡張操作経路で送る。
-pub async fn terminal_operation<T: serde::Serialize, R: serde::de::DeserializeOwned>(
-    operation: &str,
-    input: &T,
-) -> Result<R, String> {
-    let request = crate::terminal_extension::request(operation, input)?;
-    let response = dispatch_extension(request).await?;
-    crate::terminal_extension::response(operation, response)
-}
-
-/// 接続に束縛された出力位置。別 Host の同名 ID に古い位置を流用しない。
+/// Host が送る TerminalEvent を revision 順に画面へ適用する。
+///
+/// Wire は Client の読み取り位置を Host が保持する。差分が飛んだ場合は `apply` が
+/// `false` を返し、呼び出し元が attach で snapshot を取り直す。
 pub struct TerminalOutputStream {
-    cursor: crate::terminal_extension::OutputCursor,
-    connection: Rc<BrowserConnection>,
-}
-
-pub struct TerminalOutputBatch {
-    ticket: crate::terminal_extension::ReadTicket,
-    output: crate::terminal_extension::v1::ReadResponse,
-}
-
-struct CancelTerminalRead<'a> {
-    cursor: &'a mut crate::terminal_extension::OutputCursor,
-    armed: bool,
-}
-
-impl Drop for CancelTerminalRead<'_> {
-    fn drop(&mut self) {
-        if self.armed {
-            self.cursor.cancel();
-        }
-    }
+    id: String,
+    screen: TerminalScreen,
+    revision: TerminalRevision,
+    owner: Option<String>,
+    exit: Option<Option<i32>>,
+    failure: Option<String>,
 }
 
 impl TerminalOutputStream {
-    pub fn new(id: String) -> Result<Self, String> {
-        let connection = BACKEND
-            .with(|backend| {
-                let backend = backend.borrow();
-                let state = backend.as_ref().ok_or("Host に接続していません")?;
-                if !state.extensions_connected {
-                    return Err("Host に接続していません");
+    pub fn new(snapshot: TerminalSnapshot) -> Self {
+        Self {
+            id: snapshot.id.as_str().to_owned(),
+            screen: snapshot.screen,
+            revision: snapshot.revision,
+            owner: None,
+            exit: None,
+            failure: None,
+        }
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn screen(&self) -> &TerminalScreen {
+        &self.screen
+    }
+
+    pub fn offset(&self) -> TerminalRevision {
+        self.revision
+    }
+
+    pub fn owner(&self) -> Option<&str> {
+        self.owner.as_deref()
+    }
+
+    pub fn set_owner(&mut self, owner: Option<String>) {
+        self.owner = owner;
+    }
+
+    /// 画面を作り直す。新しい snapshot が古い revision なら捨てる。
+    pub fn reset(&mut self, snapshot: TerminalSnapshot) {
+        if snapshot.revision < self.revision {
+            return;
+        }
+        self.id = snapshot.id.as_str().to_owned();
+        self.screen = snapshot.screen;
+        self.revision = snapshot.revision;
+    }
+
+    /// 差分を順番に適用できたら `true`。revision の飛びを検出したら `false`。
+    pub fn apply(&mut self, events: Vec<TerminalEvent>) -> Result<bool, String> {
+        let mut contiguous = true;
+        for event in events {
+            match event {
+                TerminalEvent::Delta(delta) => {
+                    if delta.revision == self.revision + 1 {
+                        self.screen
+                            .apply_delta(&delta)
+                            .map_err(|error| error.to_string())?;
+                        self.revision = delta.revision;
+                    } else if delta.revision > self.revision {
+                        contiguous = false;
+                    }
                 }
-                Ok(state.connection.clone())
-            })
-            .map_err(str::to_owned)?;
-        Ok(Self {
-            cursor: crate::terminal_extension::OutputCursor::new(id),
-            connection,
-        })
-    }
-
-    pub fn offset(&self) -> u64 {
-        self.cursor.offset()
-    }
-
-    pub async fn read(
-        &mut self,
-        max_bytes: u32,
-        timeout_ms: u32,
-    ) -> Result<TerminalOutputBatch, String> {
-        let current = BACKEND.with(|backend| {
-            backend.borrow().as_ref().is_some_and(|state| {
-                state.extensions_connected && Rc::ptr_eq(&state.connection, &self.connection)
-            })
-        });
-        if !current {
-            return Err("Host の接続が変更されました".into());
+                TerminalEvent::Snapshot(snapshot) => {
+                    if snapshot.revision >= self.revision {
+                        self.screen = snapshot.screen;
+                        self.revision = snapshot.revision;
+                        contiguous = true;
+                    }
+                }
+                TerminalEvent::Owner { owner } => self.owner = owner,
+                TerminalEvent::Exited { code } => self.exit = Some(code),
+                TerminalEvent::Failed(error) => self.failure = Some(error),
+            }
         }
-        let (ticket, request) = self
-            .cursor
-            .begin(max_bytes, timeout_ms)
-            .map_err(|error| error.to_string())?;
-        // Future が途中で破棄されても、次の要求を開始できる。
-        let mut guard = CancelTerminalRead {
-            cursor: &mut self.cursor,
-            armed: true,
-        };
-        let result = terminal_operation(crate::terminal_extension::v1::READ, &request).await?;
-        let output = guard
-            .cursor
-            .accept(ticket, result)
-            .map_err(|error| error.to_string())?;
-        guard.armed = false;
-        Ok(TerminalOutputBatch { ticket, output })
+        Ok(contiguous)
     }
 
-    /// apply は失敗時に画面状態を変更しないこと。成功後に位置を確定する。
-    pub fn apply(
-        &mut self,
-        batch: TerminalOutputBatch,
-        apply: impl FnOnce(&crate::terminal_extension::v1::ReadResponse) -> Result<(), String>,
-    ) -> Result<(), String> {
-        let current = BACKEND.with(|backend| {
-            backend.borrow().as_ref().is_some_and(|state| {
-                state.extensions_connected && Rc::ptr_eq(&state.connection, &self.connection)
-            })
-        });
-        if !current {
-            let _ = self.cursor.discard(batch.ticket);
-            return Err("Host の接続が変更されました".into());
-        }
-        if !self.cursor.ready(batch.ticket) {
-            return Err("古い Terminal の出力を破棄しました".into());
-        }
-        if let Err(error) = apply(&batch.output) {
-            let _ = self.cursor.discard(batch.ticket);
-            return Err(error);
-        }
-        self.cursor
-            .commit(batch.ticket)
-            .map_err(|error| error.to_string())
+    pub fn take_exit(&mut self) -> Option<Option<i32>> {
+        self.exit.take()
     }
 
-    /// 画面への反映を中止して、同じ位置から読み直せるようにする。
-    pub fn discard(&mut self, batch: TerminalOutputBatch) -> Result<(), String> {
-        self.cursor
-            .discard(batch.ticket)
-            .map_err(|error| error.to_string())
-    }
-
-    /// 応答を破棄した後でも明示的に読み取りを再開できる。
-    pub fn cancel(&mut self) {
-        self.cursor.cancel();
+    pub fn take_failure(&mut self) -> Option<String> {
+        self.failure.take()
     }
 }
 

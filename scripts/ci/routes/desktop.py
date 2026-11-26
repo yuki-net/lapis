@@ -49,7 +49,7 @@ ROUTE = Route(
         # job の上限を超える。
         Step(
             "Test desktop terminal pty",
-            ["cargo", "test", "--locked", "-p", "lapis", "desktop_terminal_runs_real_extension_pty", "--", "--ignored"],
+            ["cargo", "test", "--locked", "-p", "lapis", "desktop_terminal_runs_internal_pty", "--", "--ignored"],
         ),
         Step("Build Desktop", py("scripts/check.py", "desktop", "build")),
         Step("Verify GPUI patches", py("-m", "scripts.ci.patches")),

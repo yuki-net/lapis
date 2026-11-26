@@ -153,9 +153,9 @@ delta として受け取る。protocol 0.13 で追加した契約で、Desktop�
 
 ## Terminal の同期契約
 
-Terminal のセッション操作は `host.extensions.dispatch` で拡張へ送り、`terminal.v1.*` の DTO を使う。PTY は Host の汎用プロセス能力が所有し、拡張がセッションを管理する。Desktop と Web は出力バイト列をそれぞれの描画器で解釈する。
+Terminal のセッション操作は専用の `terminal` request（`TerminalRequest` / `TerminalResponse`）で Host へ送る。PTY と画面差分は Host の Terminal サービスが所有し、Client は snapshot と差分を受け取る。Desktop は in-process のサービス、Web は認証済み接続の wire を使う。
 
-接続断はセッションの終了を意味しない。再接続時は拡張の一覧と attach で復帰し、タブの明示的な終了では close を送る。詳細な操作と DTO は `extensions/terminal/api` を参照する。
+接続断はセッションの終了を意味しない。再接続時は `terminal.list` と `terminal.attach` で復帰し、タブの明示的な終了では `terminal.terminate` を送る。詳細な操作と DTO は `extensions/terminal/contract` を参照する。
 
 ## Document の編集権
 

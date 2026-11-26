@@ -7,7 +7,11 @@
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
+    time::Duration,
 };
 
 use client_api::{
@@ -35,16 +39,45 @@ pub(super) struct HostTerminals {
     embedded: Option<Arc<TerminalService>>,
     /// Terminal は Workspace を引数に取らない操作を持つため、開始・attach で対応を覚える。
     sessions: Mutex<BTreeMap<String, Located>>,
+    /// 稼働中の Terminal 数。changes() の通知を続けるかの判断にだけ使う。
+    count: Arc<AtomicUsize>,
+    notification_pending: Arc<AtomicBool>,
+    changes: Mutex<Option<futures_channel::mpsc::UnboundedReceiver<()>>>,
+    _lifetime: Arc<()>,
 }
 
 impl HostTerminals {
     pub fn new(host: BackendClient) -> Self {
         let embedded = host.embedded_host().map(BackendHost::terminals_service);
+        let count = Arc::new(AtomicUsize::new(0));
+        let pending = Arc::new(AtomicBool::new(false));
+        let lifetime = Arc::new(());
+        let weak = Arc::downgrade(&lifetime);
+        let thread_count = Arc::clone(&count);
+        let thread_pending = Arc::clone(&pending);
+        let (sender, receiver) = futures_channel::mpsc::unbounded();
+        // UI は changes() を購読して poll する。Wire には通知を載せないため、
+        // Terminal が存在する間だけ 100ms 間隔で 1 回分の通知を送る。
+        std::thread::spawn(move || {
+            while weak.upgrade().is_some() {
+                if thread_count.load(Ordering::Acquire) > 0
+                    && !thread_pending.swap(true, Ordering::AcqRel)
+                    && sender.unbounded_send(()).is_err()
+                {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
         Self {
             connections: Connections::new(host.clone()),
             host,
             embedded,
             sessions: Mutex::new(BTreeMap::new()),
+            count,
+            notification_pending: pending,
+            changes: Mutex::new(Some(receiver)),
+            _lifetime: lifetime,
         }
     }
 
@@ -81,17 +114,21 @@ impl HostTerminals {
     }
 
     fn remember(&self, id: &TerminalId, located: &Located) -> Result<(), terminal::TerminalError> {
-        self.sessions
+        let mut sessions = self
+            .sessions
             .lock()
-            .map_err(|_| terminal::TerminalError::new("Terminal state lock failed"))?
-            .insert(
-                id.as_str().to_owned(),
-                Located {
-                    workspace: located.workspace.clone(),
-                    root: located.root.clone(),
-                    relative: None,
-                },
-            );
+            .map_err(|_| terminal::TerminalError::new("Terminal state lock failed"))?;
+        let previous = sessions.insert(
+            id.as_str().to_owned(),
+            Located {
+                workspace: located.workspace.clone(),
+                root: located.root.clone(),
+                relative: None,
+            },
+        );
+        if previous.is_none() {
+            self.count.fetch_add(1, Ordering::Release);
+        }
         Ok(())
     }
 
@@ -314,6 +351,7 @@ impl terminal::TerminalBackend for HostTerminals {
     }
 
     fn poll(&self, id: &TerminalId) -> Result<Vec<TerminalEvent>, terminal::TerminalError> {
+        self.notification_pending.store(false, Ordering::Release);
         let located = self.session(id)?;
         match &self.embedded {
             Some(service) => service.poll(located.workspace.as_str(), EMBEDDED, id),
@@ -345,8 +383,10 @@ impl terminal::TerminalBackend for HostTerminals {
                 id: id.clone(),
             }),
         }?;
-        if let Ok(mut sessions) = self.sessions.lock() {
-            sessions.remove(id.as_str());
+        if let Ok(mut sessions) = self.sessions.lock()
+            && sessions.remove(id.as_str()).is_some()
+        {
+            self.count.fetch_sub(1, Ordering::Release);
         }
         Ok(())
     }
@@ -371,6 +411,10 @@ impl terminal::TerminalBackend for HostTerminals {
                 id: id.clone(),
             }),
         }
+    }
+
+    fn changes(&self) -> Option<futures_channel::mpsc::UnboundedReceiver<()>> {
+        self.changes.lock().ok()?.take()
     }
 }
 
