@@ -267,6 +267,16 @@ class TestPathRouting(unittest.TestCase):
     def test_docs_specs_do_not_build_the_site(self):
         self.assertEqual(jobs_for_paths(["docs/specs/architecture.md"]), {"repository"})
 
+    def test_automation_and_reviewer_run_only_repository(self):
+        for path in (
+            "automation/policy.toml",
+            "automation/vm/README.md",
+            "reviewer/cli.py",
+            "docs/specs/automation.md",
+            ".opencode/skills/build-issue/SKILL.md",
+        ):
+            self.assertEqual(jobs_for_paths([path]), {"repository"}, path)
+
     def test_cargo_toml_runs_all_rust(self):
         jobs = jobs_for_paths(["Cargo.toml"])
         self.assertIn("repository", jobs)

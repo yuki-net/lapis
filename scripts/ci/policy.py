@@ -1,4 +1,4 @@
-"""保護パス（lint 基盤・CI 定義）の変更を検出して通知する。
+"""保護パス（lint 基盤・CI 定義・自動化）の変更を検出して通知する。
 
 保護パスは「どの変更 path でどの検証を走らせるか」ではなく、PR 全体の性質な
 ので route にはしない。GitHub では pull_request のときだけ job として走らせ、
@@ -19,12 +19,17 @@ from scripts.ci import report
 from scripts.ci.console import configure
 from scripts.ci.paths import pr_paths
 
-# 変更されると「lint / CI の仕組み」自体が変わる path。fnmatch なので
+# 変更されると「lint / CI / 自動化の仕組み」自体が変わる path。fnmatch なので
 # `lints/*` は配下のすべてに一致する。
 PROTECTED = (
     "lints/*",
     "AGENTS.md",
     ".github/*",
+    "automation/*",
+    "reviewer/*",
+    "docs/specs/automation.md",
+    ".opencode/skills/build-issue/*",
+    ".opencode/skills/review-pr/*",
     "scripts/check*.py",
     "scripts/architecture-exceptions.json",
     "scripts/ci/*",

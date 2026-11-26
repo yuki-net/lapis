@@ -49,7 +49,7 @@
     - **コミット**: 7桁SHA（例: `bffb2ab`）
 
 ## 保護パス（改変検知）
-- 次の path は **保護パス**。変更すると `Policy` が notice で通知し、`@yuki-net/reviews` の承認が必要になる：`lints/`、`AGENTS.md`、`.github/`、`scripts/check*.py`、`scripts/ci/`、`scripts/architecture-exceptions.json`、`clippy.toml`、`rust-toolchain.toml`、`rustfmt.toml`
+- 次の path は **保護パス**。変更すると `Policy` が notice で通知し、`@yuki-net/reviews` の承認が必要になる：`lints/`、`AGENTS.md`、`.github/`、`automation/`、`reviewer/`、`docs/specs/automation.md`、`.opencode/skills/build-issue/`、`.opencode/skills/review-pr/`、`scripts/check*.py`、`scripts/ci/`、`scripts/architecture-exceptions.json`、`clippy.toml`、`rust-toolchain.toml`、`rustfmt.toml`
 - 保護パスを変更する PR は `reviews` team の承認を得てマージする。`Policy` はサインで、**マージのゲートは CODEOWNERS**。ラベル・コメントによる免除は作らない（AI と人間が同じアカウントで動くため、AI が自分で免除できてしまう）。
 - bootstrap も同じ扱い。`reviews` の承認、または管理者の bypass でマージする。
 - 一度直した指摘をルールにするときは `lints/README.md` の手順に従い、カタログ・実装・テスト・fail/pass の fixture を同じ PR で足す。

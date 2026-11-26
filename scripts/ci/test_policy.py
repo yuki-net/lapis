@@ -36,6 +36,17 @@ class ProtectedPathTests(unittest.TestCase):
         ):
             self.assertIsNotNone(policy.pattern_for(path), path)
 
+    def test_automation_and_reviewer_are_protected(self):
+        for path in (
+            "automation/policy.toml",
+            "automation/roles.toml",
+            "reviewer/cli.py",
+            "docs/specs/automation.md",
+            ".opencode/skills/build-issue/SKILL.md",
+            ".opencode/skills/review-pr/SKILL.md",
+        ):
+            self.assertIsNotNone(policy.pattern_for(path), path)
+
     def test_product_code_is_not_protected(self):
         for path in (
             "apps/desktop/app/src/main.rs",

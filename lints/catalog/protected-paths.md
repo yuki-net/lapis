@@ -7,7 +7,7 @@ implementation: scripts.ci.policy:PROTECTED
 test: scripts.ci.test_catalog:CatalogTests.test_protected_paths_fixtures
 added: 2026-11-23
 ---
-# 保護パス（lint 基盤・CI 定義）の変更
+# 保護パス（lint 基盤・CI 定義・自動化）の変更
 
 ## 何を検知するか
 
@@ -22,6 +22,9 @@ summary で通知**する。このチェックは失敗しない。マージの�
 | `lints/*` | ルールのカタログ・baseline・fixture |
 | `AGENTS.md` | エージェント向けの規約 |
 | `.github/*` | ワークフロー・アクション |
+| `automation/*` / `reviewer/*` | 自動開発フローの policy・手順・reviewer 本体 |
+| `docs/specs/automation.md` | 自動化フローの仕様 |
+| `.opencode/skills/build-issue/*` / `.opencode/skills/review-pr/*` | エージェントの作業手順 |
 | `scripts/check*.py` | アーキテクチャ検査・CI 入口 |
 | `scripts/architecture-exceptions.json` | 依存方向の例外 |
 | `scripts/ci/*` | CI の定義・実行・routing |
