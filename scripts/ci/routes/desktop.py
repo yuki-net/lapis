@@ -24,15 +24,10 @@ ROUTE = Route(
     cache=True,
     steps=(
         Step("Check architecture", py("scripts/check.py", "desktop", "architecture")),
-        # テストの前提になるビルド。3 step で合計 35 分を上限の目安にする。
+        # テストの前提になるビルド。2 step で合計 35 分を上限の目安にする。
         Step(
             "Build extension host",
             ["cargo", "build", "--locked", "-p", "extension-runtime", "--bin", "lapis-extension-host"],
-            timeout_minutes=12,
-        ),
-        Step(
-            "Build lapis-terminal-native",
-            ["cargo", "build", "--locked", "-p", "lapis-terminal-native"],
             timeout_minutes=12,
         ),
         Step("Test Desktop", py("scripts/check.py", "desktop", "test"), timeout_minutes=40),

@@ -1014,13 +1014,15 @@ mod tests {
 
     #[cfg(all(windows, target_arch = "x86_64"))]
     #[test]
-    #[ignore = "native library と拡張ホストの事前ビルドが必要"]
+    #[ignore = "native extension fixture と拡張ホストの事前ビルドが必要"]
     fn signed_native_package_runs_in_extension_host() {
         let _test_lock = PTY_TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let image = std::fs::read(root.join("target/debug/lapis_terminal_native.dll")).unwrap();
+        let image =
+            std::fs::read(root.join("target/native-extension/debug/lapis_native_example.dll"))
+                .unwrap();
         check_native_package(&image, true);
     }
 
@@ -1110,14 +1112,12 @@ mod tests {
                     &self,
                     _: &str,
                     method: &str,
-                    _: serde_json::Value,
+                    payload: serde_json::Value,
                 ) -> Result<serde_json::Value, String> {
-                    if method != "process.info.v1.get" {
+                    if method != "echo.v1.echo" {
                         return Err("unknown method".into());
                     }
-                    Ok(
-                        serde_json::json!({"pty":"conpty","default_shell":{"program":"shell","arguments":[]}}),
-                    )
+                    Ok(payload)
                 }
             }
             let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -1144,12 +1144,16 @@ mod tests {
                 assert!(Instant::now() < deadline);
                 std::thread::sleep(Duration::from_millis(20));
             }
-            let info = supervisor
-                .dispatch_host_internal("dev.example.signed", "terminal.v1.info", "{}")
+            let echo = supervisor
+                .dispatch_host_internal(
+                    "dev.example.signed",
+                    "echo.v1.echo",
+                    r#"{"value":"round-trip"}"#,
+                )
                 .unwrap();
             assert_eq!(
-                serde_json::from_str::<serde_json::Value>(&info).unwrap()["pty"],
-                "conpty"
+                serde_json::from_str::<serde_json::Value>(&echo).unwrap()["value"],
+                "round-trip"
             );
         }
         extensions.set_enabled("dev.example.signed", false).unwrap();

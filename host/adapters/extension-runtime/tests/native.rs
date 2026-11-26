@@ -3,21 +3,28 @@
 use std::sync::{Arc, Mutex};
 
 use extension_runtime::{ExtensionRuntime, InvocationContext, Request, native::NativeExtension};
-use serde_json::{Value, json};
+use serde_json::Value;
 
-/// 実際の共有ライブラリを使うため、先に native Terminal をビルドする。
-#[test]
-#[ignore = "cargo build --locked -p lapis-terminal-native が必要"]
-fn native_terminal_uses_generic_host_broker_and_lifecycle() {
+fn fixture_path() -> std::path::PathBuf {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let name = if cfg!(windows) {
-        "lapis_terminal_native.dll"
+        "lapis_native_example.dll"
     } else if cfg!(target_os = "macos") {
-        "liblapis_terminal_native.dylib"
+        "liblapis_native_example.dylib"
     } else {
-        "liblapis_terminal_native.so"
+        "liblapis_native_example.so"
     };
-    let path = root.join("target/debug").join(name).canonicalize().unwrap();
+    root.join("target/native-extension/debug")
+        .join(name)
+        .canonicalize()
+        .unwrap()
+}
+
+/// 実際の共有ライブラリを使うため、先に native fixture をビルドする。
+#[test]
+#[ignore = "cargo build --locked --manifest-path examples/native-extension/Cargo.toml --target-dir target/native-extension が必要"]
+fn native_extension_uses_generic_host_broker_and_lifecycle() {
+    let path = fixture_path();
     let calls = Arc::new(Mutex::new(Vec::new()));
     let observed = calls.clone();
     let contexts = Arc::new(Mutex::new(Vec::new()));
@@ -30,19 +37,10 @@ fn native_terminal_uses_generic_host_broker_and_lifecycle() {
                 .unwrap()
                 .push(context.map(|context| (context.session.clone(), context.workspace.clone())));
             match method {
-                "process.info.v1.get" => {
-                    Ok(json!({"pty":"conpty","default_shell":{"program":"shell","arguments":[]}}))
+                "echo.v1.echo" => {
+                    assert_eq!(payload["value"], "hello");
+                    Ok(payload)
                 }
-                "pty.v1.spawn" => {
-                    assert_eq!(payload["cwd"], ".");
-                    Ok(json!("pty-1"))
-                }
-                "pty.v1.attach" | "pty.v1.detach" | "pty.v1.kill" | "pty.v1.forget" => {
-                    Ok(Value::Null)
-                }
-                "pty.v1.read" => Ok(
-                    json!({"bytes":[111,107],"next":2,"lost_before":null,"exited":null,"read_error":null,"write_error":null}),
-                ),
                 _ => Err("unknown Host capability".into()),
             }
         },
@@ -53,83 +51,35 @@ fn native_terminal_uses_generic_host_broker_and_lifecycle() {
         session: "session".into(),
         workspace: "workspace".into(),
     };
-    let started: Value = serde_json::from_str(
+    let echoed: Value = serde_json::from_str(
         &extension
-            .dispatch(
-                "terminal.v1.start-profile",
-                r#"{"profile":null,"working_directory":".","columns":80,"rows":24}"#,
-                &context,
-            )
+            .dispatch("echo.v1.echo", r#"{"value":"hello"}"#, &context)
             .unwrap(),
     )
     .unwrap();
-    let read = json!({"id":started["id"],"offset":0,"max_bytes":8,"timeout_ms":0}).to_string();
-    let output: Value = serde_json::from_str(
-        &extension
-            .dispatch("terminal.v1.read", &read, &context)
-            .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(output["bytes"], json!([111, 107]));
-    let other = InvocationContext {
-        session: "session".into(),
-        workspace: "other".into(),
-    };
-    assert!(
-        extension
-            .dispatch("terminal.v1.read", &read, &other)
-            .is_err()
-    );
-    extension
-        .dispatch("terminal.v1.info", "{}", &other)
-        .unwrap();
+    assert_eq!(echoed["value"], "hello");
     extension.deactivate().unwrap();
     assert!(
         extension
-            .dispatch("terminal.v1.list", "{}", &context)
+            .dispatch("echo.v1.echo", r#"{"value":"hello"}"#, &context)
             .is_err()
     );
+    assert_eq!(&*calls.lock().unwrap(), &["echo.v1.echo"]);
     assert_eq!(
-        &*calls.lock().unwrap(),
-        &[
-            "process.info.v1.get",
-            "pty.v1.spawn",
-            "pty.v1.attach",
-            "pty.v1.read",
-            "process.info.v1.get",
-            "pty.v1.kill",
-            "pty.v1.detach"
-        ]
+        &*contexts.lock().unwrap(),
+        &[Some(("session".into(), "workspace".into()))]
     );
-    let contexts = contexts.lock().unwrap();
-    assert!(
-        contexts[..4]
-            .iter()
-            .all(|item| item.as_ref() == Some(&("session".into(), "workspace".into())))
-    );
-    assert_eq!(contexts[4], Some(("session".into(), "other".into())));
-    assert_eq!(&contexts[5..], &[None, None]);
 }
 
 #[test]
-#[ignore = "cargo build --locked -p lapis-terminal-native が必要"]
+#[ignore = "cargo build --locked --manifest-path examples/native-extension/Cargo.toml --target-dir target/native-extension が必要"]
 fn native_and_wasm_share_the_runtime_lifecycle() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let name = if cfg!(windows) {
-        "lapis_terminal_native.dll"
-    } else if cfg!(target_os = "macos") {
-        "liblapis_terminal_native.dylib"
-    } else {
-        "liblapis_terminal_native.so"
-    };
-    let path = root.join("target/debug").join(name).canonicalize().unwrap();
+    let path = fixture_path();
     let broker = Arc::new(
-        |method: &str, _: Value, context: Option<&InvocationContext>| {
+        |method: &str, payload: Value, context: Option<&InvocationContext>| {
             assert_eq!(context.unwrap().workspace, "workspace");
             match method {
-                "process.info.v1.get" => {
-                    Ok(json!({"pty":"conpty","default_shell":{"program":"shell","arguments":[]}}))
-                }
+                "echo.v1.echo" => Ok(payload),
                 _ => Err("unknown Host capability".into()),
             }
         },
@@ -156,15 +106,25 @@ fn native_and_wasm_share_the_runtime_lifecycle() {
     };
     let response: Value = serde_json::from_str(
         &runtime
-            .dispatch("example.native", "terminal.v1.info", "{}", &context)
+            .dispatch(
+                "example.native",
+                "echo.v1.echo",
+                r#"{"value":"shared"}"#,
+                &context,
+            )
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(response["pty"], "conpty");
+    assert_eq!(response["value"], "shared");
     assert!(runtime.handle(Request::Shutdown).ok);
     assert!(
         runtime
-            .dispatch("example.native", "terminal.v1.info", "{}", &context)
+            .dispatch(
+                "example.native",
+                "echo.v1.echo",
+                r#"{"value":"shared"}"#,
+                &context
+            )
             .is_err()
     );
     assert!(runtime.deactivate("example.wasm").is_err());
@@ -172,16 +132,14 @@ fn native_and_wasm_share_the_runtime_lifecycle() {
 
 #[cfg(windows)]
 #[test]
-#[ignore = "cargo build --locked -p lapis-terminal-native が必要"]
+#[ignore = "cargo build --locked --manifest-path examples/native-extension/Cargo.toml --target-dir target/native-extension が必要"]
 fn verified_native_bytes_can_be_loaded_without_reopening_package_path() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../target/debug/lapis_terminal_native.dll");
+        .join("../../../target/native-extension/debug/lapis_native_example.dll");
     let bytes = std::fs::read(path).unwrap();
     let broker = Arc::new(
-        |method: &str, _: Value, _: Option<&InvocationContext>| match method {
-            "process.info.v1.get" => {
-                Ok(json!({"pty":"conpty","default_shell":{"program":"shell","arguments":[]}}))
-            }
+        |method: &str, payload: Value, _: Option<&InvocationContext>| match method {
+            "echo.v1.echo" => Ok(payload),
             _ => Err("unknown Host capability".into()),
         },
     );
@@ -193,9 +151,9 @@ fn verified_native_bytes_can_be_loaded_without_reopening_package_path() {
     };
     let value: Value = serde_json::from_str(
         &extension
-            .dispatch("terminal.v1.info", "{}", &context)
+            .dispatch("echo.v1.echo", r#"{"value":"bytes"}"#, &context)
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(value["pty"], "conpty");
+    assert_eq!(value["value"], "bytes");
 }

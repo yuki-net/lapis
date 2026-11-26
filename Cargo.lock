@@ -5222,15 +5222,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lapis-terminal-native"
-version = "0.1.0"
-dependencies = [
- "extension-native-api",
- "serde_json",
- "terminal-host",
-]
-
-[[package]]
 name = "lapis-web"
 version = "0.1.0"
 dependencies = [
