@@ -17,6 +17,7 @@ use std::{
 use serde_json::{Value, json};
 
 pub use task::*;
+pub use task_state::{TaskBackend, TaskRecord};
 
 #[derive(Clone, Debug)]
 pub enum RunnerUpdate {

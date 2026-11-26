@@ -13,9 +13,12 @@ use std::{
 use editor_core::{ExecutionId, TaskId, WorkspaceId};
 use git::TaskWorktree;
 use task::{
-    Execution, ExecutionSnapshot, ExecutionStatus, Task, TaskBackend, TaskControl, TaskRecord,
-    TaskSnapshot, TaskStart, unix_time_ms,
+    Execution, ExecutionSnapshot, ExecutionStatus, Task, TaskControl, TaskSnapshot, TaskStart,
+    unix_time_ms,
 };
+
+mod record;
+pub use record::{TaskBackend, TaskRecord};
 
 static NEXT_RESOURCE: AtomicU64 = AtomicU64::new(1);
 

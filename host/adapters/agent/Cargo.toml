@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 task = { path = "../../../protocol/types/task" }
+task-state = { path = "../../domains/tasks" }
 editor-core = { path = "../../../protocol/types/editor-core" }
 serde.workspace = true
 serde_json.workspace = true

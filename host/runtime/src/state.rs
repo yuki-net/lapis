@@ -57,7 +57,7 @@ pub struct WorkspaceRegistration {
     pub root: PathBuf,
     pub files: Arc<dyn WorkspaceFileBackend>,
     pub git: Option<Arc<dyn git_api::GitBackend>>,
-    pub tasks: Option<Arc<dyn task::TaskBackend>>,
+    pub tasks: Option<Arc<dyn task_state::TaskBackend>>,
     /// Host が spawn したプロセスのレジストリ。
     pub processes: Option<Arc<dyn process::ProcessRegistry>>,
     pub workbench_persistence: Option<Arc<dyn crate::WorkbenchPersistence>>,
@@ -97,7 +97,7 @@ impl WorkspaceRegistration {
         self.git = Some(backend);
         self
     }
-    pub fn with_tasks(mut self, backend: Arc<dyn task::TaskBackend>) -> Self {
+    pub fn with_tasks(mut self, backend: Arc<dyn task_state::TaskBackend>) -> Self {
         self.tasks = Some(backend);
         self
     }

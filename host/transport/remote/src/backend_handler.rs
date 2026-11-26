@@ -187,9 +187,8 @@ mod tests {
     };
     use document::{DocumentError, DocumentRepository, FileData, FileFingerprint};
     use editor_core::{ConversationId, ExecutionId, TaskId};
-    use task::{
-        ExecutionStatus, TaskBackend, TaskControl, TaskError, TaskMode, TaskRecord, TaskStart,
-    };
+    use task::{ExecutionStatus, TaskControl, TaskError, TaskMode, TaskStart};
+    use task_state::{TaskBackend, TaskRecord};
 
     use super::*;
 
