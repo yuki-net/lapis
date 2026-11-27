@@ -5,7 +5,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use desktop_client::{RestoredTerminal, TerminalSession};
+use desktop_client::{ResolvedSettings, RestoredTerminal, TerminalSession};
 use editor_core::ConversationId;
 #[cfg(test)]
 use terminal::TerminalStatus;
@@ -293,7 +293,7 @@ pub(crate) struct TerminalFeature {
 impl gpui::EventEmitter<TerminalFeatureEvent> for TerminalFeature {}
 
 fn extension_setting<'a>(
-    values: &'a settings::ResolvedSettings,
+    values: &'a ResolvedSettings,
     name: &str,
 ) -> Option<&'a settings::SettingValue> {
     values
@@ -301,7 +301,7 @@ fn extension_setting<'a>(
         .and_then(|setting| setting.value())
 }
 
-fn terminal_font_family(values: &settings::ResolvedSettings) -> Option<String> {
+fn terminal_font_family(values: &ResolvedSettings) -> Option<String> {
     extension_setting(values, "font-family")
         .and_then(settings::SettingValue::as_text)
         .filter(|value| !value.is_empty())
@@ -310,9 +310,9 @@ fn terminal_font_family(values: &settings::ResolvedSettings) -> Option<String> {
 }
 
 fn terminal_number(
-    values: &settings::ResolvedSettings,
+    values: &ResolvedSettings,
     name: &str,
-    fallback: impl FnOnce(&settings::ResolvedSettings) -> Option<u8>,
+    fallback: impl FnOnce(&ResolvedSettings) -> Option<u8>,
 ) -> Option<u8> {
     extension_setting(values, name)
         .and_then(settings::SettingValue::as_integer)
@@ -321,14 +321,14 @@ fn terminal_number(
         .or_else(|| fallback(values))
 }
 
-fn terminal_caret(values: &settings::ResolvedSettings) -> Option<settings::TerminalCaretShape> {
+fn terminal_caret(values: &ResolvedSettings) -> Option<settings::TerminalCaretShape> {
     extension_setting(values, "caret-shape")
         .and_then(settings::SettingValue::as_text)
         .and_then(settings::TerminalCaretShape::from_id)
         .or_else(|| values.terminal_caret_shape())
 }
 
-fn terminal_profile(values: &settings::ResolvedSettings) -> Option<String> {
+fn terminal_profile(values: &ResolvedSettings) -> Option<String> {
     extension_setting(values, "default-profile")
         .and_then(settings::SettingValue::as_text)
         .filter(|value| !value.is_empty())
@@ -356,7 +356,7 @@ impl TerminalFeature {
     /// 設定の変更を描画へ反映する。フォントや行送りが変わると列数・行数も変わる。
     fn apply_terminal_appearance(
         &mut self,
-        values: &settings::ResolvedSettings,
+        values: &ResolvedSettings,
         cx: &mut gpui::Context<Self>,
     ) {
         let family: gpui::SharedString = terminal_font_family(values)
@@ -365,13 +365,13 @@ impl TerminalFeature {
         let size = terminal_number(
             values,
             "font-size",
-            settings::ResolvedSettings::terminal_font_size,
+            desktop_client::ResolvedSettings::terminal_font_size,
         )
         .unwrap_or_else(super::default_font_size) as f32;
         let line_height_percent = terminal_number(
             values,
             "line-height-percent",
-            settings::ResolvedSettings::terminal_line_height_percent,
+            desktop_client::ResolvedSettings::terminal_line_height_percent,
         )
         .unwrap_or_else(super::default_line_height_percent);
         let caret_shape = terminal_caret(values).unwrap_or_default();
@@ -519,7 +519,7 @@ impl TerminalFeature {
                 terminal_number(
                     values,
                     "font-size",
-                    settings::ResolvedSettings::terminal_font_size,
+                    desktop_client::ResolvedSettings::terminal_font_size,
                 )
             })
             .unwrap_or_else(super::default_font_size) as f32;
@@ -529,7 +529,7 @@ impl TerminalFeature {
                 terminal_number(
                     values,
                     "line-height-percent",
-                    settings::ResolvedSettings::terminal_line_height_percent,
+                    desktop_client::ResolvedSettings::terminal_line_height_percent,
                 )
             })
             .unwrap_or_else(super::default_line_height_percent);
@@ -1680,7 +1680,7 @@ mod tests {
                 terminal_number(
                     &other.resolved().unwrap(),
                     "font-size",
-                    settings::ResolvedSettings::terminal_font_size
+                    desktop_client::ResolvedSettings::terminal_font_size
                 ),
                 Some(18)
             );

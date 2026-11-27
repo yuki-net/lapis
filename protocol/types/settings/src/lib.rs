@@ -1,15 +1,14 @@
-//! 設定の Scope / Owner 分離モデル。保存形式・実効値の解決・共有 state を提供する。
+//! 設定の Scope / Owner 分離モデル。保存形式・定義データ・共有 state の契約を提供する。
 //!
 //! - どの設定をどの所有者（User / Host / Project）が持てるかは [`definition`] の定義データが決める。
 //! - 保存は所有者ごとの [`document::SettingsRepository`] が担う。
-//! - UI は [`resolve::ResolvedSettings`] だけを読み、[`state::SettingsModel`] の購読で更新を受け取る。
+//! - UI は解決済みの設定値（`desktop-client` クレートの `ResolvedSettings`）だけを読み、[`state::SettingsModel`] の購読で更新を受け取る。
 
 pub mod catalog;
 pub mod definition;
 pub mod document;
 pub mod error;
 pub mod extension;
-pub mod resolve;
 pub mod scope;
 pub mod source;
 pub mod syntax;
@@ -29,7 +28,6 @@ pub use document::{
 };
 pub use error::SettingsError;
 pub use extension::{ExtensionSettingDefinition, ExtensionSettingsCatalog};
-pub use resolve::{ResolvedSetting, ResolvedSettings};
 pub use scope::{HostId, ProjectId, ScopeKind, SettingsContext, SettingsScope};
 pub use source::SettingsSourceProvider;
 pub use syntax::{SyntaxTheme, TerminalCaretShape};

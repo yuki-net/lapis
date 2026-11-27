@@ -1,7 +1,8 @@
 use super::*;
+use crate::settings_resolve::ResolvedSettings;
 use localization::LocaleId;
 use settings::{
-    DefinitionCatalog, ResolvedSettings, SettingKey, SettingValue, SettingsContext, SettingsError,
+    DefinitionCatalog, SettingKey, SettingValue, SettingsContext, SettingsError,
     SettingsRepository, SettingsScope,
 };
 use std::sync::Arc;

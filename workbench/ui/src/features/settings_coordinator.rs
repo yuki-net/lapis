@@ -1,8 +1,8 @@
 use std::collections::VecDeque;
 
-use desktop_client::{SettingsSession, SettingsWatch};
+use desktop_client::{ResolvedSettings, SettingsSession, SettingsWatch};
 use gpui::{App, AppContext, Context, Entity, Global};
-use settings::{ResolvedSettings, SettingKey, SettingValue, SettingsError, SettingsScope};
+use settings::{SettingKey, SettingValue, SettingsError, SettingsScope};
 
 use crate::{client_adapter::ClientWorker, theme};
 use extension_ui_contract::ThemeId;

@@ -6,11 +6,10 @@ use std::{
 
 use client_api::{HostExtension, HostExtensionContributions, HostExtensionsListResponse};
 use localization::{ExtensionLocalizations, LocaleId, LocalePack, MessageId};
-use settings::{
-    ExtensionSettingsCatalog, ResolvedSettings, SettingValue, SettingsError, SettingsScope,
-};
+use settings::{ExtensionSettingsCatalog, SettingValue, SettingsError, SettingsScope};
 
 use crate::SettingsModel;
+use crate::settings_resolve::ResolvedSettings;
 
 const MAX_DECLARATIONS: usize = 256;
 const MAX_BYTES: usize = 256 * 1024;
