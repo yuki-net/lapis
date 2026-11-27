@@ -137,6 +137,9 @@ jobs:
         working-directory: ${{ github.workspace }}
         env:
           RUNNER_TEMP: ${{ runner.temp }}
+          # run.py の Step.paths 判定に使う。workflow_dispatch では空になり、
+          # 全 step を実行する（full と同じ挙動）。
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: python -m scripts.ci.run ${{ matrix.route.job }} --no-prerequisite-check --os ${{ matrix.route.os }}
 
   # 保護パス（lints/・CI 定義）の変更を検出する。path routing ではなく PR 全体の

@@ -46,10 +46,25 @@ STEPS = (
         "Build pty example extension",
         ["cargo", "build", "--locked", "--manifest-path", "examples/pty-extension/Cargo.toml",
          "--target", "wasm32-wasip2", "--target-dir", "target/pty-extension"],
+        # PTY 拡張の wasm と、それを動かす Host 側の PTY 実装だけが入力。
+        paths=(
+            "examples/pty-extension/",
+            "protocol/extension-api/wit/pty-v1/",
+            "host/adapters/process/",
+            "host/adapters/extension-runtime/",
+            "Cargo.toml", "Cargo.lock", ".cargo/",
+        ),
     ),
     Step(
         "Test approved wasm pty",
         ["cargo", "test", "--locked", "-p", "host", "approved_wasm_uses_host_pty_and_shutdown_reclaims_it", "--", "--ignored"],
+        paths=(
+            "examples/pty-extension/",
+            "protocol/extension-api/wit/pty-v1/",
+            "host/adapters/process/",
+            "host/adapters/extension-runtime/",
+            "Cargo.toml", "Cargo.lock", ".cargo/",
+        ),
     ),
 )
 
@@ -67,5 +82,7 @@ ROUTE = Route(
     rust_components="rustfmt, clippy",
     rust_targets="wasm32-wasip2",
     cache=True,
+    # Step.paths の判定で base との merge-base まで見るため全履歴を取る。
+    checkout_depth=0,
     steps=STEPS,
 )

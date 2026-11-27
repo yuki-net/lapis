@@ -16,7 +16,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from scripts.ci import diagnostics, report, state
+from scripts.ci import diagnostics, paths, report, state
 from scripts.ci.console import configure
 from scripts.ci.model import ROOT, local_os, requirements
 from scripts.ci.routes import ORDER, route_for
@@ -387,8 +387,13 @@ def execute(
     quiet: bool,
     os_name: str | None = None,
     temp: Path | None = None,
+    changed: list[str] | None = None,
 ) -> dict:
-    """route の step を実行する。`os_name` の差分 step も後ろに足す。"""
+    """route の step を実行する。`os_name` の差分 step も後ろに足す。
+
+    `changed` は base からの変更 path。`None`（base 不明）なら
+    `Step.paths` で絞らずに全 step を実行する。
+    """
     os_name = os_name or local_os()
     all_steps = [*route.steps, *route.platform_steps.get(os_name, ())]
     steps = all_steps
@@ -411,6 +416,14 @@ def execute(
     results = []
     try:
         for step in steps:
+            if not step_paths_match(step, changed):
+                report.notice(f"skip {step.name} (no matching path)")
+                # skip も「処理済み」として数える。数えないと 1/2 のまま OK と
+                # 表示され、進捗が止まって見える。
+                writer.begin(step.name)
+                writer.end(step.name, True)
+                results.append({"name": step.name, "ok": True, "skipped": True, "seconds": 0.0, "output": ""})
+                continue
             if step.requires and missing_prerequisites_for_step(step):
                 report.notice(f"skip {step.name} (requires {', '.join(step.requires)})")
                 # skip も「処理済み」として数える。数えないと 1/2 のまま OK と
@@ -467,6 +480,22 @@ def execute(
     return payload
 
 
+def step_paths_match(step, changed: list[str] | None) -> bool:
+    """step を実行すべきか。`Step.paths` と変更 path を突き合わせる。
+
+    - `step.paths` が空: 常に実行する
+    - 変更 path が不明（base を解決できない）: 安全側に倒して実行する
+    - どれかの変更 path がどれかのパターンに一致: 実行する
+    """
+    if not step.paths or changed is None:
+        return True
+    return any(
+        paths.matches(path, pattern)
+        for path in changed
+        for pattern in step.paths
+    )
+
+
 def missing_prerequisites_for_step(step) -> list[str]:
     missing = []
     for name in step.requires:
@@ -501,6 +530,19 @@ def list_routes() -> None:
     )
 
 
+def select_changed(base: str | None) -> list[str] | None:
+    """base から変更 path を求める。base が無い・解決できないなら None。
+
+    `None` は「変更 path が不明」として全 step を実行する側に倒す。
+    """
+    if not base:
+        return None
+    changed = paths.changed_paths(base, include_worktree=False)
+    if changed is None:
+        report.notice(f"changed paths for {base} unavailable; running all steps")
+    return changed
+
+
 def main() -> int:
     configure_output()
     parser = argparse.ArgumentParser(description=__doc__)
@@ -516,6 +558,11 @@ def main() -> int:
     parser.add_argument("--quiet", action="store_true", help="失敗 step の抜粋を出さない")
     parser.add_argument("--strict", action="store_true", help="実行できない route を失敗として扱う")
     parser.add_argument("--no-prerequisite-check", action="store_true", help="前提確認を省略する（CI 用）")
+    parser.add_argument(
+        "--base",
+        default=os.environ.get("BASE_SHA") or None,
+        help="Step.paths の判定に使う差分の基準 ref（既定は BASE_SHA）",
+    )
     args = parser.parse_args()
 
     if args.list or not args.route:
@@ -548,7 +595,7 @@ def main() -> int:
             print(json.dumps({"route": route.key, "ok": True, "skipped": True, "reason": f"missing {missing}"}))
             return 0
 
-    payload = execute(route, args.step, args.quiet, target_os)
+    payload = execute(route, args.step, args.quiet, target_os, changed=select_changed(args.base))
     if args.json:
         report.emit_json(payload)
     return 0 if payload["ok"] else 1
