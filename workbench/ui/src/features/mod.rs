@@ -5,6 +5,7 @@ pub(crate) mod command_search;
 pub(crate) mod conversation;
 pub(crate) mod editor;
 pub(crate) mod files;
+#[path = "../../../../extensions/git/ui/mod.rs"]
 pub(crate) mod git;
 pub(crate) mod preview;
 pub(crate) mod resource_manager;

@@ -1,5 +1,6 @@
 //! Client 側の拡張機能レジストリ。
 
+#[path = "../../../../extensions/git/state/mod.rs"]
 pub mod git;
 
 /// 組み込み拡張の識別子。

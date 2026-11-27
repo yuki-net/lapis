@@ -19,7 +19,8 @@ members = [
     # Cargo.lock から workspace メンバーが脱落する（`--locked` が失敗する）。
     # 拡張グループごとに列挙し、新しいグループを追加したときはここに足す。
     "extensions/acp/*",
-    "extensions/git/*",
+    "extensions/git/adapter",
+    "extensions/git/contract",
     "extensions/terminal/adapter",
     "extensions/terminal/api",
     "extensions/terminal/contract",
