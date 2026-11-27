@@ -27,7 +27,8 @@ pub fn certificate_lifetime() -> Duration {
     Duration::days(CERTIFICATE_LIFETIME_DAYS)
 }
 
-type Error = Box<dyn std::error::Error + Send + Sync>;
+/// Host の同一性を扱う操作のエラー。
+pub type Error = Box<dyn std::error::Error + Send + Sync>;
 
 /// Hostの同一性。DesktopのprofileとWebのcredentialは証明書に紐づくため、再起動を跨いで使い回す。
 pub struct HostIdentity {
@@ -166,9 +167,14 @@ mod tests {
         let second = HostIdentity::load_or_create(Some(directory.path())).unwrap();
         assert_eq!(first.certificate.as_ref(), second.certificate.as_ref());
         assert_eq!(first.key.secret_der(), second.key.secret_der());
-        let stored = fs::read(directory.path().join(FILE)).unwrap();
-        let key = first.key.secret_der();
-        assert!(!stored.windows(key.len()).any(|window| window == key));
+        // Unix の `protect` はパススルー（呼出側が 0700/0600 を強制する）ため、
+        // 平文で保存されないことの確認は DPAPI を使う Windows だけで行う。
+        #[cfg(windows)]
+        {
+            let stored = fs::read(directory.path().join(FILE)).unwrap();
+            let key = first.key.secret_der();
+            assert!(!stored.windows(key.len()).any(|window| window == key));
+        }
     }
 
     #[test]

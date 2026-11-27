@@ -27,6 +27,7 @@ terminal = { package = "terminal-contract", path = "../../extensions/terminal/co
 semver = "1"
 client-api = { path = "../../protocol/wire/client-api" }
 platform = { path = "../adapters/local" }
+local-identity = { path = "../adapters/identity" }
 local-process = { path = "../adapters/process" }
 remote = { path = "../transport/remote" }
 wire = { path = "../../protocol/wire/dto" }

@@ -4408,6 +4408,7 @@ dependencies = [
  "getrandom 0.3.4",
  "git-contract",
  "libc",
+ "local-identity",
  "local-process",
  "local-terminal",
  "platform",
@@ -5435,6 +5436,18 @@ dependencies = [
  "notify",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "local-identity"
+version = "0.1.0"
+dependencies = [
+ "rcgen",
+ "rustls",
+ "tempfile",
+ "time",
+ "windows-sys 0.61.2",
+ "zeroize",
 ]
 
 [[package]]

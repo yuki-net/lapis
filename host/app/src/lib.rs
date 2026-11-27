@@ -4,16 +4,14 @@ mod local;
 mod oidc;
 mod profile;
 mod remote_handler;
-pub use remote_handler::HostRemoteHandler;
-mod identity;
-pub use identity::HostIdentity;
-mod protected;
 pub use local::run_managed_host;
+pub use local_identity::HostIdentity;
 pub use oidc::{HostOidc, configured as oidc_configured, from_env as oidc_from_env};
 pub use profile::{
     HostInvitation, HostProfileInfo, OidcProfile, host_profile_info, open_host_file,
     read_invitation, write_invitation, write_invitation_replacing, write_oidc_profile,
 };
+pub use remote_handler::HostRemoteHandler;
 mod document;
 pub use client::{BackendClient, ExtensionConnection};
 #[cfg(windows)]
