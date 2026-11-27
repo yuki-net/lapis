@@ -131,7 +131,7 @@ fn run() -> Result<(), Error> {
     let options = Options::parse(std::env::args_os().skip(1))?;
     let state_directory = options.state_directory.clone();
     // 証明書と秘密鍵は state directory に保存し、再起動しても同じ身元で待ち受ける。
-    let identity = host::HostIdentity::load_or_create(state_directory.as_deref())?;
+    let identity = local_identity::HostIdentity::load_or_create(state_directory.as_deref())?;
     let host = match options.state_directory {
         Some(directory) if options.development_extensions => {
             BackendHost::start_development_with_state_directory(directory)?

@@ -30,6 +30,7 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 | `host/domains/auth/` | 永続化する認証・端末の正規表現 | 認証処理、wire、OS 固有の実装 |
 | `host/domains/tasks/` | Task のオーケストレーション（実行資源の管理） | Task の正規状態（`host/runtime` が所有） |
 | `host/adapters/` | FS、runner、検索、永続化 | 画面の判断 |
+| `host/adapters/identity/` | Host の同一性（証明書・鍵の生成・保存・更新）と OS に依存する保存データの保護（DPAPI） | 証明書を使う接続の判断、画面の判断 |
 | `extensions/git/adapter/` | Git 拡張の Host 実装（CLI 操作・監視） | 画面の判断、Workspace の正規状態 |
 | `extensions/acp/adapter/` | ACP client 境界（ハーネス起動、ACP 送受信、`TaskEvent` への変換） | Task の正規状態、core の型 |
 | `host/extensions-entry/` | 拡張の入口（導入済み拡張の目録・状態、`.lapis` package の読み込み・互換照合・署名検証、package と拡張データの置き場所） | Wasm ランタイム上での実行、画面の判断 |

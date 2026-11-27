@@ -1,5 +1,6 @@
-use crate::{BackendHost, HostProfileInfo, protected::protect};
+use crate::{BackendHost, HostProfileInfo};
 use client_api::*;
+use local_identity::protect;
 use remote::{
     AuthConfig, AuthPersistence, AuthPersistenceError, AuthPolicy, CredentialHandle, CredentialId,
     CredentialLifetime, PairingLifetime, QuicAuth, QuicConnection, QuicConnectionConfig,
@@ -476,7 +477,7 @@ pub fn run_managed_host(root: &Path, directory: &Path) -> Result<(), Error> {
     };
     let workspace = host.register_workspace(&root)?;
     let host_id = host.host_id();
-    let identity = crate::identity::HostIdentity::load_or_create(Some(directory))?;
+    let identity = local_identity::HostIdentity::load_or_create(Some(directory))?;
     let tls = tls13_server_config(vec![identity.certificate.clone()], identity.key.clone_key())?;
     let owner_capabilities =
         CapabilitySet::try_new(crate::supported_capabilities().iter().cloned().chain(

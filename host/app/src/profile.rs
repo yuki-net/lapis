@@ -1,5 +1,6 @@
-use crate::{BackendClient, local::Record, protected::protect};
+use crate::{BackendClient, local::Record};
 use client_api::*;
+use local_identity::protect;
 use remote::QuicConnectionConfig;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

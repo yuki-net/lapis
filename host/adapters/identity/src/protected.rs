@@ -2,11 +2,8 @@ use std::io;
 use zeroize::Zeroizing;
 
 #[cfg(windows)]
-pub(super) fn protect(
-    bytes: &[u8],
-    entropy: &[u8],
-    decrypt: bool,
-) -> io::Result<Zeroizing<Vec<u8>>> {
+/// `decrypt` が false なら DPAPI で保護し、true なら復号する。Unix では素通しする。
+pub fn protect(bytes: &[u8], entropy: &[u8], decrypt: bool) -> io::Result<Zeroizing<Vec<u8>>> {
     use windows_sys::Win32::{
         Foundation::LocalFree,
         Security::Cryptography::{
@@ -71,7 +68,7 @@ pub(super) fn protect(
 }
 
 #[cfg(unix)]
-pub(super) fn protect(bytes: &[u8], _: &[u8], _: bool) -> io::Result<Zeroizing<Vec<u8>>> {
+pub fn protect(bytes: &[u8], _: &[u8], _: bool) -> io::Result<Zeroizing<Vec<u8>>> {
     // Unixの開発用Hostでは呼出側がdirectory 0700 / file 0600を強制する。
     Ok(Zeroizing::new(bytes.to_vec()))
 }

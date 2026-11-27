@@ -27,7 +27,8 @@ pub fn certificate_lifetime() -> Duration {
     Duration::days(CERTIFICATE_LIFETIME_DAYS)
 }
 
-type Error = Box<dyn std::error::Error + Send + Sync>;
+/// Host の同一性を扱う操作のエラー。
+pub type Error = Box<dyn std::error::Error + Send + Sync>;
 
 /// Hostの同一性。DesktopのprofileとWebのcredentialは証明書に紐づくため、再起動を跨いで使い回す。
 pub struct HostIdentity {
