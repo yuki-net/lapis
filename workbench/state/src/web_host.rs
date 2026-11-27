@@ -39,6 +39,7 @@ use workspace::{
     WorkspaceSearchBackend,
 };
 
+#[path = "../../../extensions/terminal/state/web_extension_terminal.rs"]
 mod extension_terminal;
 mod transport;
 

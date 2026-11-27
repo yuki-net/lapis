@@ -13,6 +13,8 @@ Terminal のセッション操作、公開 DTO、Client の画面モデルを配
 - `adapter/`（crate `local-terminal`）: `TerminalHost` port の PTY 実装と、Host 側の Terminal セッションサービス。Host の `BackendClient::terminals()` がこのサービスを使う。
 - `renderer/`（crate `terminal-renderer`）: Desktop のネイティブ描画器。VT/ANSI の画面状態と入力変換を担い、PTY を所有しない。
 - `portable-renderer/`（crate `terminal-portable-renderer`）: Web と Wasm でもビルドできる画面モデル。現在の Web は Host が生成した snapshot と差分を適用するため、PTY 出力の描画には使わない。
+- `ui/`: Terminal Feature の画面と表示状態。モジュールパスは `features::terminal` のままで、`workbench/ui` から `#[path]` で読み込む。まだ `desktop-ui` crate の一部としてビルドする。
+- `state/`: Terminal の Client 状態（セッション、拡張 DTO、Web の投影）。モジュールパスは `terminal_session` / `terminal_extension` / `web_host::extension_terminal` のままで、`workbench/state` から `#[path]` で読み込む。まだ `desktop-client` crate の一部としてビルドする。crate 抽出は次の段階で行う。
 
 ## ディレクトリ規約の判断
 
@@ -50,7 +52,7 @@ Terminal の Client UI は、共通 Layout の宣言と内部レジストリを�
 
 - 拡張は `views.json` で表示名、配置、複数個体、オープン用コマンドを宣言します。
 - 現在の Client は宣言の View ID、表示名、既定配置、個体方針とオープン用コマンドを使用します。Client は `lapis.terminal` の `lapis.content.terminal-grid.v1` 宣言を既存のネイティブ描画器に結び付けます。他の提供元やコンテンツ種別の動的な描画器登録は未実装です。
-- `clients/ui/src/features/terminal/lifecycle.rs` が `ViewLifecycle` を実装し、タブごとの Session を管理します。表示器は Desktop と Web の Client 内で動きます。
+- `extensions/terminal/ui/lifecycle.rs`（モジュールパス `features::terminal`）が `ViewLifecycle` を実装し、タブごとの Session を管理します。表示器は Desktop と Web の Client 内で動きます。
 - 設定への候補供給（フォント・既定 profile）は `SettingsSourceProvider` として登録します。設定画面は Terminal Feature の型を読まず、登録された供給元をキーで引きます。
 
 ## 検証
