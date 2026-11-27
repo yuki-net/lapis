@@ -13,9 +13,9 @@ use crate::client_adapter::ClientWorker;
 use crate::components::ScrollState;
 use crate::localization::Localizer;
 use crate::theme;
-use desktop_client::WebAccessControl;
+use desktop_client::{ResolvedSettings, WebAccessControl};
 use gpui::{Context, Render, Window, div, px};
-use settings::{ResolvedSettings, SettingKey, SettingValue, SettingsScope};
+use settings::{SettingKey, SettingValue, SettingsScope};
 use std::path::PathBuf;
 use std::sync::Arc;
 

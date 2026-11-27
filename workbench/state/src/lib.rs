@@ -11,6 +11,7 @@ mod extension_contributions;
 mod extension_management;
 mod extensions;
 mod process;
+mod settings_resolve;
 mod settings_store;
 pub mod terminal_extension;
 mod update;
@@ -30,6 +31,7 @@ pub use process::ProcessSession;
 pub use session_view::{SessionViewCursor, SessionViewReplica, SessionViewWatch};
 #[cfg(not(target_arch = "wasm32"))]
 pub use session_view::{SessionViewSession, SessionViewSync};
+pub use settings_resolve::{ResolvedSetting, ResolvedSettings};
 pub use settings_store::{SettingsModel, SettingsWatch};
 pub use update::{UpdateController, UpdateStatus, UpdateWatch};
 pub use view_state::{DocumentViewState, WorkspaceStateRepository, WorkspaceViewState};

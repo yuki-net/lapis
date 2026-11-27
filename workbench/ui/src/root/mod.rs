@@ -468,7 +468,7 @@ impl DesktopRoot {
             cx.observe(&group, |root, _, cx| root.synchronize_group(cx)),
             cx.subscribe(
                 &settings,
-                |root, _, values: &settings::ResolvedSettings, cx| {
+                |root, _, values: &desktop_client::ResolvedSettings, cx| {
                     let locale = values.locale();
                     root.shell
                         .update(cx, |shell, cx| shell.set_locale(locale.clone(), cx));

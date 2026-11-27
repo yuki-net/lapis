@@ -4,16 +4,16 @@ use std::collections::BTreeMap;
 
 use localization::LocaleId;
 
-use crate::definition::{
+use settings::definition::{
     DefinitionCatalog, SettingKey, TERMINAL_CARET_SHAPE, TERMINAL_DEFAULT_PROFILE,
     TERMINAL_FONT_FAMILY, TERMINAL_FONT_SIZE, TERMINAL_LINE_HEIGHT, UI_LOCALE, UI_SYNTAX_THEME,
     UI_THEME, UPDATE_MODE, UPDATE_SOURCE, UPDATE_SOURCE_LOCATION,
 };
-use crate::document::SettingsDocument;
-use crate::scope::{SettingsContext, SettingsScope};
-use crate::syntax::{SyntaxTheme, TerminalCaretShape};
-use crate::update::{UpdateMode, UpdateSource};
-use crate::value::SettingValue;
+use settings::document::SettingsDocument;
+use settings::scope::{SettingsContext, SettingsScope};
+use settings::syntax::{SyntaxTheme, TerminalCaretShape};
+use settings::update::{UpdateMode, UpdateSource};
+use settings::value::SettingValue;
 
 /// 1項目の解決結果。値が無い場合は `value` も `origin` も空になる。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -51,7 +51,7 @@ impl ResolvedSettings {
         Self::resolve_with_extensions(
             context,
             catalog,
-            &crate::ExtensionSettingsCatalog::default(),
+            &settings::ExtensionSettingsCatalog::default(),
             documents,
         )
     }
@@ -59,7 +59,7 @@ impl ResolvedSettings {
     pub fn resolve_with_extensions(
         context: &SettingsContext,
         catalog: &'static DefinitionCatalog,
-        extensions: &crate::ExtensionSettingsCatalog,
+        extensions: &settings::ExtensionSettingsCatalog,
         documents: &[&SettingsDocument],
     ) -> Self {
         let scopes = context.scopes();
@@ -224,8 +224,8 @@ impl ResolvedSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::catalog;
-    use crate::scope::{HostId, ProjectId};
+    use settings::catalog::catalog;
+    use settings::scope::{HostId, ProjectId};
 
     fn document(scope: SettingsScope, values: &[(SettingKey, SettingValue)]) -> SettingsDocument {
         let mut document = SettingsDocument::empty(scope);

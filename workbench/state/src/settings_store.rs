@@ -5,9 +5,10 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::settings_resolve::ResolvedSettings;
 use settings::{
-    DefinitionCatalog, ExtensionSettingDefinition, ExtensionSettingsCatalog, ResolvedSettings,
-    SettingKey, SettingValue, SettingsContext, SettingsDocument, SettingsError, SettingsRepository,
+    DefinitionCatalog, ExtensionSettingDefinition, ExtensionSettingsCatalog, SettingKey,
+    SettingValue, SettingsContext, SettingsDocument, SettingsError, SettingsRepository,
     SettingsScope, catalog,
 };
 
