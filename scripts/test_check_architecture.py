@@ -404,9 +404,13 @@ class ArchitectureTests(unittest.TestCase):
 
     def test_desktop_modules_do_not_import_other_features_by_path(self):
         # devtools was moved to tools/ but is still read by desktop-ui via #[path]
-        # while it inspects DesktopRoot. Terminal の UI も extensions/terminal/ui へ
+        # while it inspects DesktopRoot. Terminal と Git の UI も extensions/<機能>/ui へ
         # 物理移動した段階で #[path] を使う。それ以外の Feature は通常の module 宣言を使う。
-        allowed = ("tools/devtools/mod.rs", "extensions/terminal/ui/mod.rs")
+        allowed = (
+            "tools/devtools/mod.rs",
+            "extensions/terminal/ui/mod.rs",
+            "extensions/git/ui/mod.rs",
+        )
         violations = [
             path.relative_to(ROOT).as_posix()
             for path in (ROOT / "workbench/ui/src").rglob("*.rs")

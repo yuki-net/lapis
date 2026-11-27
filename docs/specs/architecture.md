@@ -18,7 +18,7 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 | `protocol/types/extension-ui/` | 拡張が公開する UI 宣言の語彙（配置・表示名・アイコン・表示条件、`UiContribution` / `FeatureDescriptor`） | GPUI の View・Entity 生成、表示状態の解決、Feature の実装 |
 | `protocol/wire/client-api/` | request/response/event、revision、認可可能な操作契約 | OS 実装、Client の画面構成 |
 | `protocol/wire/dto/` | Transport 固有の wire DTO | domain の規則、Client の画面構成 |
-| `extensions/git/contract/` | Git 拡張の wire 契約（`protocol/types/git` の DTO を再エクスポート） | 拡張の実装、Client の画面構成 |
+| `extensions/git/` | Git 拡張の `contract/` は wire 契約（`protocol/types/git` の DTO を再エクスポート）、`adapter/` は Host 実装（CLI 操作・監視）、`ui/` は Git Feature の画面（`desktop-ui` から `#[path]` で読み込む）、`state/` は Git の Client 状態（`desktop-client` から `#[path]` で読み込む） | 拡張の実装判断、Client の画面構成 |
 | `protocol/types/terminal/` | Terminal の値・wire DTO（状態・delta・入力・snapshot）の正本 | `TerminalBackend` port、PTY 実装、Client の Window・Panel・Tab の正規状態 |
 | `extensions/terminal/` | Terminal の `contract/` は `TerminalBackend` port を持ち `protocol/types/terminal` を再エクスポート、`host/` はセッション判断、`adapter/` は PTY と Host 側セッションサービス、`renderer/` と `portable-renderer/` はクライアント側の画面モデル、`ui/` は Terminal Feature の画面（`desktop-ui` から `#[path]` で読み込む）、`state/` は Terminal の Client 状態（`desktop-client` から `#[path]` で読み込む）、`extension.json` / `contributions.json` / `views.json` は設定・翻訳・表示の宣言 | Client の Window・Panel・Tab の正規状態 |
 | `protocol/wire-client/` | Client共通の非同期要求・応答照合と接続世代 | UI、具体的な通信経路 |
@@ -171,7 +171,7 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 ## UI の target 分割
 
 - `workbench/ui` は単一 crate（`desktop-ui`）のまま、Dashboard の Layout と Window の所有を Shell が担う。target 固有の起動 entry は `apps/desktop/app`（Desktop）と `apps/web/wasm`（crate `web`、Web）が持つ。
-- Terminal の UI と Client 状態は `extensions/terminal/ui` / `extensions/terminal/state` に置き、`workbench/ui` / `workbench/state` から `#[path]` で読み込む。モジュールパスと crate 構成は変えず、crate 抽出は次の段階で行う。
+- Terminal と Git の UI と Client 状態は `extensions/<機能>/ui` / `extensions/<機能>/state` に置き、`workbench/ui` / `workbench/state` から `#[path]` で読み込む。モジュールパスと crate 構成は変えず、crate 抽出は次の段階で行う。
 - `kit` は tokens / theme / components / `LayoutProfile` / `InteractionPolicy` を持ち、Desktop と Web の両方から使う。kit は Host や Client の状態を所有しない。
 - `apps/desktop/app` はネイティブ window の起動（`run`）と Composition Root を持ち、`desktop_ui::desktop_application` / `initialize` / `open_desktop_window` / `on_last_window_closed` をイベントループから呼ぶ。
 - `workbench/ui/src/desktop` は window options と `window_host`（Window と Feature の所有、WindowGroup）を持つ。`window_host` は両 target の Shell / Root が共有するため、Desktop 専用の entry として切り出さない。
