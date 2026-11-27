@@ -19,7 +19,7 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 | `protocol/wire/client-api/` | request/response/event、revision、認可可能な操作契約 | OS 実装、Client の画面構成 |
 | `protocol/wire/dto/` | Transport 固有の wire DTO | domain の規則、Client の画面構成 |
 | `extensions/git/contract/` | Git 拡張の wire 契約（domain git の DTO を再エクスポート） | 拡張の実装、Client の画面構成 |
-| `extensions/terminal/` | Terminal の `contract/` は型・wire DTO・`TerminalBackend` port の正本、`host/` はセッション判断、`native/` は native ABI のアダプター、`adapter/` は PTY と Host 側セッションサービス、`renderer/` と `portable-renderer/` はクライアント側の画面モデル、`extension.json` / `contributions.json` / `views.json` は設定・翻訳・表示の宣言 | Client の Window・Panel・Tab の正規状態 |
+| `extensions/terminal/` | Terminal の `contract/` は型・wire DTO・`TerminalBackend` port の正本、`host/` はセッション判断、`adapter/` は PTY と Host 側セッションサービス、`renderer/` と `portable-renderer/` はクライアント側の画面モデル、`extension.json` / `contributions.json` / `views.json` は設定・翻訳・表示の宣言 | Client の Window・Panel・Tab の正規状態 |
 | `protocol/wire-client/` | Client共通の非同期要求・応答照合と接続世代 | UI、具体的な通信経路 |
 | `host/application/` | 操作と判断、port による外部連携 | GPUI、OS 固有 API |
 | `host/runtime/` | 正規状態、操作の直列化、購読・revision・実行資源の寿命 | Window、Panel、focus |

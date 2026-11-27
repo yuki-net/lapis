@@ -12,13 +12,11 @@ def py(*args):
 # 承認済み拡張 PTY 検証。以前は 1 step に `$LASTEXITCODE` 付きで並べていたが、
 # argv の step に分けて失敗箇所を一意にする。
 PTY_STEPS = (
-    Step("Build lapis-terminal-native", ["cargo", "build", "--locked", "-p", "lapis-terminal-native"]),
     Step(
-        "Stage native extension input",
-        py("-m", "scripts.extensions.stage", "extensions", "{runner_temp}/lapis-native-input",
-           "--target-dir", "target", "--debug"),
+        "Build native extension fixture",
+        ["cargo", "build", "--locked", "--manifest-path", "examples/native-extension/Cargo.toml",
+         "--target-dir", "target/native-extension"],
     ),
-    Step("Smoke native terminal", py("-m", "scripts.extensions.smoke_native_terminal")),
     Step("Test extension-runtime native", ["cargo", "test", "--locked", "-p", "extension-runtime", "--lib", "native::tests"]),
     Step(
         "Test staged image is locked",
@@ -44,11 +42,6 @@ PTY_STEPS = (
         ["cargo", "test", "--locked", "-p", "host", "signed_native_package_runs_in_extension_host", "--", "--ignored"],
     ),
     Step(
-        "Test native terminal survives QUIC disconnect",
-        ["cargo", "test", "--locked", "-p", "host", "--test", "quic",
-         "native_terminal_survives_quic_disconnect_and_can_be_claimed", "--", "--ignored"],
-    ),
-    Step(
         "Build pty example extension",
         ["cargo", "build", "--locked", "--manifest-path", "examples/pty-extension/Cargo.toml",
          "--target", "wasm32-wasip2", "--target-dir", "target/pty-extension"],
@@ -63,7 +56,7 @@ ROUTE = Route(
     key="host",
     name="Host",
     runs_on=("windows",),
-    # 検証だけで約 44 分かかる（承認済み拡張 PTY の 16 step を含む）。
+    # 検証だけで約 44 分かかる（承認済み拡張 PTY の 10 step を含む）。
     # さらに job の後処理で target/ のキャッシュ保存に数分かかるため、
     # 旧 CI の 50 分では足りずに保存中に打ち切られる。上限は保存分を含めて決める。
     timeout_minutes=75,

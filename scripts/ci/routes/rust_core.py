@@ -14,8 +14,11 @@ def py(*args):
 
 # Rust Core の外部拡張 component 検証。
 EXTENSION_STEPS = (
-    Step("Build lapis-terminal-native", ["cargo", "build", "--locked", "-p", "lapis-terminal-native"]),
-    Step("Smoke native terminal", py("-m", "scripts.extensions.smoke_native_terminal")),
+    Step(
+        "Build native extension fixture",
+        ["cargo", "build", "--locked", "--manifest-path", "examples/native-extension/Cargo.toml",
+         "--target-dir", "target/native-extension"],
+    ),
     Step("Test extension-runtime native", ["cargo", "test", "--locked", "-p", "extension-runtime", "--lib", "native::tests"]),
     Step(
         "Test native extension host",

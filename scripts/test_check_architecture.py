@@ -15,8 +15,8 @@ def package(name, path, dependencies=()):
 
 
 class ArchitectureTests(unittest.TestCase):
-    def test_host_reaches_terminal_host_and_adapter_but_not_packaging(self):
-        """Host は Terminal の runtime と Host 実装へ依存できるが、配布物は辿れない。"""
+    def test_host_reaches_terminal_host_and_adapter(self):
+        """Host は Terminal の runtime と Host 実装へ依存できる。"""
         metadata = {
             "workspace_members": ["host", "client-api", "terminal-contract", "terminal-host"],
             "packages": [
@@ -26,9 +26,7 @@ class ArchitectureTests(unittest.TestCase):
                 package("terminal-host", "extensions/terminal/host", ["terminal-contract"]),
             ],
         }
-        self.assertFalse(
-            any("terminal extension dependency" in e for e in check(metadata, {}))
-        )
+        self.assertEqual(check(metadata, {}), [])
         metadata["workspace_members"].append("local-terminal")
         metadata["packages"][0]["dependencies"].append({"name": "local-terminal"})
         metadata["packages"].append(
@@ -39,24 +37,6 @@ class ArchitectureTests(unittest.TestCase):
             )
         )
         self.assertEqual(check(metadata, {}), [])
-
-        # 配布用の native / component へ Host から到達したら拒否する。
-        for name, path, target in (
-            ("terminal-native", "extensions/terminal/native", "terminal-host"),
-            ("terminal-component", "extensions/terminal/component", "terminal-host"),
-        ):
-            with self.subTest(packaging=name):
-                current = copy.deepcopy(metadata)
-                current["workspace_members"].append(name)
-                current["packages"].append(package(name, path, [target]))
-                local = next(
-                    item for item in current["packages"] if item["name"] == "local-terminal"
-                )
-                local["dependencies"].append({"name": name})
-                self.assertTrue(
-                    any(f"host -> {name}" in e for e in check(current, {})),
-                    check(current, {}),
-                )
 
     def test_desktop_layout_contract_rejects_old_identifiers_and_feature_internals(self):
         with tempfile.TemporaryDirectory() as directory:

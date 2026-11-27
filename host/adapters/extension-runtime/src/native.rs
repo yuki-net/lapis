@@ -357,10 +357,10 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    #[ignore = "cargo build --locked -p lapis-terminal-native が必要"]
+    #[ignore = "cargo build --locked --manifest-path examples/native-extension/Cargo.toml --target-dir target/native-extension が必要"]
     fn staged_image_is_locked_until_extension_is_unloaded() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../target/debug/lapis_terminal_native.dll");
+            .join("../../../target/native-extension/debug/lapis_native_example.dll");
         let bytes = std::fs::read(path).unwrap();
         let broker = Arc::new(|_: &str, _: Value, _: Option<&InvocationContext>| Ok(Value::Null));
         let extension = unsafe { NativeExtension::load_verified_bytes(&bytes, broker) }.unwrap();

@@ -7,8 +7,7 @@ Terminal のセッション操作、公開 DTO、Client の画面モデルを配
 ## 構成
 
 - `extension.json` / `contributions.json` / `views.json`: 同梱 package の宣言。設定・翻訳・表示だけを宣言する。
-- `host/`（crate `terminal-host`）: 拡張セッション操作の判断。Host 能力を port として受け取り、実行環境の内部実装を参照しない。`native/` はここを共有する。
-- `native/`: 公開 native ABI v1 を使って同じロジックを接続する。Windows x86_64 の配布入力には、このライブラリと共通の設定・表示宣言を含める。
+- `host/`（crate `terminal-host`）: 拡張セッション操作の判断。Host 能力を port として受け取り、実行環境の内部実装を参照しない。
 - `api/`: セッション操作の v1 DTO。操作名も `terminal.v1.*` で版を持つ。Host 内部型には依存しない。Client は専用 `terminal` wire の契約を使う。
 - `contract/`（crate `terminal-contract`、参照名 `terminal`）: Terminal の型・wire DTO・`TerminalBackend` port の正本。
 - `adapter/`（crate `local-terminal`）: `TerminalHost` port の PTY 実装と、Host 側の Terminal セッションサービス。Host の `BackendClient::terminals()` がこのサービスを使う。
@@ -21,7 +20,6 @@ Terminal のセッション操作、公開 DTO、Client の画面モデルを配
 
 - `contract/` は `protocol/types/` と同じ「models」層として依存検査します。現在は Client 側の描画・入力モデルと旧 adapter が参照します。
 - `host/` もセッション状態と操作判断を持つため「runtime」層として扱います。Host の能力は port 経由で利用します。
-- `native/` は ABI とロジックを接続する「infrastructure」層として扱います。
 - `adapter/` は `host/adapters/*` と同じ「infrastructure」層として扱います。OS API と外部プロセスに触れるためです。
 - `renderer/` は PTY や Host を参照しない画面モデルとして扱います。
 - 固定データを配布する必要が出たら `assets/` を追加します。現時点で Terminal は配布する固定データを持たないため作りません。
@@ -32,7 +30,7 @@ Terminal のセッション操作、公開 DTO、Client の画面モデルを配
 
 Desktop と Web は Terminal 専用の `terminal` request（`TerminalRequest` / `TerminalResponse`）を使います。Desktop は in-process の Host サービスを直接呼び、Web は認証済み接続の wire へ送ります。汎用の `host.extensions.dispatch` は Terminal の操作経路には使いません。Host は必要な PTY とプロセス情報を自分で仲介します。Terminal の ON／OFF は Host の次回起動で反映します。
 
-開発起動では `scripts/extensions/dev_bundle.py` が `extensions/` の宣言を発見して同梱 package を作ります。Windows x86_64 では native アダプターを使用します。
+開発起動では `scripts/extensions/dev_bundle.py` が `extensions/` の宣言を発見して同梱 package を作ります。
 
 ## 挙動
 

@@ -23,7 +23,7 @@ fn worker_reports_each_supported_contract_version() {
 
 #[cfg(windows)]
 #[test]
-#[ignore = "cargo build --locked -p lapis-terminal-native が必要"]
+#[ignore = "cargo build --locked --manifest-path examples/native-extension/Cargo.toml --target-dir target/native-extension が必要"]
 fn native_image_runs_in_worker_and_preserves_invocation_context() {
     use extension_runtime::{InvocationContext, supervisor::HostCallHandler};
     use std::sync::{Arc, Mutex};
@@ -41,23 +41,22 @@ fn native_image_runs_in_worker_and_preserves_invocation_context() {
             &self,
             extension: &str,
             method: &str,
-            _: serde_json::Value,
+            payload: serde_json::Value,
             context: Option<&InvocationContext>,
         ) -> Result<serde_json::Value, String> {
-            assert_eq!(extension, "lapis.terminal");
-            assert_eq!(method, "process.info.v1.get");
+            assert_eq!(extension, "lapis.native-example");
+            assert_eq!(method, "echo.v1.echo");
             let context = context.ok_or("context required")?;
             self.0
                 .lock()
                 .unwrap()
                 .push((context.session.clone(), context.workspace.clone()));
-            Ok(
-                serde_json::json!({"pty":"conpty","default_shell":{"program":"shell","arguments":[]}}),
-            )
+            Ok(payload)
         }
     }
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let bytes = std::fs::read(root.join("target/debug/lapis_terminal_native.dll")).unwrap();
+    let bytes =
+        std::fs::read(root.join("target/native-extension/debug/lapis_native_example.dll")).unwrap();
     let handler = Arc::new(Handler(Mutex::new(Vec::new())));
     // ローカルでビルドしたテスト用 image を使う。
     let supervisor = unsafe {
@@ -65,7 +64,7 @@ fn native_image_runs_in_worker_and_preserves_invocation_context() {
             PathBuf::from(env!("CARGO_BIN_EXE_lapis-extension-host")),
             vec![],
             vec![ComponentImage {
-                id: "lapis.terminal".into(),
+                id: "lapis.native-example".into(),
                 bytes,
                 require_dispatch: true,
             }],
@@ -79,18 +78,23 @@ fn native_image_runs_in_worker_and_preserves_invocation_context() {
         unreachable!()
     };
     assert!(failed.is_empty(), "{failed:?}");
-    assert_eq!(active, ["lapis.terminal"]);
+    assert_eq!(active, ["lapis.native-example"]);
     for workspace in ["first", "second"] {
         let context = InvocationContext {
             session: "session".into(),
             workspace: workspace.into(),
         };
         let result = supervisor
-            .dispatch_with_context("lapis.terminal", "terminal.v1.info", "{}", &context)
+            .dispatch_with_context(
+                "lapis.native-example",
+                "echo.v1.echo",
+                &format!(r#"{{"value":"{workspace}"}}"#),
+                &context,
+            )
             .unwrap();
         assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&result).unwrap()["pty"],
-            "conpty"
+            serde_json::from_str::<serde_json::Value>(&result).unwrap()["value"],
+            workspace
         );
     }
     assert_eq!(

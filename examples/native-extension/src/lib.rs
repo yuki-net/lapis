@@ -1,4 +1,7 @@
-//! Terminal ロジックを公開された native ABI v1 に接続する。
+//! 汎用 native 拡張 ABI v1 の最小例。
+//!
+//! Terminal には依存せず、`echo.v1.echo` だけを公開する。native 拡張基盤の
+//! 動作確認用で、配布はしない。
 
 use extension_native_api::{
     ABI_VERSION, ByteView, ExtensionApiV1, HostApiV1, MAX_MESSAGE_BYTES, OwnedBytes, STATUS_ERROR,
@@ -6,11 +9,9 @@ use extension_native_api::{
 };
 use serde_json::{Value, json};
 use std::{
-    collections::BTreeMap,
     ffi::c_void,
     panic::{AssertUnwindSafe, catch_unwind},
 };
-use terminal_host::{TerminalHost, TerminalLogic, process_info, sessions};
 
 struct NativeHost(HostApiV1);
 
@@ -38,129 +39,25 @@ impl NativeHost {
         }
         serde_json::from_slice(&result).map_err(|_| "invalid Host result".into())
     }
-    fn empty(&self, method: &str, value: Value) -> Result<(), String> {
-        self.call(method, value).map(|_| ())
-    }
 }
 
-impl TerminalHost for NativeHost {
-    fn information(&self) -> Result<process_info::Information, String> {
-        let value = self.call("process.info.v1.get", Value::Null)?;
-        let pty = match value.get("pty").and_then(Value::as_str) {
-            Some("conpty") => process_info::PtyFlavor::Conpty,
-            Some("posix") => process_info::PtyFlavor::Posix,
-            _ => return Err("invalid Host process information".into()),
-        };
-        let command = value
-            .get("default_shell")
-            .ok_or("invalid Host process information")?;
-        let program = command
-            .get("program")
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty() && s.len() <= 4096)
-            .ok_or("invalid Host process information")?
-            .to_owned();
-        let arguments: Vec<String> = serde_json::from_value(
-            command
-                .get("arguments")
-                .cloned()
-                .ok_or("invalid Host process information")?,
-        )
-        .map_err(|_| "invalid Host process information")?;
-        if arguments.len() > 64 || arguments.iter().any(|value| value.len() > 4096) {
-            return Err("invalid Host process information".into());
-        }
-        Ok(process_info::Information {
-            pty,
-            default_shell: process_info::Command { program, arguments },
-        })
-    }
-    fn spawn(&self, command: &sessions::SpawnRequest) -> Result<String, String> {
-        let mut env = BTreeMap::new();
-        for entry in &command.environment {
-            if env.insert(&entry.name, &entry.value).is_some() {
-                return Err("duplicate environment name".into());
+struct Echo {
+    host: NativeHost,
+}
+
+impl Echo {
+    fn dispatch(&self, operation: &str, payload: &str) -> Result<String, String> {
+        match operation {
+            "echo.v1.echo" => {
+                let request: Value =
+                    serde_json::from_str(payload).map_err(|_| "invalid payload")?;
+                let value = request.get("value").cloned().ok_or("missing value")?;
+                // Host の broker を経由して同じ payload を往復させる。
+                let response = self.host.call("echo.v1.echo", json!({"value": value}))?;
+                serde_json::to_string(&response).map_err(|error| error.to_string())
             }
+            _ => Err(format!("unknown operation: {operation}")),
         }
-        serde_json::from_value(self.call("pty.v1.spawn", json!({"program":command.program,"args":command.arguments,"env":env,"cwd":command.working_directory,"size":{"columns":command.initial_size.columns,"rows":command.initial_size.rows}}))?).map_err(|_| "invalid Host result".into())
-    }
-    fn attach(&self, id: &str) -> Result<(), String> {
-        self.empty("pty.v1.attach", json!({"id":id}))
-    }
-    fn detach(&self, id: &str) -> Result<(), String> {
-        self.empty("pty.v1.detach", json!({"id":id}))
-    }
-    fn write(&self, id: &str, bytes: &[u8]) -> Result<(), String> {
-        self.empty("pty.v1.write", json!({"id":id,"bytes":bytes}))
-    }
-    fn resize(&self, id: &str, size: sessions::Size) -> Result<(), String> {
-        self.empty(
-            "pty.v1.resize",
-            json!({"id":id,"columns":size.columns,"rows":size.rows}),
-        )
-    }
-    fn read(
-        &self,
-        id: &str,
-        offset: u64,
-        max_bytes: u32,
-        timeout_ms: u32,
-    ) -> Result<sessions::Output, String> {
-        let value = self.call(
-            "pty.v1.read",
-            json!({"id":id,"offset":offset,"max_bytes":max_bytes,"timeout_ms":timeout_ms}),
-        )?;
-        let bytes =
-            serde_json::from_value(value.get("bytes").cloned().ok_or("invalid Host result")?)
-                .map_err(|_| "invalid Host result")?;
-        let next = value
-            .get("next")
-            .and_then(Value::as_u64)
-            .ok_or("invalid Host result")?;
-        let lost_before = serde_json::from_value(
-            value
-                .get("lost_before")
-                .cloned()
-                .ok_or("invalid Host result")?,
-        )
-        .map_err(|_| "invalid Host result")?;
-        let exit = match value.get("exited").ok_or("invalid Host result")? {
-            Value::Null => None,
-            value => Some(sessions::ExitStatus {
-                code: serde_json::from_value(
-                    value.get("code").cloned().ok_or("invalid Host result")?,
-                )
-                .map_err(|_| "invalid Host result")?,
-            }),
-        };
-        let read_error = serde_json::from_value(
-            value
-                .get("read_error")
-                .cloned()
-                .ok_or("invalid Host result")?,
-        )
-        .map_err(|_| "invalid Host result")?;
-        let write_error = serde_json::from_value(
-            value
-                .get("write_error")
-                .cloned()
-                .ok_or("invalid Host result")?,
-        )
-        .map_err(|_| "invalid Host result")?;
-        Ok(sessions::Output {
-            bytes,
-            next,
-            lost_before,
-            exit,
-            read_error,
-            write_error,
-        })
-    }
-    fn kill(&self, id: &str) -> Result<(), String> {
-        self.empty("pty.v1.kill", json!({"id":id}))
-    }
-    fn forget(&self, id: &str) -> Result<(), String> {
-        self.empty("pty.v1.forget", json!({"id":id}))
     }
 }
 
@@ -245,7 +142,9 @@ unsafe extern "C" fn activate(
         if host.call.is_none() || host.release.is_none() {
             return Err("incomplete Host ABI".into());
         }
-        let logic = Box::new(TerminalLogic::new(Box::new(NativeHost(host))));
+        let logic = Box::new(Echo {
+            host: NativeHost(host),
+        });
         unsafe {
             *instance = Box::into_raw(logic).cast();
         }
@@ -262,14 +161,14 @@ unsafe extern "C" fn dispatch(
     out: *mut OwnedBytes,
 ) -> i32 {
     boundary(out, || {
-        let logic = unsafe { instance.cast::<TerminalLogic>().as_mut() }
-            .ok_or("invalid extension instance")?;
-        logic.dispatch(
-            unsafe { read_view(&operation)? },
-            unsafe { read_view(&payload)? },
-            unsafe { read_view(&session)? },
-            unsafe { read_view(&workspace)? },
-        )
+        let logic =
+            unsafe { instance.cast::<Echo>().as_ref() }.ok_or("invalid extension instance")?;
+        // session / workspace も ABI 境界の検証を通す。
+        let _ = unsafe { read_view(&session)? };
+        let _ = unsafe { read_view(&workspace)? };
+        logic.dispatch(unsafe { read_view(&operation)? }, unsafe {
+            read_view(&payload)?
+        })
     })
 }
 
@@ -278,8 +177,7 @@ unsafe extern "C" fn deactivate(instance: *mut c_void, out: *mut OwnedBytes) -> 
         if instance.is_null() {
             return Err("invalid extension instance".into());
         }
-        let mut logic = unsafe { Box::from_raw(instance.cast::<TerminalLogic>()) };
-        logic.deactivate();
+        drop(unsafe { Box::from_raw(instance.cast::<Echo>()) });
         Ok(String::new())
     })
 }
@@ -311,21 +209,13 @@ mod tests {
     unsafe extern "C" fn host_call(
         context: *mut c_void,
         method: ByteView,
-        _: ByteView,
+        payload: ByteView,
         out: *mut OwnedBytes,
     ) -> i32 {
         let calls = unsafe { &mut *context.cast::<Vec<String>>() };
-        let method = unsafe { read_view(&method) }.unwrap();
-        calls.push(method.to_owned());
-        let response = match method {
-            "process.info.v1.get" => {
-                json!({"pty":"conpty","default_shell":{"program":"cmd.exe","arguments":["/D"]}})
-            }
-            "pty.v1.spawn" => json!("pty-1"),
-            "pty.v1.attach" | "pty.v1.kill" | "pty.v1.detach" | "pty.v1.forget" => Value::Null,
-            _ => panic!("unexpected Host call"),
-        };
-        return_bytes(serde_json::to_vec(&response).unwrap(), out);
+        calls.push(unsafe { read_view(&method) }.unwrap().to_owned());
+        let payload: Value = serde_json::from_str(unsafe { read_view(&payload) }.unwrap()).unwrap();
+        return_bytes(serde_json::to_vec(&payload).unwrap(), out);
         STATUS_OK
     }
 
@@ -340,7 +230,7 @@ mod tests {
     }
 
     #[test]
-    fn abi_v1_dispatches_to_supplied_host_and_rejects_wrong_versions() {
+    fn abi_v1_echoes_through_the_supplied_host() {
         let mut calls = Vec::<String>::new();
         let mut host = HostApiV1 {
             abi_version: ABI_VERSION,
@@ -365,10 +255,8 @@ mod tests {
             STATUS_OK
         );
         assert_eq!(unsafe { take(out) }, "");
-        let operation = ByteView::from_bytes(b"terminal.v1.start-profile");
-        let payload = ByteView::from_bytes(
-            br#"{"profile":null,"working_directory":".","columns":80,"rows":24}"#,
-        );
+        let operation = ByteView::from_bytes(b"echo.v1.echo");
+        let payload = ByteView::from_bytes(br#"{"value":"hello"}"#);
         let session = ByteView::from_bytes(b"session");
         let workspace = ByteView::from_bytes(b"workspace");
         assert_eq!(
@@ -378,30 +266,20 @@ mod tests {
             STATUS_OK
         );
         let result: Value = serde_json::from_str(&unsafe { take(out) }).unwrap();
-        assert_eq!(result["id"], "pty-1");
-        let bad = ByteView {
-            ptr: std::ptr::null(),
-            len: 1,
-        };
+        assert_eq!(result["value"], "hello");
+        let unknown = ByteView::from_bytes(b"pty.v1.spawn");
         assert_eq!(
-            unsafe { api.dispatch.unwrap()(instance, bad, payload, session, workspace, &mut out) },
+            unsafe {
+                api.dispatch.unwrap()(instance, unknown, payload, session, workspace, &mut out)
+            },
             STATUS_ERROR
         );
-        assert!(unsafe { take(out) }.contains("invalid ABI input"));
+        assert!(unsafe { take(out) }.contains("unknown operation"));
         assert_eq!(
             unsafe { api.deactivate.unwrap()(instance, &mut out) },
             STATUS_OK
         );
         assert_eq!(unsafe { take(out) }, "");
-        assert_eq!(
-            calls,
-            [
-                "process.info.v1.get",
-                "pty.v1.spawn",
-                "pty.v1.attach",
-                "pty.v1.kill",
-                "pty.v1.detach"
-            ]
-        );
+        assert_eq!(calls, ["echo.v1.echo"]);
     }
 }
