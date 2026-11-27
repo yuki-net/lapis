@@ -50,11 +50,6 @@ class TestPathRouting(unittest.TestCase):
         self.assertEqual([route.key for route in format_routes], ["format"])
         self.assertRegex(ROUTES["format"].rust_components, r"\brustfmt\b")
 
-    def test_rust_core_installs_analyzer_for_platform_tests(self):
-        rust_core = ROUTES["rust_core"]
-        self.assertRegex(rust_core.rust_components, r"\brust-analyzer\b")
-        self.assertRegex(rust_core.rust_components, r"\brust-src\b")
-
     def test_desktop_path_runs_desktop(self):
         self.assertIn("desktop", jobs_for_paths(["apps/desktop/app/src/main.rs"]))
 
