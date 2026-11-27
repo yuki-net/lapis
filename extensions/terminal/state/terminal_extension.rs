@@ -3,6 +3,7 @@
 pub use terminal_session_api::v1;
 
 #[cfg(any(target_arch = "wasm32", test))]
+#[path = "terminal_extension/web_projection.rs"]
 pub(crate) mod web_projection;
 
 /// 各 Terminal の生出力を一度だけ、順番に画面へ適用するための位置。

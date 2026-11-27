@@ -37,11 +37,23 @@ def strip_rust_comments(text):
     return text
 
 
+def is_feature_path(path, root=ROOT):
+    """Feature 実装の path か。extensions/<name>/ui/ も Feature として扱う。"""
+    if "/features/" in path.as_posix():
+        return True
+    try:
+        relative = path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return False
+    parts = relative.split("/")
+    return len(parts) >= 3 and parts[0] == "extensions" and parts[2] == "ui"
+
+
 def check_desktop_layout(root=ROOT):
     errors = []
     client_root = root / "clients"
     # Desktop の entry は apps/ 側にもあるため、Layout の旧識別子は両方から検査する。
-    sources = [client_root, root / "apps", root / "workbench", root / "tools"]
+    sources = [client_root, root / "apps", root / "workbench", root / "tools", root / "extensions"]
     for path in (path for source in sources if source.exists() for path in source.rglob("*.rs")):
         text = path.read_text(encoding="utf-8")
         identifiers = set(rust_identifiers(text))
@@ -53,20 +65,20 @@ def check_desktop_layout(root=ROOT):
                 errors.append(f"{path.relative_to(root)}: Zone操作の旧Panel名 {name}")
         if re.search(r"\bstruct\s+PanelHost\s*\{[^}]*\bposition\s*:", code_text, re.S):
             errors.append(f"{path.relative_to(root)}: PanelHostへのZone所属の二重保持は禁止")
-        if "/features/" in path.as_posix() and identifiers & {"PanelLayout", "ZonePolicy", "Arrangement"}:
+        if is_feature_path(path, root) and identifiers & {"PanelLayout", "ZonePolicy", "Arrangement"}:
             errors.append(f"{path.relative_to(root)}: FeatureからLayout内部表現へ依存")
-        if "/features/" in path.as_posix() and re.search(
+        if is_feature_path(path, root) and re.search(
             r"\bviewport_size\s*\(|\buser_agent\b|navigator\.userAgent", code_text
         ):
             errors.append(
                 f"{path.relative_to(root)}: Featureからviewport・user-agentへ依存（共通wrapperを使う）"
             )
-        if "/features/" in path.as_posix() or path.name == "root.rs":
+        if is_feature_path(path, root) or path.name == "root.rs":
             if re.search(r"\bfile_dialog\s*\(\s*\)", code_text):
                 errors.append(
                     f"{path.relative_to(root)}: Dialog を直接呼ぶ（DocumentClient の wrapper を使う）"
                 )
-        if "/features/" in path.as_posix():
+        if is_feature_path(path, root):
             if re.search(r"\.overflow_(y_)?scroll\s*\(\s*\)", code_text):
                 errors.append(
                     f"{path.relative_to(root)}: Featureがスクロールを直接組む（scroll_viewport を使う）"

@@ -13,6 +13,7 @@ mod extensions;
 mod process;
 mod settings_resolve;
 mod settings_store;
+#[path = "../../../extensions/terminal/state/terminal_extension.rs"]
 pub mod terminal_extension;
 mod update;
 mod view_state;
@@ -56,6 +57,7 @@ mod editor_session;
 mod search_session;
 mod settings_session;
 mod task_session;
+#[path = "../../../extensions/terminal/state/terminal_session.rs"]
 mod terminal_session;
 
 pub use editor_session::{

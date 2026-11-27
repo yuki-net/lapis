@@ -20,7 +20,12 @@ members = [
     # 拡張グループごとに列挙し、新しいグループを追加したときはここに足す。
     "extensions/acp/*",
     "extensions/git/*",
-    "extensions/terminal/*",
+    "extensions/terminal/adapter",
+    "extensions/terminal/api",
+    "extensions/terminal/contract",
+    "extensions/terminal/host",
+    "extensions/terminal/portable-renderer",
+    "extensions/terminal/renderer",
 ]
 exclude = ["vendor/gpui", "vendor/portable-pty"]
 resolver = "3"

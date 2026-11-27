@@ -191,10 +191,8 @@ fn terminal_uses_declared_settings_and_falls_back_to_previous_values(
         desktop_client::SettingsSession::load(Arc::new(Memory(Mutex::new(document)))).unwrap();
     let extensions = settings.extension_contributions();
     let generation = extensions.begin_reload();
-    let declaration: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../../../extensions/terminal/contributions.json"
-    ))
-    .unwrap();
+    let declaration: serde_json::Value =
+        serde_json::from_str(include_str!("../../contributions.json")).unwrap();
     extensions.apply(generation, serde_json::from_value(serde_json::json!({
         "extensions":[{"id":"lapis.terminal","version":"1.0.0","installed":true,"enabled":true,"active":true}],
         "contributions":[{"extension_id":"lapis.terminal","declaration":declaration.clone()}]

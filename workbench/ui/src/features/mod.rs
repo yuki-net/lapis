@@ -13,6 +13,7 @@ pub(crate) mod settings;
 pub(crate) mod settings_coordinator;
 pub(crate) mod settings_sources;
 pub(crate) mod tasks;
+#[path = "../../../../extensions/terminal/ui/mod.rs"]
 pub(crate) mod terminal;
 pub(crate) mod update;
 
