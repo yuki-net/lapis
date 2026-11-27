@@ -32,16 +32,10 @@ EXTENSION_STEPS = (
     ),
     Step("Smoke extension host", py("-m", "scripts.extensions.smoke")),
     Step("Smoke pty extension", py("-m", "scripts.extensions.smoke_pty")),
-    Step("Smoke terminal extension", py("-m", "scripts.extensions.smoke_terminal")),
     Step(
         "Stage bundled extensions",
         py("-m", "scripts.extensions.stage", "extensions", "{runner_temp}/lapis-bundled-input",
-           "--target-dir", "target/terminal-component", "--debug"),
-    ),
-    Step(
-        "Lint terminal component",
-        ["cargo", "clippy", "--locked", "--manifest-path", "extensions/terminal/component/Cargo.toml",
-         "--target", "wasm32-wasip2", "--target-dir", "target/terminal-component", "--", "-D", "warnings"],
+           "--debug"),
     ),
     Step(
         "Test independent component packaging",

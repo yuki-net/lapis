@@ -6,7 +6,7 @@ CI の 38 分がどの step に食われているかを、ローカルの実測�
 
 usage:
     python -m scripts.ci.measure host
-    python -m scripts.ci.measure host --step "Test Host" --step "Build terminal component"
+    python -m scripts.ci.measure host --step "Test Host" --step "Build Host"
     python -m scripts.ci.measure desktop --output .ci/measure/desktop.json
 """
 

@@ -20,7 +20,6 @@ ROUTE = Route(
     python=PYTHON_VERSION,
     rust=True,
     rust_components="rustfmt, clippy",
-    # terminal component の wasm をビルドするため。
     rust_targets="wasm32-wasip2",
     cache=True,
     steps=(
@@ -34,13 +33,6 @@ ROUTE = Route(
         Step(
             "Build lapis-terminal-native",
             ["cargo", "build", "--locked", "-p", "lapis-terminal-native"],
-            timeout_minutes=12,
-        ),
-        # terminal component の wasm は、拡張 package を作るテストの前提。
-        Step(
-            "Build terminal component",
-            ["cargo", "build", "--locked", "--manifest-path", "extensions/terminal/component/Cargo.toml",
-             "--target", "wasm32-wasip2", "--target-dir", "target/terminal-component"],
             timeout_minutes=12,
         ),
         Step("Test Desktop", py("scripts/check.py", "desktop", "test"), timeout_minutes=40),

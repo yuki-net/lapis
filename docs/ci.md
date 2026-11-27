@@ -133,7 +133,7 @@ python -m scripts.ci.policy --base origin/develop
 | route | `runs_on` | 主な検証 |
 | --- | --- | --- |
 | `repository` | linux, windows | `scripts/check.py repository architecture`（CI・拡張・開発コマンドの Python テスト、アーキテクチャ検査） |
-| `format` | linux | 整形チェック（workspace / dev-session / terminal component）。OS 非依存なので 1 回だけ |
+| `format` | linux | 整形チェック（workspace / dev-session）。OS 非依存なので 1 回だけ |
 | `lint` | linux, windows | clippy。Linux は backend、Windows は workspace 全体（`cfg(windows)` を検査するため全 OS）。診断は JSON で集め、注釈とサマリにする |
 | `dev_commands` | windows | 開発起動コマンド・`dev-session` のテスト |
 | `rust_core` | linux, windows | backend 全体の architecture / test と外部拡張 component |

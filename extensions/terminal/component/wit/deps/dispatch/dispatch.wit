@@ -1,7 +1,0 @@
-package lapis:dispatch@1.0.0;
-
-/// 呼び出しの意味と payload の形式は各拡張が定義する。
-world extension-dispatch {
-    /// session と workspace は Host が認証済み接続から付与する。
-    export dispatch: func(operation: string, payload: string, session: string, workspace: string) -> result<string, string>;
-}
