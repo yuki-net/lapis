@@ -16,7 +16,8 @@ pub use local_tasks::{LocalTaskBackend, run_task_worker};
 pub use local_workbench::LocalWorkbenchStore;
 pub use local_workspace::LocalWorkspaceRepository;
 pub use local_workspace_store::{WorkspaceRecord, WorkspaceStore, WorkspaceStoreError};
-use task_runner::{TaskBackend, TaskControl, TaskError, TaskRecord};
+use task_runner::{TaskControl, TaskError};
+use task_state::{TaskBackend, TaskRecord};
 use workspace::WorkspaceRepository;
 use workspace::{FileEntry, SearchError, SearchHit, WorkspaceError, WorkspaceSearchBackend};
 

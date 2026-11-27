@@ -19,9 +19,10 @@ use local_fs::atomic_json_write;
 use notify::Watcher;
 use serde::{Deserialize, Serialize};
 use task_runner::{
-    CodexExecutionSpec, ExecutionStatus, RunnerUpdate, TaskBackend, TaskControl, TaskError,
-    TaskEvent, TaskRecord, run_codex_app_server,
+    CodexExecutionSpec, ExecutionStatus, RunnerUpdate, TaskControl, TaskError, TaskEvent,
+    run_codex_app_server,
 };
+use task_state::{TaskBackend, TaskRecord};
 
 use local_acp::{AcpAgentSpec, AcpUpdate, opencode_spec, run_acp_session};
 

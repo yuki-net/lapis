@@ -13,7 +13,8 @@ use std::{
     sync::{Arc, Mutex, mpsc},
     time::{Duration, Instant},
 };
-use task::{TaskBackend, TaskControl, TaskSnapshot, TaskStart};
+use task::{TaskControl, TaskSnapshot, TaskStart};
+use task_state::TaskBackend;
 
 pub(crate) struct WorkspaceOperations {
     git: Option<Arc<dyn GitBackend>>,

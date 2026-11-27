@@ -17,6 +17,7 @@ local-workbench = { path = "../workbench" }
 local-workspace = { path = "../workspace" }
 local-workspace-store = { path = "../workspace-store" }
 task-runner = { path = "../agent" }
+task-state = { path = "../../domains/tasks" }
 workspace = { path = "../../../protocol/types/workspace" }
 workbench = { path = "../../../protocol/types/workbench" }
 

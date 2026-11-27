@@ -5472,6 +5472,7 @@ dependencies = [
  "serde_json",
  "task",
  "task-runner",
+ "task-state",
  "tempfile",
 ]
 
@@ -6901,6 +6902,7 @@ dependencies = [
  "local-workspace",
  "local-workspace-store",
  "task-runner",
+ "task-state",
  "tempfile",
  "workbench",
  "workspace",
@@ -7688,6 +7690,7 @@ dependencies = [
  "sha2 0.10.9",
  "subtle",
  "task",
+ "task-state",
  "tempfile",
  "time",
  "tokio",
@@ -9195,6 +9198,7 @@ dependencies = [
  "serde",
  "serde_json",
  "task",
+ "task-state",
 ]
 
 [[package]]
@@ -9203,6 +9207,8 @@ version = "0.1.0"
 dependencies = [
  "editor-core",
  "git-contract",
+ "serde",
+ "serde_json",
  "task",
  "tempfile",
 ]

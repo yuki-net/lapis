@@ -9,6 +9,8 @@ license.workspace = true
 editor-core = { path = "../../../protocol/types/editor-core" }
 git = { package = "git-contract", path = "../../../extensions/git/contract" }
 task = { path = "../../../protocol/types/task" }
+serde.workspace = true
 
 [dev-dependencies]
+serde_json.workspace = true
 tempfile.workspace = true

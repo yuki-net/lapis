@@ -15,8 +15,10 @@ notify.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 task-runner = { path = "../agent" }
+task-state = { path = "../../domains/tasks" }
 
 [dev-dependencies]
 task = { path = "../../../protocol/types/task" }
+task-state = { path = "../../domains/tasks" }
 serde_json.workspace = true
 tempfile.workspace = true

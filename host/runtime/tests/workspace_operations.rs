@@ -17,9 +17,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 use task::{
-    Execution, ExecutionStatus, Task, TaskBackend, TaskControl, TaskError, TaskMode, TaskRecord,
-    TaskSnapshot, TaskStart,
+    Execution, ExecutionStatus, Task, TaskControl, TaskError, TaskMode, TaskSnapshot, TaskStart,
 };
+use task_state::{TaskBackend, TaskRecord};
 
 struct EmptyFiles;
 impl DocumentRepository for EmptyFiles {

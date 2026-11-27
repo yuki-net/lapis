@@ -38,6 +38,7 @@ git = { package = "git-contract", path = "../../../extensions/git/contract" }
 document = { path = "../../../protocol/types/document" }
 editor-core = { path = "../../../protocol/types/editor-core" }
 task = { path = "../../../protocol/types/task" }
+task-state = { path = "../../domains/tasks" }
 tempfile.workspace = true
 
 

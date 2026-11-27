@@ -15,7 +15,8 @@ use std::time::{Duration, Instant};
 use editor_core::{ConversationId, ExecutionId, TaskId, WorkspaceId};
 use local_acp::opencode_spec;
 use local_tasks::{LocalTaskBackend, run_task_worker};
-use task::{Execution, ExecutionStatus, Task, TaskBackend, TaskRecord};
+use task::{Execution, ExecutionStatus, Task};
+use task_state::{TaskBackend, TaskRecord};
 
 /// OpenCode の実行ファイルが見つからなければ `None`。
 fn opencode() -> Option<PathBuf> {
