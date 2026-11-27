@@ -1,7 +1,5 @@
 {
   "rule": "file-length",
   "limit": 3000,
-  "files": {
-    "workbench/ui/src/features/terminal/state.rs": 3126
-  }
+  "files": {}
 }
