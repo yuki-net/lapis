@@ -1,6 +1,13 @@
 use super::*;
-use editor_core::ProjectId;
+use editor_core::{ConversationId, ExecutionId, ProjectId, TaskId, WorkspaceId};
 use git::GitConnection;
+use serde::{Deserialize, Serialize};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+use terminal::TerminalSnapshot;
+use workspace::WorkspaceError;
 
 fn new_conversation_id() -> Result<ConversationId, WorkspaceError> {
     let mut bytes = [0_u8; 16];
