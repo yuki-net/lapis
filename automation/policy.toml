@@ -1,30 +1,40 @@
-# レビュー・リトライ・保護パスの正本。
-# 実装（dispatch / reviewer）はこの値を読む。値をコードに散らさない。
-# 自動マージはしない。merge は人間（またはオーナーが明示したとき）だけ。
+# レビュー・マージ・リトライ・保護パスの正本。
+# 実装（dispatch / reviewer / coordinator）はこの値を読む。値をコードに散らさない。
+# 同一アカウント運用。merge 禁止 / read-only は GitHub の強制ではなく手順の制約。
 
 version = 1
 
 [merge]
-# reviewer は merge しない。人間が merge する。
-mode = "manual"
+# verifier PASS のとき、coordinator が owner 名義で merge する。
+actor = "coordinator"
+require_verdict = "pass"
+require_ci = "Gate"
+deny_protected_paths = true
+deny_workflow_changes = true
+deny_forks = true
 
 [review]
-# CI の必須チェック。Gate を required にした後で有効になる。
-require_ci = "Gate"
-# reviewer の所見。approve 以外は人間に渡す。
-require_verdict = "approve"
-# PR の author がこの一覧にいるときだけ通常 PR として扱う。
-# worker App の bot login は App 作成後に確定する。
-allow_authors = ["lapis-worker[bot]", "yukiidayo"]
-deny_forks = true
-max_files = 40
-max_lines = 800
+# 同じ PR で 3 回 FAIL したら停止してオーナーへ。
+max_fail = 3
+# 変更行数とファイル数の大きい方の区分を使う。
+# 上から順に評価し、最後の large が残りを受ける。
+[[review.tiers]]
+name = "small"
+lines_below = 50
+files_at_most = 2
+roles = ["verifier", "skeptic"]
+
+[[review.tiers]]
+name = "medium"
+lines_below = 200
+files_at_most = 4
+roles = ["verifier", "skeptic", "architect"]
+
+[[review.tiers]]
+name = "large"
+roles = ["verifier", "skeptic", "architect", "minimalist"]
 
 [limits]
-# reviewer の差し戻し回数。超えたら ai-needs-human。
-max_review_rounds = 3
-# worker の連続失敗回数。
-max_fix_attempts = 2
 # ai-building のまま残ったジョブを回収するまでの分数。
 stale_building_minutes = 60
 # 1 ジョブ（worker / review）の上限。

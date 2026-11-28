@@ -1,38 +1,44 @@
 # 自動化のロール定義。3 人目以降はここに 1 ブロック足す。
-# worker / reviewer は Windows の別ユーザー `orcaworker` で動く。
-# 鍵の実体はブローカーが解決する。roles.toml に実パスを書かない。
-# coordinator（オーナー側 Orca bot）はここに含めない。監視と進行だけを行い、
-# merge・approve・保護パス変更・コード編集はしない。
+# コミット・PR・merge は owner 名義。GitHub App / orcaworker / ブローカーは使わない。
+# write / merge の制約は GitHub の権限ではなく、手順とプロンプトの制約。
 
 version = 1
+
+[roles.coordinator]
+agent = "orca"
+auth = "owner"
+write = true
+# verifier PASS のときだけ merge する。保護パス / workflows は対象外。
+merge = true
 
 [roles.worker]
 agent = "opencode"
 fallback_agent = "junie"
+auth = "owner"
+write = true
 merge = false
-# App 作成後に埋める。空のままでは dispatch しない。
-app_id = ""
-installation_id = ""
-private_key = ""
-bot_login = "lapis-worker[bot]"
 
-[roles.reviewer]
+[roles.verifier]
 agent = "opencode"
-fallback_agent = "junie"
-# reviewer は read-only。merge しない。
+auth = "owner"
+write = false
 merge = false
-app_id = ""
-installation_id = ""
-private_key = ""
-bot_login = "lapis-reviewer[bot]"
+verdict = "pass-fail"
 
-# 3 人目（例: 可否判断だけを行う judge）。
-# App を作り、read-only（Contents: R / Pull requests: R / Checks: R / Commit statuses: R）で足す。
-# [roles.judge]
-# agent = "opencode"
-# fallback_agent = "junie"
-# merge = false
-# app_id = ""
-# installation_id = ""
-# private_key = ""
-# bot_login = "lapis-judge[bot]"
+[roles.skeptic]
+agent = "opencode"
+auth = "owner"
+write = false
+merge = false
+
+[roles.architect]
+agent = "opencode"
+auth = "owner"
+write = false
+merge = false
+
+[roles.minimalist]
+agent = "opencode"
+auth = "owner"
+write = false
+merge = false
